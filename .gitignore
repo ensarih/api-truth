@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.yarn/
+.npm/
+
+# Build and coverage output
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+.turbo/
+.cache/
+
+# Java / Gradle / Maven
+target/
+.gradle/
+*.class
+*.jar
+*.war
+
+# Test and local runtime data
+test-results/
+playwright-report/
+docker-data/
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs and generated evidence
+*.log
+logs/
+generated/
+artifacts/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Temporary files
+.tmp/
+tmp/
+*.tmp
+*.swp
