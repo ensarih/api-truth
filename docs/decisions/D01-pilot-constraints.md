@@ -1,7 +1,7 @@
 # D01 — Pilot constraints and evidence boundaries
 
-**Status:** provisional for the Phase 0 pilot, 2026-09-15.  
-**Authoritative product requirements:** [Specification](../SPECIFICATION.md), especially FR-01, FR-04 through FR-07, and NFR-01.  
+**Status:** provisional for the Phase 0 pilot, 2026-09-15.
+**Authoritative product requirements:** [Specification](../SPECIFICATION.md), especially FR-01, FR-04 through FR-07, and NFR-01.
 **Consumers:** D02 synthetic fixtures; D03 executable event/evidence/configuration schemas; later deployment, log, and CI work.
 
 This record fixes the pilot vocabulary and the facts that must remain separate. It deliberately does not define executable types, database tables, transport adapters, or an enterprise-provider integration. Pilot discovery may replace a provisional adapter choice through a new decision record without changing the evidence boundaries below.
@@ -42,7 +42,7 @@ All IDs, revisions, hosts, URLs, trace IDs, and values below are synthetic. `rev
 
 | Case | Source intent | Deployment attempt fact | Authoritative serving / mixed-state fact | Exposure fact | Observation fact | Correct environment conclusion |
 |---|---|---|---|---|---|---|
-| PR preview | `feature/refund` at `rev-b`, base `main` at `rev-a` | No environment deployment attempt | No environment serving assertion | Preview URL may exist as a separate preview fact | Preview scan completes for `rev-b` | Show an isolated preview only; production remains unchanged |
+| PR preview | `feature/refund` at `rev-b`, base `main` at `rev-a` | No environment deployment attempt | No environment serving assertion | Preview URL may exist as a separate preview fact | Preview scan completes for `rev-b` | Show an isolated preview only; it does not alter the production view, which retains its existing evidence state |
 | Merge without deployment | `main` advances from `rev-a` to `rev-b` | Merge is not a deployment attempt | Production authoritative inventory still reports `{rev-a}` | Existing production mapping remains confirmed exposed | Production traffic window is scoped to `rev-a` | Branch docs can advance to `rev-b`; production resolves to `rev-a` |
 | UAT-only deployment | `release/uat` contains `rev-b` | Attempt `dep-uat-101` succeeded for UAT | UAT inventory reports active set `{rev-b}` | UAT gateway maps `/api/orders` to application `/orders` | UAT observations are revision-scoped to `rev-b` | UAT resolves to `rev-b`; staging/production are either `confirmed_not_deployed` only with authoritative evidence or remain `unknown` |
 | Promotion | `release/staging` contains `rev-b` | Attempt `dep-stg-102` succeeded | Staging inventory reports active set `{rev-b}` | Staging route is conditionally exposed by a feature flag | Traffic has no eligible observations in the window | Staging has `rev-b`, while availability remains conditional and traffic remains not observed, not absent |
@@ -65,7 +65,26 @@ All IDs, revisions, hosts, URLs, trace IDs, and values below are synthetic. `rev
 
 All fields are a **provisional inventory**, not an executable envelope. D03 must define versions, cardinality, validation, and migration semantics. “Source/owner” identifies the producer or authority that supplies the fact; “consumer” identifies the first product component that needs it. Sensitivity describes the durable-catalog treatment: `operational` is non-payload operational metadata, `restricted` is access-scoped metadata, `sensitive` is never retained raw, and `sanitized` is safe derived content only after ingestion-boundary processing.
 
-### 3.1 Common envelope and source/revision fields
+### 3.1 Claim and evidence subrecord
+
+Every published or retained claim references this provisional subrecord. It preserves claim category separately from its supporting evidence and from any owner assertion. A single claim can have multiple evidence entries with distinct scopes or limitations.
+
+| Field | Applies to | Source / owner | Sensitivity | Consumer |
+|---|---|---|---|---|
+| `claim_id` | claim | claim/evidence service | operational | claim identity, comparison, review overlay |
+| `claim_category` | claim | extractor, log connector, semantic analyzer, or owner-review service | operational | preserve `declaration`, `observation`, `inference`, or `owner_assertion` without promotion |
+| `owner_assertion_id` | owner assertion | owner-review service | operational | review history, correction linkage |
+| `asserting_owner_id` | owner assertion | authorized owner-review service | restricted | authorization, review attribution |
+| `assertion_text_or_value` | owner assertion | authorized owner-review service | restricted | authorized claim display and discrepancy comparison |
+| `evidence_id` | evidence entry | source adapter / evidence service | operational | provenance linkage, invalidation |
+| `evidence_source_identity` | evidence entry | source adapter | restricted | source authorization, provenance |
+| `evidence_revision_or_version` | evidence entry | source control, deployment, log, or document adapter | operational | revision/version scope and invalidation |
+| `evidence_location` | evidence entry | source adapter | restricted | authorized source navigation and precise review |
+| `extraction_or_observation_method` | evidence entry | analyzer, connector, or inference adapter | operational | verification interpretation, reproducibility |
+| `evidence_scope` | evidence entry | source adapter / evidence service | operational | service, environment, time-window, revision, and access scope |
+| `evidence_limitations` | evidence entry | analyzer, connector, or inference adapter | operational | incomplete/ambiguous/redacted limitations in published facts |
+
+### 3.2 Common envelope and source/revision fields
 
 | Field | Applies to | Source / owner | Sensitivity | Consumer |
 |---|---|---|---|---|
@@ -84,7 +103,7 @@ All fields are a **provisional inventory**, not an executable envelope. D03 must
 | `configuration_fingerprint` | deployment/exposure evidence | deployment/configuration authority | restricted | exposure resolver, change invalidation |
 | `evidence_reference` | every derived fact | source adapter | restricted | evidence links, audit, freshness |
 
-### 3.2 Pull request, merge, and branch-update fields
+### 3.3 Pull request, merge, and branch-update fields
 
 | Field | Applies to | Source / owner | Sensitivity | Consumer |
 |---|---|---|---|---|
@@ -101,7 +120,7 @@ All fields are a **provisional inventory**, not an executable envelope. D03 must
 | `branch_reference_state` | branch update | SCM provider | operational | stale/out-of-order detection |
 | `review_or_merge_outcome` | PR/merge event | SCM provider | operational | workflow reporting; never deployment resolution |
 
-### 3.3 Deployment, rollback, and reconciliation fields
+### 3.4 Deployment, rollback, and reconciliation fields
 
 | Field | Applies to | Source / owner | Sensitivity | Consumer |
 |---|---|---|---|---|
@@ -128,7 +147,7 @@ All fields are a **provisional inventory**, not an executable envelope. D03 must
 | `reconciliation_cursor_or_snapshot_ref` | reconciliation event | provider | restricted | missed-event repair, audit |
 | `reconciliation_outcome` | reconciliation event | reconciliation worker | operational | freshness and failure display |
 
-### 3.4 URL mapping and traffic-observation fields
+### 3.5 URL mapping and traffic-observation fields
 
 | Field | Applies to | Source / owner | Sensitivity | Consumer |
 |---|---|---|---|---|
@@ -152,7 +171,7 @@ All fields are a **provisional inventory**, not an executable envelope. D03 must
 | `sampling_metadata` | traffic aggregate | log connector | operational | denominators, interpretation |
 | `redaction_or_truncation_flags` | traffic sample | sanitizer | operational | limitations; no absence inference |
 
-### 3.5 Sanitized request and response example fields
+### 3.6 Sanitized request and response example fields
 
 | Field | Applies to | Source / owner | Sensitivity | Consumer |
 |---|---|---|---|---|
@@ -184,4 +203,3 @@ All fields are a **provisional inventory**, not an executable envelope. D03 must
 ## 5. Consequences for the next tasks
 
 D02 uses these framework labels and synthetic lifecycle names, but may not turn them into an enterprise claim. D03 defines executable schemas from the inventory while retaining attempt versus serving observations, rollback request versus confirmation, state completeness, and evidence scope. Later work can add a provider-specific adapter only after recording its authority, ordering, artifact identity, routing evidence, and sanitization capabilities.
-
