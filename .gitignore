@@ -54,3 +54,6 @@ Thumbs.db
 tmp/
 *.tmp
 *.swp
+
+# Local worktrees
+.worktrees/
