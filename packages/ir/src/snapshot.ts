@@ -3,7 +3,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { ApiSchemaSchema, SchemaComponentSchema } from "./api-schema.js";
 import {
   ClaimSchema, ConditionSchema, EditorialReviewSchema, EvidenceSchema, ExportEligibilitySchema,
-  PresenceFactSchema, type Evidence,
+  PresenceFactSchema, type Claim, type Evidence,
 } from "./evidence.js";
 import { EndpointSchema, type Endpoint } from "./endpoints.js";
 import { deriveEndpointIdentity, EndpointIdentitySchema } from "./identity.js";
@@ -127,6 +127,9 @@ const canonicalJson = (value: unknown): string => {
   return JSON.stringify(value) ?? "null";
 };
 
+const conditionKey = (condition: Claim["condition"]): string =>
+  condition === undefined ? "<unconditional>" : canonicalJson(condition);
+
 const containsDuplicateEnum = (value: unknown): boolean => {
   if (Array.isArray(value)) return value.some(containsDuplicateEnum);
   if (!value || typeof value !== "object") return false;
@@ -210,16 +213,24 @@ export const validateContractSnapshotSemantics = (snapshot: ContractSnapshot): V
     if (endpoint.identity.service_id !== snapshot.service.service_id) {
       issues.push(issue(`/endpoints/${index}/identity/service_id`, "semantic.cross_service_reference", "endpoint belongs to another service"));
     }
-    const expected = deriveEndpointIdentity({
-      identity_version: endpoint.identity.identity_version,
-      service_id: endpoint.identity.service_id,
-      method: endpoint.identity.method,
-      application_path: endpoint.application_path,
-      selectors: endpoint.identity.selectors,
-    });
-    if (expected.route_key !== endpoint.identity.route_key
-      || expected.normalized_path_shape !== endpoint.identity.normalized_path_shape
-      || canonicalJson(expected.selectors) !== canonicalJson(endpoint.identity.selectors)) {
+    let identityMatches = false;
+    let applicationPathIsValid = true;
+    try {
+      const expected = deriveEndpointIdentity({
+        identity_version: endpoint.identity.identity_version,
+        service_id: endpoint.identity.service_id,
+        method: endpoint.identity.method,
+        application_path: endpoint.application_path,
+        selectors: endpoint.identity.selectors,
+      });
+      identityMatches = expected.route_key === endpoint.identity.route_key
+        && expected.normalized_path_shape === endpoint.identity.normalized_path_shape
+        && canonicalJson(expected.selectors) === canonicalJson(endpoint.identity.selectors);
+    } catch {
+      applicationPathIsValid = false;
+      issues.push(issue(`/endpoints/${index}/application_path`, "semantic.invalid_path_syntax", "application path contains malformed or unsupported placeholder syntax"));
+    }
+    if (applicationPathIsValid && !identityMatches) {
       issues.push(issue(`/endpoints/${index}/identity`, "semantic.identity_mismatch", "route identity does not match method, path, and selectors"));
     }
     evidenceReference(endpoint.evidence_ids, evidenceIds, `/endpoints/${index}/evidence_ids`, issues);
@@ -291,6 +302,7 @@ export const validateContractSnapshotSemantics = (snapshot: ContractSnapshot): V
           && candidate.subject.service_id === claim.subject.service_id
           && candidate.subject.endpoint_id === claim.subject.endpoint_id
           && candidate.subject.schema_pointer === claim.subject.schema_pointer
+          && conditionKey(candidate.condition) === conditionKey(claim.condition)
           && canonicalJson(candidate.value) !== canonicalJson(claim.value));
         if (contradictoryClaim !== undefined) {
           issues.push(issue(`/export_eligibility/${index}/claim_id`, "semantic.conflicting_claims", "eligible claim has an unresolved contradiction"));

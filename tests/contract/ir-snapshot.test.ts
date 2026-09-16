@@ -71,6 +71,22 @@ describe("contract snapshot wire contract", () => {
     expectInvalid(candidate, "semantic.cross_service_reference");
   });
 
+  test("reports malformed application paths without an identity mismatch", () => {
+    const candidate = clone(validSnapshot);
+    candidate.endpoints[0].application_path = "/orders/{id";
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.issues.filter((item) => item.path === "/endpoints/0/identity")).toHaveLength(0);
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: "/endpoints/0/application_path",
+          code: "semantic.invalid_path_syntax",
+        }),
+      ]));
+    }
+  });
+
   test("rejects eligible inferred constraints and unknown qualifying evidence", () => {
     const candidate = clone(validSnapshot);
     candidate.export_eligibility[1] = {
@@ -140,6 +156,50 @@ describe("contract snapshot wire contract", () => {
     const result = parseContractSnapshot(candidate);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.conflicting_claims")).toBe(true);
+  });
+
+  test("rejects eligible claims with differing values under the same structured condition", () => {
+    const candidate = clone(validSnapshot);
+    const condition = {
+      kind: "predicate",
+      operator: "equals",
+      field: "account.tier",
+      value: "managed",
+      affected_schema_paths: ["/properties/priority"],
+    };
+    candidate.claims[0].condition = condition;
+    candidate.claims.push({
+      ...clone(candidate.claims[0]),
+      claim_id: "claim-priority-optional-managed",
+      value: "optional",
+    });
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.conflicting_claims")).toBe(true);
+  });
+
+  test("does not treat distinct structured conditional branches as unconditional conflicts", () => {
+    const candidate = clone(validSnapshot);
+    candidate.claims[0].condition = {
+      kind: "predicate",
+      operator: "equals",
+      field: "account.tier",
+      value: "managed",
+      affected_schema_paths: ["/properties/priority"],
+    };
+    candidate.claims.push({
+      ...clone(candidate.claims[0]),
+      claim_id: "claim-priority-optional-standard",
+      value: "optional",
+      condition: {
+        kind: "predicate",
+        operator: "equals",
+        field: "account.tier",
+        value: "standard",
+        affected_schema_paths: ["/properties/priority"],
+      },
+    });
+    expect(parseContractSnapshot(candidate)).toMatchObject({ ok: true });
   });
 
   test("requires qualifying evidence scope to cover the eligible claim subject and snapshot", () => {

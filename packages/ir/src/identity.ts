@@ -1,5 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
-import { parserFor, type ValidationError } from "./validation.js";
+import { issue, parserFor, type ValidationError } from "./validation.js";
 import { IDENTITY_VERSION, IdentityVersionSchema } from "./versions.js";
 
 export const HeaderSelectorSchema = Type.Union([
@@ -55,19 +55,102 @@ export class EndpointIdentityInputError extends Error {
   }
 }
 
-const normalizeSpringSegment = (segment: string): string => {
-  if (!segment.startsWith("{") || !segment.endsWith("}")) return segment;
-  const content = segment.slice(1, -1);
-  const separator = content.indexOf(":");
-  return separator === -1 ? "{}" : `{:${content.slice(separator + 1)}}`;
+const pathSyntaxError = (): never => {
+  throw new Error("application path contains malformed or unsupported placeholder syntax");
 };
 
-export const normalizeApplicationPathShape = (path: string): string => path
-  .split("/")
-  .map(normalizeSpringSegment)
-  .join("/")
-  .replace(/:([A-Za-z_][A-Za-z0-9_]*)(\([^/]+\))?/g, (_match, _name: string, constraint: string | undefined) =>
-    constraint ? `{:${constraint}}` : "{}");
+const pathName = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const validatePathConstraint = (constraint: string): string => {
+  if (constraint.length === 0) pathSyntaxError();
+  try {
+    // Compile the bounded constraint so malformed regular expressions fail closed.
+    new RegExp(`^(?:${constraint})$`);
+  } catch {
+    pathSyntaxError();
+  }
+  return constraint;
+};
+
+const delimitedPathExpression = (
+  path: string,
+  start: number,
+  opening: "{" | "(",
+  closing: "}" | ")",
+): { body: string; end: number } => {
+  let depth = 1;
+  let inCharacterClass = false;
+  let escaped = false;
+  for (let index = start + 1; index < path.length; index += 1) {
+    const character = path[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "[" && !inCharacterClass) {
+      inCharacterClass = true;
+      continue;
+    }
+    if (character === "]" && inCharacterClass) {
+      inCharacterClass = false;
+      continue;
+    }
+    if (inCharacterClass) continue;
+    if (character === opening) {
+      if (opening === "{") pathSyntaxError();
+      depth += 1;
+    } else if (character === closing) {
+      depth -= 1;
+      if (depth === 0) return { body: path.slice(start + 1, index), end: index + 1 };
+    }
+  }
+  return pathSyntaxError();
+};
+
+export const normalizeApplicationPathShape = (path: string): string => {
+  let normalized = "";
+  let index = 0;
+  while (index < path.length) {
+    const character = path[index];
+    if (character === "{") {
+      const expression = delimitedPathExpression(path, index, "{", "}");
+      const separator = expression.body.indexOf(":");
+      if (separator === -1) {
+        if (!pathName.test(expression.body)) pathSyntaxError();
+        normalized += "{}";
+      } else {
+        const name = expression.body.slice(0, separator);
+        if (!pathName.test(name)) pathSyntaxError();
+        normalized += `{:${validatePathConstraint(expression.body.slice(separator + 1))}}`;
+      }
+      index = expression.end;
+      continue;
+    }
+    if (character === "}") pathSyntaxError();
+    if (character === ":") {
+      const nameMatch = path.slice(index + 1).match(/^[A-Za-z_][A-Za-z0-9_]*/);
+      if (nameMatch) {
+        const nameEnd = index + 1 + nameMatch[0].length;
+        if (path[nameEnd] === "(") {
+          const expression = delimitedPathExpression(path, nameEnd, "(", ")");
+          normalized += `{:${validatePathConstraint(expression.body)}}`;
+          index = expression.end;
+        } else {
+          normalized += "{}";
+          index = nameEnd;
+        }
+        continue;
+      }
+    }
+    normalized += character;
+    index += 1;
+  }
+  return normalized;
+};
 
 const selectorValue = (selector: Static<typeof HeaderSelectorSchema>): string =>
   "value" in selector ? selector.value : "";
@@ -108,7 +191,15 @@ export const deriveEndpointIdentity = (input: EndpointIdentityInput): EndpointId
   const parsed = parseEndpointIdentityInput(input);
   if (!parsed.ok) throw new EndpointIdentityInputError(parsed.error);
   const method = input.method.toUpperCase();
-  const normalizedPathShape = normalizeApplicationPathShape(input.application_path);
+  let normalizedPathShape: string;
+  try {
+    normalizedPathShape = normalizeApplicationPathShape(input.application_path);
+  } catch {
+    throw new EndpointIdentityInputError({
+      kind: "validation_error",
+      issues: [issue("/application_path", "semantic.invalid_path_syntax", "application path contains malformed or unsupported placeholder syntax")],
+    });
+  }
   const selectors = canonicalSelectors(input.selectors ?? {});
   return {
     identity_version: input.identity_version,

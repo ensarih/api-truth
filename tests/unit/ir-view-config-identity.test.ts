@@ -226,4 +226,38 @@ describe("endpoint identity", () => {
     expect(key("/orders/{id:[0-9]+}")).toBe(key("/orders/{orderId:[0-9]+}"));
     expect(key("/orders/{id:[0-9]+}")).not.toBe(key("/orders/{id:[A-Z]+}"));
   });
+
+  test("normalizes Spring constraints containing slashes without retaining placeholder spelling", () => {
+    const first = deriveEndpointIdentity({
+      identity_version: "1.0.0", service_id: "orders", method: "GET", application_path: "/orders/{id:[^/]+}", selectors: {},
+    });
+    const second = deriveEndpointIdentity({
+      identity_version: "1.0.0", service_id: "orders", method: "GET", application_path: "/orders/{orderId:[^/]+}", selectors: {},
+    });
+    expect(first.route_key).toBe(second.route_key);
+    expect(first.normalized_path_shape).toBe("/orders/{:[^/]+}");
+  });
+
+  test("preserves escaped character classes in supported Spring constraints", () => {
+    const first = deriveEndpointIdentity({
+      identity_version: "1.0.0", service_id: "orders", method: "GET", application_path: "/orders/{id:[\\]]+}", selectors: {},
+    });
+    const second = deriveEndpointIdentity({
+      identity_version: "1.0.0", service_id: "orders", method: "GET", application_path: "/orders/{orderId:[\\]]+}", selectors: {},
+    });
+    expect(first.route_key).toBe(second.route_key);
+    expect(first.normalized_path_shape).toBe("/orders/{:[\\]]+}");
+  });
+
+  test.each([
+    "/orders/{id",
+    "/orders/{:id}",
+    "/orders/{id:}",
+    "/orders/{id:[^/]+}/tail}",
+    "/orders/{id:digits{2}}",
+  ])("rejects malformed or unsupported path placeholder syntax: %s", (application_path) => {
+    expect(() => deriveEndpointIdentity({
+      identity_version: "1.0.0", service_id: "orders", method: "GET", application_path, selectors: {},
+    })).toThrow();
+  });
 });
