@@ -7,6 +7,7 @@ const failures = [];
 const check = (condition, message) => { if (!condition) failures.push(message); };
 const text = (path) => readFileSync(join(fixturesRoot, path), "utf8");
 const exists = (path) => existsSync(join(fixturesRoot, path));
+const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
 function jsonFiles(directory = fixturesRoot) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -25,16 +26,19 @@ for (const file of jsonFiles()) {
 }
 
 function validateDeclaration(schema, source) {
-  check(source.includes(`export interface ${schema.symbol}`), `typescript: declaration symbol missing: ${schema.symbol}`);
+  check(schema.kind === "interface" && source.includes(`export interface ${schema.symbol}`), `typescript: declaration kind/symbol mismatch: ${schema.symbol}`);
   if (schema.symbol === "CreateOrderBody") {
-    check(source.includes("customer: { id: string; address: { city: string } };"), "typescript: nested customer declaration mismatch");
-    check(source.includes("items: Array<{ sku: string; quantity: number }>;"), "typescript: array-item declaration mismatch");
-    const priority = schema.fields.priority.presence === "declared_optional" ? "priority?: Priority;" : "priority: Priority;";
+    const customer = schema.fields.customer;
+    check(customer.presence === "declared_required" && source.includes(`customer: { id: ${customer.shape.id}; address: { city: ${customer.shape.address.city} } };`), "typescript: nested customer declaration mismatch");
+    const items = schema.fields.items;
+    check(items.presence === "declared_required" && source.includes(`items: ${items.shape};`), "typescript: array-item declaration mismatch");
+    const priority = schema.fields.priority.presence === "declared_optional" ? `priority?: ${schema.fields.priority.shape};` : `priority: ${schema.fields.priority.shape};`;
     check(source.includes(priority), `typescript: priority declaration mismatch for ${schema.symbol}`);
   }
   if (schema.symbol === "OrderView") {
+    check(schema.fields.id.presence === "declared_required" && source.includes(`id: ${schema.fields.id.shape};`), "typescript: response id declaration mismatch");
     const states = schema.fields.state.shape.split(" | ").map((state) => `"${state}"`).join(" | ");
-    check(source.includes(`state: ${states};`), "typescript: response enum declaration mismatch");
+    check(schema.fields.state.presence === "declared_required" && source.includes(`state: ${states};`), "typescript: response enum declaration mismatch");
   }
 }
 
@@ -68,11 +72,11 @@ function validateTypeScriptSnapshot(variant) {
     for (const mediaType of route.response.handler.media_types) check(handler.includes(`.type("${mediaType}")`), `${variant}: handler media type ${mediaType} missing for ${route.id}`);
     const responseSchema = catalog.schemas[route.response.handler.declaration_schema_ref];
     check(Boolean(responseSchema), `${variant}: response schema reference missing for ${route.id}`);
-    if (responseSchema) { validateDeclaration(responseSchema, typeSource); check(handler.includes(responseSchema.symbol), `${variant}: response declaration not referenced by ${route.handler_symbol}`); }
+    if (responseSchema) { check(responseSchema.source === `typescript/orders/${variant}/src/types.ts`, `${variant}: response declaration source mismatch for ${route.id}`); validateDeclaration(responseSchema, typeSource); check(handler.includes(responseSchema.symbol), `${variant}: response declaration not referenced by ${route.handler_symbol}`); }
     if (route.request.declaration_schema_ref) {
       const requestSchema = catalog.schemas[route.request.declaration_schema_ref];
       check(Boolean(requestSchema), `${variant}: request schema reference missing for ${route.id}`);
-      if (requestSchema) { validateDeclaration(requestSchema, typeSource); check(handler.includes(requestSchema.symbol), `${variant}: request declaration not referenced by ${route.handler_symbol}`); }
+      if (requestSchema) { check(requestSchema.source === `typescript/orders/${variant}/src/types.ts`, `${variant}: request declaration source mismatch for ${route.id}`); validateDeclaration(requestSchema, typeSource); check(handler.includes(requestSchema.symbol), `${variant}: request declaration not referenced by ${route.handler_symbol}`); }
     }
     for (const middleware of route.response.middleware ?? []) {
       const validator = validators.get(middleware);
@@ -96,18 +100,21 @@ const javaSource = text("java/orders/src/OrdersController.java");
 const javaCatalog = JSON.parse(text(javaExpected.declaration_schema_catalog));
 for (const importedType of javaExpected.imports_evidence) check(javaSource.includes(`import ${importedType};`), `java: import evidence missing for ${importedType}`);
 check(javaSource.includes(`@RequestMapping(value = "${javaExpected.controller.prefix}", produces = MediaType.APPLICATION_JSON_VALUE)`), "java: controller mapping mismatch");
-for (const [symbol, schema] of Object.entries(javaCatalog.schemas)) {
-  check(javaSource.includes(`record ${symbol}(`), `java: declaration symbol missing: ${symbol}`);
-  for (const [field, fact] of Object.entries(schema.fields)) check(javaSource.includes(field), `java: schema field missing: ${symbol}.${field}`);
-}
-const javaRecordEvidence = [
-  "record CreateOrderRequest(@Valid Customer customer, @NotEmpty List<@Valid LineItem> items)",
-  "record Customer(@NotBlank String id, @Valid Address address)",
-  "record Address(@NotBlank String city)",
-  "record LineItem(@NotBlank String sku, @Min(1) int quantity)",
-  "record OrderResponse(String id, String state)"
-];
-for (const record of javaRecordEvidence) check(javaSource.includes(record), `java: declaration shape mismatch: ${record}`);
+check(javaCatalog.source === "java/orders/src/OrdersController.java", "java: declaration catalog source mismatch");
+const javaSchemas = javaCatalog.schemas;
+for (const [symbol, schema] of Object.entries(javaSchemas)) check(schema.kind === "record" && javaSource.includes(`record ${symbol}(`), `java: declaration kind/symbol mismatch: ${symbol}`);
+const javaPresenceAnnotation = (presence) => ({ "required_by_@NotBlank": "@NotBlank", "required_by_@NotEmpty": "@NotEmpty" }[presence] ?? "");
+const createFields = javaSchemas.CreateOrderRequest.fields;
+const customerFields = javaSchemas.Customer.fields;
+const addressFields = javaSchemas.Address.fields;
+const lineItemFields = javaSchemas.LineItem.fields;
+const responseFields = javaSchemas.OrderResponse.fields;
+const javaItemElement = createFields.items.shape.slice("List<".length, -1);
+check(createFields.customer.parent_presence === "unknown_no_NotNull" && createFields.customer.cascade === "@Valid" && createFields.items.parent_presence === "required_by_@NotEmpty" && createFields.items.cascade === "@Valid_element" && javaSource.includes(`record CreateOrderRequest(@Valid ${createFields.customer.shape} customer, @NotEmpty List<@Valid ${javaItemElement}> items)`), "java: CreateOrderRequest catalog facts mismatch");
+check(javaSource.includes(`record Customer(${javaPresenceAnnotation(customerFields.id.presence)} ${customerFields.id.shape} id, ${customerFields.address.cascade} ${customerFields.address.shape} address)`) && customerFields.address.parent_presence === "unknown_no_NotNull", "java: Customer catalog facts mismatch");
+check(javaSource.includes(`record Address(${javaPresenceAnnotation(addressFields.city.presence)} ${addressFields.city.shape} city)`), "java: Address catalog facts mismatch");
+check(lineItemFields.quantity.request_presence === "unknown_no_binding_evidence" && javaSource.includes(`record LineItem(${javaPresenceAnnotation(lineItemFields.sku.presence)} ${lineItemFields.sku.shape} sku, ${lineItemFields.quantity.numeric_constraint} ${lineItemFields.quantity.shape} quantity)`), "java: LineItem catalog facts mismatch");
+check(javaSource.includes(`record OrderResponse(${responseFields.id.shape} id, ${responseFields.state.shape} state)`) && responseFields.id.presence === "declaration_only" && responseFields.state.presence === "declaration_only", "java: OrderResponse catalog facts mismatch");
 for (const route of javaExpected.routes) {
   check(javaSource.includes(route.mapping_annotation), `java: mapping selector mismatch for ${route.id}`);
   const handler = functionSegment(javaSource, `public OrderResponse ${route.handler_symbol}`);
@@ -122,21 +129,42 @@ for (const route of javaExpected.routes) {
 }
 const javaCreate = javaExpected.routes.find((route) => route.id === "create-java-order");
 for (const [path, annotation] of Object.entries(javaCreate.request.runtime_validation)) check(javaSource.includes(`${annotation}`), `java: runtime annotation missing for ${path}`);
+check(javaCreate.request.runtime_validation["customer.id"] === javaPresenceAnnotation(customerFields.id.presence), "java: customer runtime validation catalog mismatch");
+check(javaCreate.request.runtime_validation["customer.address.city"] === javaPresenceAnnotation(addressFields.city.presence), "java: address runtime validation catalog mismatch");
+check(javaCreate.request.runtime_validation.items === javaPresenceAnnotation(createFields.items.parent_presence), "java: items runtime validation catalog mismatch");
+check(javaCreate.request.runtime_validation["items[].sku"] === javaPresenceAnnotation(lineItemFields.sku.presence), "java: item sku runtime validation catalog mismatch");
+check(javaCreate.request.runtime_numeric_constraints["items[].quantity"] === lineItemFields.quantity.numeric_constraint, "java: item quantity numeric constraint mismatch");
+check(javaCreate.request.request_presence["items[].quantity"] === lineItemFields.quantity.request_presence, "java: item quantity request presence mismatch");
 check(javaSource.includes("@Valid Customer customer") && !javaSource.includes("@NotNull Customer customer"), "java: customer nullable/cascade boundary mismatch");
 check(javaSource.includes("@Valid Address address") && !javaSource.includes("@NotNull Address address"), "java: address nullable/cascade boundary mismatch");
 check(javaSource.includes("@NotEmpty List<@Valid LineItem> items"), "java: items presence/cascade boundary mismatch");
 
 const lifecycle = JSON.parse(text("lifecycle/cases.json"));
 check(!lifecycle.revision_aliases.some((alias) => alias.startsWith("artifact-")) && lifecycle.artifact_aliases.includes("artifact-b"), "lifecycle: artifact/revision aliases are conflated");
+const resolutionFromServing = (activeRevisionSet) => {
+  if (activeRevisionSet === "unknown") return "unknown; pending artifact-to-revision analysis";
+  if (activeRevisionSet.length === 1) return activeRevisionSet[0];
+  return `mixed ${activeRevisionSet.join(" and ")}; no universal contract`;
+};
 for (const lifecycleCase of lifecycle.cases) {
   const initial = lifecycleCase.initial_authoritative_observation;
   check(initial?.serving_observation_id && Number.isInteger(initial?.serving_effective_order) && initial.active_revision_set !== undefined && initial.completeness, `lifecycle: initial authoritative observation missing for ${lifecycleCase.id}`);
   for (const step of lifecycleCase.steps) {
     check(step.expected?.branch && step.expected?.serving && step.expected?.contract_resolution && step.expected?.exposure, `lifecycle: state subjects missing for ${lifecycleCase.id}/${step.event}`);
     if (["deployment_succeeded", "deployment_failed"].includes(step.event)) check(Number.isInteger(step.attempt_effective_order) && !JSON.stringify(step.expected.serving).includes("active_revision_set"), `lifecycle: attempt improperly resolves serving for ${lifecycleCase.id}`);
-    if (["serving_observed", "reconciliation_completed"].includes(step.event)) check(step.serving_observation_id && Number.isInteger(step.serving_effective_order) && step.active_revision_set !== undefined, `lifecycle: serving observation data missing for ${lifecycleCase.id}`);
+    if (["serving_observed", "reconciliation_completed"].includes(step.event)) {
+      const environment = step.environment ?? initial.environment;
+      const expectedServing = step.expected.serving[environment];
+      check(step.serving_observation_id && Number.isInteger(step.serving_effective_order) && step.active_revision_set !== undefined, `lifecycle: serving observation data missing for ${lifecycleCase.id}`);
+      check(same(expectedServing?.active_revision_set, step.active_revision_set) && expectedServing?.completeness === step.completeness, `lifecycle: serving input/expected mismatch for ${lifecycleCase.id}`);
+      check(step.expected.contract_resolution[environment] === resolutionFromServing(step.active_revision_set), `lifecycle: contract resolution mismatch for ${lifecycleCase.id}`);
+    }
   }
 }
+const duplicateCase = lifecycle.cases.find((item) => item.id === "stale-and-duplicate-events");
+const originalDelivery = duplicateCase.steps.find((step) => step.delivery === "original");
+const duplicateDelivery = duplicateCase.steps.find((step) => step.delivery === "duplicate");
+check(Boolean(originalDelivery) && Boolean(duplicateDelivery) && duplicateDelivery.event_id === originalDelivery.event_id && duplicateDelivery.attempt_effective_order === originalDelivery.attempt_effective_order && duplicateDelivery.provider_sequence_or_cursor === originalDelivery.provider_sequence_or_cursor, "lifecycle: duplicate delivery lacks matching original identity/order/cursor");
 const uatObserved = lifecycle.cases.find((item) => item.id === "uat-only-deployment").steps.find((step) => step.event === "serving_observed");
 check(uatObserved.expected.exposure.uat.application_path === "/api/orders", "lifecycle: UAT application path must match source route");
 check(new Set(lifecycle.sample_completeness_examples.map((item) => item.sample_completeness)).size === 4, "lifecycle: completeness examples must distinguish omitted, redacted, truncated, and complete/absent");

@@ -10,7 +10,7 @@
     },
     "Customer": { "kind": "record", "fields": { "id": { "shape": "String", "presence": "required_by_@NotBlank" }, "address": { "shape": "Address", "parent_presence": "unknown_no_NotNull", "cascade": "@Valid" } } },
     "Address": { "kind": "record", "fields": { "city": { "shape": "String", "presence": "required_by_@NotBlank" } } },
-    "LineItem": { "kind": "record", "fields": { "sku": { "shape": "String", "presence": "required_by_@NotBlank" }, "quantity": { "shape": "int", "presence": "required_by_@Min(1)" } } },
+    "LineItem": { "kind": "record", "fields": { "sku": { "shape": "String", "presence": "required_by_@NotBlank" }, "quantity": { "shape": "int", "request_presence": "unknown_no_binding_evidence", "numeric_constraint": "@Min(1)" } } },
     "OrderResponse": { "kind": "record", "fields": { "id": { "shape": "String", "presence": "declaration_only" }, "state": { "shape": "String", "presence": "declaration_only" } } }
   }
 }
