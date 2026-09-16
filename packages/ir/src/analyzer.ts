@@ -6,16 +6,21 @@ import {
   AnalyzerIdentitySchema, ContractSnapshotSchemaReferences, CoverageSchema, DependencySchema, DiagnosticSchema,
   validateContractSnapshotSemantics,
 } from "./snapshot.js";
-import { parserFor, type ValidationIssue } from "./validation.js";
+import { issue, parserFor, type ValidationIssue } from "./validation.js";
 import { AnalyzerExchangeVersionSchema, ConfigVersionSchema, IdentityVersionSchema, IrVersionSchema } from "./versions.js";
 
 const NonEmptyString = () => Type.String({ minLength: 1 });
+export const ImmutableRevisionSchema = Type.String({ pattern: "^[a-fA-F0-9]{12,128}$" });
+export const NormalizedProjectPathSchema = Type.Union([
+  Type.Literal("."),
+  Type.String({ pattern: "^(?!.*(?:^|/)\\.\\.?(?:/|$))[A-Za-z0-9_@+.-]+(?:/[A-Za-z0-9_@+.-]+)*$" }),
+]);
 
 export const AnalyzerSourceSchema = Type.Object({
   repository_id: NonEmptyString(),
   service_id: NonEmptyString(),
-  service_root: NonEmptyString(),
-  immutable_revision: NonEmptyString(),
+  service_root: NormalizedProjectPathSchema,
+  immutable_revision: ImmutableRevisionSchema,
   source_digest: NonEmptyString(),
   access_label: NonEmptyString(),
 }, { additionalProperties: false });
@@ -26,12 +31,23 @@ export const AnalyzerRequestSchema = Type.Object({
   request_id: NonEmptyString(),
   analyzer: AnalyzerIdentitySchema,
   source: AnalyzerSourceSchema,
-  resolution_inputs: Type.Array(Type.Object({
-    kind: Type.Union([Type.Literal("source_tree"), Type.Literal("type_manifest"), Type.Literal("classpath"), Type.Literal("generated_sources")]),
-    path: NonEmptyString(), digest: NonEmptyString(),
-  }, { additionalProperties: false }), { minItems: 1 }),
+  resolution_inputs: Type.Array(Type.Union([
+    Type.Object({
+      kind: Type.Union([Type.Literal("source_tree"), Type.Literal("type_manifest"), Type.Literal("generated_sources")]),
+      path: NormalizedProjectPathSchema,
+      digest: NonEmptyString(),
+    }, { additionalProperties: false }),
+    Type.Object({
+      kind: Type.Literal("classpath"),
+      locator: Type.Object({
+        scheme: Type.Literal("maven"),
+        coordinate: Type.String({ pattern: "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.+-]+$" }),
+      }, { additionalProperties: false }),
+      digest: NonEmptyString(),
+    }, { additionalProperties: false }),
+  ]), { minItems: 1 }),
   prior_dependencies: Type.Array(DependencySchema),
-  changed_paths: Type.Array(NonEmptyString(), { uniqueItems: true }),
+  changed_paths: Type.Array(NormalizedProjectPathSchema, { uniqueItems: true }),
   extraction_mode: Type.Union([Type.Literal("baseline"), Type.Literal("incremental"), Type.Literal("fallback_full_service")]),
   limits: Type.Object({
     timeout_ms: Type.Integer({ minimum: 1 }), max_files: Type.Integer({ minimum: 1 }), max_output_bytes: Type.Integer({ minimum: 1 }),
@@ -96,6 +112,13 @@ const validateAnalyzerResultSemantics = (result: AnalyzerResult): ValidationIssu
   }
   if (result.status === "partial" && result.coverage.status !== "incomplete") {
     issues.push({ path: "/status", code: "semantic.inconsistent_coverage", message: "partial results require incomplete coverage" });
+  }
+  if (result.status === "failed") {
+    if (result.coverage.status !== "incomplete") {
+      issues.push(issue("/status", "semantic.inconsistent_coverage", "failed results require incomplete coverage"));
+    } else if (result.coverage.diagnostic_ids.length === 0) {
+      issues.push(issue("/coverage/diagnostic_ids", "semantic.incomplete_coverage_without_diagnostic", "failed results require an affected diagnostic"));
+    }
   }
   return issues;
 };

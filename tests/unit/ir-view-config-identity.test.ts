@@ -94,11 +94,47 @@ describe("installation config", () => {
         inference: {
           enabled: true,
           provider: "openai",
+          model: "semantic-model",
           credential: { api_key: "do-not-echo-this" },
         },
       }),
       "/inference",
     );
+  });
+
+  test("accepts an allowlisted structured secret reference", () => {
+    expect(parseConfig({
+      ...validConfig,
+      inference: {
+        enabled: true,
+        provider: "openai",
+        model: "semantic-model",
+        credential: { secret_ref: { scheme: "env", locator: "OPENAI_API_KEY" } },
+      },
+    })).toMatchObject({ ok: true });
+  });
+
+  test("rejects a literal disguised as a secret reference without echoing it", () => {
+    const literal = "sk-literal-secret";
+    const result = parseConfig({
+      ...validConfig,
+      inference: {
+        enabled: true,
+        provider: "openai",
+        model: "semantic-model",
+        credential: { secret_ref: literal },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(literal);
+  });
+
+  test("rejects an environment branch absent from the service intended branch set", () => {
+    const candidate = structuredClone(validConfig) as Record<string, any>;
+    candidate.repositories[0].services[0].environments[0].intended_branch = "release/unknown";
+    const result = parseConfig(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.intended_branch_mismatch")).toBe(true);
   });
 
   test("does not echo rejected secret values", () => {
@@ -154,5 +190,40 @@ describe("endpoint identity", () => {
     } as const;
     expect(deriveEndpointIdentity({ ...base, label: "old", host: "a.test", branch: "main" }).route_key)
       .toBe(deriveEndpointIdentity({ ...base, label: "new", host: "b.test", branch: "release" }).route_key);
+  });
+
+  test.each([
+    { name: "equals without a value", selector: { name: "X-Channel", operator: "equals" } },
+    { name: "present with a value", selector: { name: "X-Channel", operator: "present", value: "partner" } },
+  ])("rejects malformed selector: $name", ({ selector }) => {
+    expect(() => deriveEndpointIdentity({
+      identity_version: "1.0.0",
+      service_id: "orders",
+      method: "GET",
+      application_path: "/orders/{id}",
+      selectors: { headers: [selector] },
+    } as any)).toThrow();
+  });
+
+  test("canonicalizes duplicate selectors with set and header-name case semantics", () => {
+    const identity = (headers: any[]) => deriveEndpointIdentity({
+      identity_version: "1.0.0",
+      service_id: "orders",
+      method: "GET",
+      application_path: "/orders/{id}",
+      selectors: { headers },
+    }).route_key;
+    expect(identity([
+      { name: "X-Channel", operator: "equals", value: "partner" },
+      { name: "x-channel", operator: "equals", value: "partner" },
+    ])).toBe(identity([{ name: "x-channel", operator: "equals", value: "partner" }]));
+  });
+
+  test("preserves Spring placeholder constraints while ignoring parameter spelling", () => {
+    const key = (path: string) => deriveEndpointIdentity({
+      identity_version: "1.0.0", service_id: "orders", method: "GET", application_path: path, selectors: {},
+    }).route_key;
+    expect(key("/orders/{id:[0-9]+}")).toBe(key("/orders/{orderId:[0-9]+}"));
+    expect(key("/orders/{id:[0-9]+}")).not.toBe(key("/orders/{id:[A-Z]+}"));
   });
 });

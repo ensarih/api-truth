@@ -27,6 +27,7 @@ Errors contain JSON-pointer-like field paths and controlled messages. They never
 | `parseConfig` | `validateConfig` | `ValidationResult<InstallationConfig>` | `InstallationConfigSchema` |
 | `parseAnalyzerRequest` | `validateAnalyzerRequest` | `ValidationResult<AnalyzerRequest>` | `AnalyzerRequestSchema` |
 | `parseAnalyzerResult` | `validateAnalyzerResult` | `ValidationResult<AnalyzerResult>` | `AnalyzerResultSchema` |
+| `parseEndpointIdentityInput` | — | `ValidationResult<EndpointIdentityInput>` | `EndpointIdentityInputSchema` |
 
 `jsonSchemas` exposes the six public wire-boundary schemas by name. `jsonSchemaCatalog` exposes those schemas plus their referenced definitions, each with a stable `$id`, for registration in an independent Draft 2020-12 validator or serialization for a Java consumer.
 
@@ -34,19 +35,19 @@ Errors contain JSON-pointer-like field paths and controlled messages. They never
 
 The current supported values are `IR_VERSION`, `EVENT_VERSION`, `VIEW_VERSION`, `CONFIG_VERSION`, `IDENTITY_VERSION`, and `ANALYZER_EXCHANGE_VERSION`, all currently `1.0.0`. The parsers reject unsupported versions rather than silently accepting a future wire shape.
 
-`deriveEndpointIdentity(input): EndpointIdentity` and `normalizeApplicationPathShape(path): string` implement route identity v1. The route key contains stable service ID, method, normalized application path shape, and sorted supported routing selectors. Placeholder spelling is removed from the path shape while the endpoint's `application_path` and parameter names preserve it as a diffable fact. Labels, hosts, branches, line numbers, and deployments are not inputs. Literal path, method, or selector changes produce different identities.
+`deriveEndpointIdentity(input): EndpointIdentity` and `normalizeApplicationPathShape(path): string` implement route identity v1. The helper validates runtime input and throws `EndpointIdentityInputError` with a structured `validation` property when malformed. The route key contains stable service ID, method, normalized application path shape, and canonical supported routing selectors. Header names and media types use case-insensitive set semantics; query selector names and selector values retain case. Placeholder spelling is removed while supported Express/Spring placeholder constraints are retained; the endpoint's `application_path` and parameter names remain diffable facts. Labels, hosts, branches, line numbers, and deployments are not inputs. Literal path, constraint, method, or selector changes produce different identities.
 
 ## Contract semantics
 
 - `Evidence.method` distinguishes `type_declaration`, `runtime_validator`, `observation`, `behavioral_verification`, `deterministic_analysis`, `inference`, and `owner_assertion`. Every record carries source, source version, location, scope, limitations, and access label.
 - Field presence is `required`, `optional`, `conditional`, or `unknown`. Conditional presence requires either a predicate tree or a scoped business expression.
 - Request parameters/bodies and response content have separate serialization records. Responses retain exact/range/default/unknown statuses and media types. Security uses OR alternatives containing AND requirements.
-- `editorial_reviews` and `export_eligibility` are independent. Eligible records require qualifying runtime-validator, deterministic-analysis, or behavioral-verification evidence. Inference, ordinary observations, owner assertions, and editorial acceptance do not establish normative eligibility.
+- `editorial_reviews` and `export_eligibility` are independent. Eligible records require evidence already attached to the claim, scoped to its snapshot and subject, with a basis matching the evidence method and a scope containing the subject endpoint. Unresolved contradictory claims block eligibility. Inference, ordinary observations, owner assertions, and editorial acceptance do not establish normative eligibility.
 - Incomplete snapshots require unresolved roots, a reason, and affected diagnostic IDs. Partial analyzer results preserve endpoints and diagnostics rather than dropping unresolved scope.
 - `ViewSelector` contains an explicit service ID and exactly one of environment, branch, or immutable revision; publication pinning is optional.
-- Omitted `inference` and `logs` config sections mean disabled. Enabling either requires an explicit adapter/provider and a `secret_ref`; literal credential fields are rejected.
-- `deployment.changed` uses tagged `attempt` and `serving_observation` payloads. Attempts cannot carry active inventory. Only a complete empty serving inventory establishes absence; unknown revisions remain unknown. A rollback request is an attempt until newer authoritative serving evidence confirms the active set.
-- Analyzer requests identify an immutable source, controlled service root, explicit resolution inputs/resource limits, and a no-network/no-side-effect execution policy. Analyzer results reuse the canonical endpoint, schema, evidence, dependency, coverage, and diagnostic shapes.
+- Omitted `inference` and `logs` config sections mean disabled. Enabling either requires an explicit adapter/provider and a structured allowlisted `secret_ref` (`env` variable name or `vault` path/field locator); literal credential fields and untagged secret strings are rejected. An environment's intended branch must be in its service's intended branch set.
+- `deployment.changed` uses tagged `attempt` and `serving_observation` payloads. Attempts cannot carry active inventory. Envelope and payload environments must agree when both are present, and an authoritative inventory maps each artifact once. Only a complete empty serving inventory establishes absence; unknown revisions remain unknown. A rollback request is an attempt until newer authoritative serving evidence confirms the active set.
+- Analyzer requests identify a 12–128 hexadecimal immutable revision, normalized project-relative service/changed/resolution paths, explicit resolution inputs/resource limits, and a no-network/no-side-effect execution policy. External classpaths require a tagged Maven coordinate plus digest. Failed and partial results require incomplete coverage with affected diagnostics. Analyzer results reuse the canonical endpoint, schema, evidence, dependency, coverage, and diagnostic shapes.
 
 ## D02 normalization map
 
@@ -68,4 +69,4 @@ The Spring contract test performs this representative mapping directly from the 
 
 ## Deliberate limits
 
-This package defines and validates wire contracts. It does not extract source, persist catalog state, execute analyzers, resolve deployments, compile OpenAPI, publish artifacts, call models, or migrate stored versions. Schema support is a bounded JSON Schema-compatible IR subset; unsupported keywords require a versioned contract change.
+This package defines and validates wire contracts. It does not extract source, persist catalog state, execute analyzers, resolve deployments, compile OpenAPI, publish artifacts, call models, or migrate stored versions. Schema support is a bounded JSON Schema-compatible IR subset. Component references use only `#/schemas/<component-id>`; the parser rewrites that namespace into an isolated `$defs` graph and compiles it with Ajv. External and other reference namespaces are rejected. Adding keywords or reference catalogs requires a versioned contract change.

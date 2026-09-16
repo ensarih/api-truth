@@ -89,6 +89,80 @@ describe("contract snapshot wire contract", () => {
     }
   });
 
+  test("rejects qualifying evidence that is unrelated to the eligible claim", () => {
+    const candidate = clone(validSnapshot);
+    candidate.export_eligibility[1] = {
+      eligibility_id: "eligibility-2",
+      claim_id: "claim-priority-business-rule",
+      status: "eligible",
+      scope: { service_id: "orders", snapshot_id: "snapshot-orders-rev-b", endpoint_ids: ["ep-create"] },
+      policy_version: "normative-v1",
+      evidence_fingerprint: "sha256:unrelated",
+      basis: { kind: "supported_runtime_validator", evidence_ids: ["ev-validator"] },
+    };
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.unrelated_evidence")).toBe(true);
+  });
+
+  test("rejects an eligibility basis that mismatches its evidence method", () => {
+    const candidate = clone(validSnapshot);
+    candidate.claims[1].evidence_ids.push("ev-validator");
+    candidate.export_eligibility[1] = {
+      eligibility_id: "eligibility-2",
+      claim_id: "claim-priority-business-rule",
+      status: "eligible",
+      scope: { service_id: "orders", snapshot_id: "snapshot-orders-rev-b", endpoint_ids: ["ep-create"] },
+      policy_version: "normative-v1",
+      evidence_fingerprint: "sha256:mismatch",
+      basis: { kind: "behavioral_verification", evidence_ids: ["ev-validator"] },
+    };
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.basis_mismatch")).toBe(true);
+  });
+
+  test("rejects eligibility scope that excludes the claim endpoint", () => {
+    const candidate = clone(validSnapshot);
+    candidate.export_eligibility[0].scope.endpoint_ids = ["ep-get"];
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.scope_mismatch")).toBe(true);
+  });
+
+  test("rejects eligible claims with unresolved contradictory claims", () => {
+    const candidate = clone(validSnapshot);
+    candidate.claims.push({
+      ...clone(candidate.claims[0]),
+      claim_id: "claim-priority-optional",
+      value: "optional",
+    });
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.conflicting_claims")).toBe(true);
+  });
+
+  test("requires qualifying evidence scope to cover the eligible claim subject and snapshot", () => {
+    const candidate = clone(validSnapshot);
+    candidate.evidence[1].scope.endpoint_id = "ep-get";
+    candidate.evidence[1].scope.snapshot_id = "snapshot-orders-rev-b";
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.scope_mismatch")).toBe(true);
+  });
+
+  test.each([
+    ["invalid regular expression", { type: "string", pattern: "[" }],
+    ["duplicate enum values", { type: "string", enum: ["a", "a"] }],
+    ["unregistered external reference", { $ref: "https://unregistered.invalid/schema" }],
+  ])("rejects an embedded schema with %s", (_name, schema) => {
+    const candidate = clone(validSnapshot);
+    candidate.schemas.Customer.schema = schema;
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.invalid_api_schema")).toBe(true);
+  });
+
   test("requires explicit affected diagnostics for incomplete coverage", () => {
     const candidate = clone(validSnapshot);
     candidate.coverage.diagnostic_ids = [];
@@ -105,5 +179,47 @@ describe("contract snapshot wire contract", () => {
     const candidate = clone(validSnapshot);
     candidate.claims[0].value = 1n;
     expect(parseContractSnapshot(candidate).ok).toBe(false);
+  });
+
+  test.each([
+    {
+      name: "review",
+      path: "/editorial_reviews",
+      mutate: (candidate: Record<string, any>) => candidate.editorial_reviews.push({
+        ...clone(candidate.editorial_reviews[0]), claim_id: "claim-priority-required",
+      }),
+    },
+    {
+      name: "eligibility",
+      path: "/export_eligibility",
+      mutate: (candidate: Record<string, any>) => candidate.export_eligibility.push({
+        ...clone(candidate.export_eligibility[1]), claim_id: "claim-priority-required",
+      }),
+    },
+  ])("rejects a duplicate $name ID", ({ path, mutate }) => {
+    const candidate = clone(validSnapshot);
+    mutate(candidate);
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues).toContainEqual(expect.objectContaining({ path, code: "semantic.duplicate_id" }));
+  });
+
+  test("rejects route identity collisions even when endpoint IDs differ", () => {
+    const candidate = clone(validSnapshot);
+    candidate.endpoints.push({ ...clone(candidate.endpoints[0]), endpoint_id: "ep-get-copy" });
+    expectInvalid(candidate, "semantic.route_identity_collision");
+  });
+
+  test("reports a dangling presence evidence reference at its actual field path", () => {
+    const candidate = clone(validSnapshot);
+    candidate.endpoints[0].parameters[0].presence.evidence_ids = ["missing-evidence"];
+    const result = parseContractSnapshot(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({
+        path: "/endpoints/0/parameters/0/presence/evidence_ids/0",
+        code: "semantic.dangling_reference",
+      }));
+    }
   });
 });

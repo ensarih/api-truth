@@ -108,6 +108,9 @@ const validateEventSemantics = (event: EventEnvelope): ValidationIssue[] => {
   const deploymentPayload = event.event_type === "deployment.changed"
     ? event.payload as Static<typeof DeploymentAttemptSchema> | Static<typeof ServingObservationSchema>
     : undefined;
+  if (deploymentPayload !== undefined && event.subjects.environment !== undefined && event.subjects.environment !== deploymentPayload.environment) {
+    issues.push(issue("/payload/environment", "semantic.environment_mismatch", "payload environment differs from the event subject"));
+  }
   if (deploymentPayload?.change_kind === "serving_observation") {
     const { completeness, serving_state: servingState } = deploymentPayload;
     if (servingState.status === "known" && servingState.inventory.length === 0 && completeness !== "complete") {
@@ -115,6 +118,19 @@ const validateEventSemantics = (event: EventEnvelope): ValidationIssue[] => {
     }
     if (servingState.status === "unknown" && completeness === "complete") {
       issues.push(issue("/payload/completeness", "semantic.inconsistent_completeness", "a complete observation cannot have unknown serving state"));
+    }
+    if (servingState.status === "known") {
+      const seenArtifacts = new Set<string>();
+      servingState.inventory.forEach((mapping, index) => {
+        if (seenArtifacts.has(mapping.artifact_id)) {
+          issues.push(issue(
+            `/payload/serving_state/inventory/${index}/artifact_id`,
+            "semantic.conflicting_artifact_mapping",
+            "an artifact may appear only once in an authoritative inventory",
+          ));
+        }
+        seenArtifacts.add(mapping.artifact_id);
+      });
     }
   }
   return issues;

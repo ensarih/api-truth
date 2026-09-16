@@ -2,7 +2,18 @@ import { type Static, Type } from "@sinclair/typebox";
 import { issue, parserFor, type ValidationIssue } from "./validation.js";
 import { ConfigVersionSchema } from "./versions.js";
 
-const SecretReferenceSchema = Type.Object({ secret_ref: Type.String({ minLength: 1 }) }, { additionalProperties: false });
+export const SecretReferenceSchema = Type.Object({
+  secret_ref: Type.Union([
+    Type.Object({
+      scheme: Type.Literal("env"),
+      locator: Type.String({ pattern: "^[A-Z][A-Z0-9_]{1,127}$" }),
+    }, { additionalProperties: false }),
+    Type.Object({
+      scheme: Type.Literal("vault"),
+      locator: Type.String({ pattern: "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+#[A-Za-z0-9_.-]+$" }),
+    }, { additionalProperties: false }),
+  ]),
+}, { additionalProperties: false });
 
 const InferenceConfigSchema = Type.Union([
   Type.Object({ enabled: Type.Literal(false) }, { additionalProperties: false }),
@@ -87,6 +98,13 @@ const validateConfigReferences = (config: InstallationConfig): ValidationIssue[]
         issues.push(issue(`/repositories/${repositoryIndex}/services/${serviceIndex}/environments`, "semantic.duplicate_id", "duplicate environment name"));
       }
       service.environments.forEach((environment, environmentIndex) => {
+        if (environment.intended_branch !== undefined && !service.intended_branches.includes(environment.intended_branch)) {
+          issues.push(issue(
+            `/repositories/${repositoryIndex}/services/${serviceIndex}/environments/${environmentIndex}/intended_branch`,
+            "semantic.intended_branch_mismatch",
+            "environment branch is not declared by the service",
+          ));
+        }
         if (!scopeIds.includes(environment.deployment_authority.access_scope_id)) {
           issues.push(issue(
             `/repositories/${repositoryIndex}/services/${serviceIndex}/environments/${environmentIndex}/deployment_authority/access_scope_id`,

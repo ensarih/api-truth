@@ -7,7 +7,7 @@ const source = {
   repository_id: "commerce",
   service_id: "orders",
   service_root: "services/orders",
-  immutable_revision: "rev-b",
+  immutable_revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   source_digest: "sha256:source-b",
   access_label: "orders-read",
 };
@@ -45,13 +45,13 @@ const analyzerResult = () => ({
   source,
   status: "partial",
   completed_at: snapshot.created_at,
-  coverage: snapshot.coverage,
-  evidence: snapshot.evidence,
-  schemas: snapshot.schemas,
-  endpoints: snapshot.endpoints,
-  claims: snapshot.claims,
-  dependencies: snapshot.dependencies,
-  diagnostics: snapshot.diagnostics,
+  coverage: structuredClone(snapshot.coverage),
+  evidence: structuredClone(snapshot.evidence),
+  schemas: structuredClone(snapshot.schemas),
+  endpoints: structuredClone(snapshot.endpoints),
+  claims: structuredClone(snapshot.claims),
+  dependencies: structuredClone(snapshot.dependencies),
+  diagnostics: structuredClone(snapshot.diagnostics),
   reproducibility_fingerprint: "sha256:analysis-inputs",
 });
 
@@ -65,6 +65,30 @@ describe("analyzer exchange", () => {
     candidate.source.branch = "main";
     candidate.execution_policy.network_access = true;
     expect(parseAnalyzerRequest(candidate).ok).toBe(false);
+  });
+
+  test("rejects path traversal and absolute project paths", () => {
+    const candidate = structuredClone(request) as Record<string, any>;
+    candidate.source.service_root = "../../outside";
+    candidate.resolution_inputs[0].path = "/etc";
+    candidate.changed_paths = ["../../../secret"];
+    expect(parseAnalyzerRequest(candidate).ok).toBe(false);
+  });
+
+  test("rejects a mutable branch name as the immutable revision", () => {
+    const candidate = structuredClone(request) as Record<string, any>;
+    candidate.source.immutable_revision = "main";
+    expect(parseAnalyzerRequest(candidate).ok).toBe(false);
+  });
+
+  test("accepts an explicitly tagged immutable Maven classpath locator", () => {
+    const candidate = structuredClone(request) as Record<string, any>;
+    candidate.resolution_inputs.push({
+      kind: "classpath",
+      locator: { scheme: "maven", coordinate: "org.example:orders-api:1.2.3" },
+      digest: "sha256:classpath",
+    });
+    expect(parseAnalyzerRequest(candidate)).toMatchObject({ ok: true });
   });
 
   test("accepts a partial result using the canonical endpoint/evidence schemas", () => {
@@ -85,5 +109,14 @@ describe("analyzer exchange", () => {
     const result = parseAnalyzerResult(candidate);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.dangling_reference")).toBe(true);
+  });
+
+  test("rejects a failed result that claims complete coverage", () => {
+    const candidate = analyzerResult();
+    candidate.status = "failed";
+    candidate.coverage = { status: "complete", analyzed_roots: ["src"], diagnostic_ids: [] };
+    const result = parseAnalyzerResult(candidate);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.issues.some((item) => item.code === "semantic.inconsistent_coverage")).toBe(true);
   });
 });

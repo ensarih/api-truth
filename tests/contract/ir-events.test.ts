@@ -88,6 +88,38 @@ describe("event envelope", () => {
     }), "semantic.incomplete_absence");
   });
 
+  test("rejects an observation whose envelope and payload environments conflict", () => {
+    const event = envelope("deployment.changed", {
+      change_kind: "serving_observation",
+      observation_id: "srv-conflict",
+      environment: "production",
+      source: { authority_id: "runtime-inventory", reference: "inventory-44", access_label: "ops-read" },
+      completeness: "complete",
+      effective_order: "44",
+      serving_state: { status: "known", inventory: [] },
+    });
+    (event.subjects as Record<string, unknown>).environment = "uat";
+    expectInvalid(event, "semantic.environment_mismatch");
+  });
+
+  test("rejects conflicting revisions for the same artifact in one authoritative inventory", () => {
+    expectInvalid(envelope("deployment.changed", {
+      change_kind: "serving_observation",
+      observation_id: "srv-conflict",
+      environment: "production",
+      source: { authority_id: "runtime-inventory", reference: "inventory-45", access_label: "ops-read" },
+      completeness: "complete",
+      effective_order: "45",
+      serving_state: {
+        status: "known",
+        inventory: [
+          { artifact_id: "artifact-a", revision: { state: "known", revision: "rev-a" } },
+          { artifact_id: "artifact-a", revision: { state: "known", revision: "rev-b" } },
+        ],
+      },
+    }), "semantic.conflicting_artifact_mapping");
+  });
+
   test("records a rollback request only as an attempt", () => {
     expect(parseEvent(envelope("deployment.changed", {
       change_kind: "attempt",
