@@ -75,6 +75,8 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:unit -- <file>` | **Available:** focus the unit project; missing selections fail |
 | `npm run test:watch` | **Available:** rerun relevant offline tests during development |
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
+| `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
+| `npm run extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | **Available:** emit a validated fixture `AnalyzerResult` as stdout JSON and diagnostics on stderr |
 | `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
 | `npm run test:env:up` | **Available:** start the pinned disposable PostgreSQL service and wait up to 60 seconds for health |
@@ -121,4 +123,4 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The D04a offline scaffold and D04b PostgreSQL boundary are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and application-level checks remain pending their phases.
+The D04a offline scaffold, D04b PostgreSQL boundary, and D05 baseline TypeScript/Express analyzer are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and later application-level checks remain pending their phases. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`.

@@ -35,7 +35,7 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development preparation is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, executable and semantically validated IR contracts, a pinned offline TypeScript/Vitest workspace, and an isolated PostgreSQL integration harness. Product extraction, catalog persistence, Java analysis, and application behavior are not implemented yet.
+Development is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, executable and semantically validated IR contracts, a baseline read-only TypeScript/Express analyzer, a pinned offline TypeScript/Vitest workspace, and an isolated PostgreSQL integration harness. Catalog persistence, Java analysis, and application behavior are not implemented yet.
 
 Start with:
 
@@ -44,6 +44,7 @@ Start with:
 - [Project plan](PROJECT%20PLAN.md)
 - [Phased roadmap](docs/ROADMAP.md)
 - [Testing and local validation](docs/TESTING.md)
+- [TypeScript/Express analyzer and support matrix](analyzers/typescript/README.md)
 
 ## Development direction
 

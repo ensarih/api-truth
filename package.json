@@ -13,6 +13,8 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:contract": "vitest run --project contract",
+    "test:extractor": "vitest run tests/unit/extractor.test.ts tests/contract/extractor-cli.test.ts",
+    "extract": "node scripts/extract.mjs",
     "test:env:up": "node scripts/test-environment.ts up",
     "test:env:ready": "node scripts/test-environment.ts ready",
     "test:env:down": "node scripts/test-environment.ts down",
