@@ -204,6 +204,7 @@ test("malformed source, conditional expressions and invalid statuses produce dia
   });
   const result = await adapter.analyze(request());
   expect(result.endpoints.some(e => e.application_path === "/guarded")).toBe(false);
+  expect(result.endpoints.find(e => e.application_path === "/bad-status")?.responses[0]?.status).toEqual({ kind: "unknown", reason: "Invalid explicit response status" });
   expect(result.diagnostics.map(d => d.code)).toEqual(expect.arrayContaining(["source_syntax_unsupported", "response_status_unknown", "routing_predicate_unsupported"]));
   expect(parseAnalyzerResult(result).ok).toBe(true);
 });
@@ -283,4 +284,8 @@ test("tracks separate literal response state and clears it across branches or dy
     expect(response.status.kind).toBe("unknown");
     expect(response.content).toEqual([]);
   }
+  for (const path of ["/branch", "/alias"]) expect(result.endpoints.find(endpoint => endpoint.application_path === path)!.responses[0]!.status)
+    .toEqual({ kind: "unknown", reason: "Response state depends on control flow or alias" });
+  expect(result.endpoints.find(endpoint => endpoint.application_path === "/reset")!.responses[0]!.status)
+    .toEqual({ kind: "unknown", reason: "Unsupported explicit response status" });
 });

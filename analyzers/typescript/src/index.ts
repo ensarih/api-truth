@@ -297,9 +297,9 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         if (call.expression.name.text === "status") {
           const argument = call.arguments[0];
           const code = argument && ts.isNumericLiteral(argument) ? Number(argument.text) : undefined;
-          state.status = !uncertain && code !== undefined && code >= 100 && code <= 599
-            ? { kind: "exact", code }
-            : { kind: "unknown", reason: code !== undefined ? "Invalid explicit response status" : "Unsupported explicit response status" };
+          if (uncertain) state.status = { kind: "unknown", reason: "Response state depends on control flow or alias" };
+          else if (code !== undefined && code >= 100 && code <= 599) state.status = { kind: "exact", code };
+          else state.status = { kind: "unknown", reason: code !== undefined ? "Invalid explicit response status" : "Unsupported explicit response status" };
         }
         if (call.expression.name.text === "type") state.media = uncertain ? undefined : literal(call.arguments[0]);
       }
