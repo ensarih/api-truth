@@ -4,7 +4,7 @@
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 
-Examples below define design intent. Executable schemas, transport interfaces, and migrations are Phase 0/1 implementation deliverables.
+Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). Transport interfaces and migrations remain Phase 1 deliverables.
 
 ## 1. Components
 

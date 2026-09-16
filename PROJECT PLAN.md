@@ -79,7 +79,7 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 |---|---|---|
 | D01 | **Complete:** record pilot constraints and architecture decisions | Support matrix, branch/environment examples, event/log field inventory |
 | D02 | **Complete:** create synthetic Node.js and small Java design fixtures | Expected routes, shared changes, event histories, unsupported cases |
-| D03 | Define executable IR, evidence, view, config, and event schemas | Valid/invalid fixtures; identity/version rules; separate editorial acceptance and verified export eligibility |
+| D03 | **Complete:** executable IR, evidence, view, config, event, and analyzer exchange schemas | Valid/invalid fixtures; identity/version rules; separate editorial acceptance and verified export eligibility |
 | D04 | **In progress:** offline workspace/test harness complete; Java boundary and isolated test DB remain | Reproducible build, pinned dependencies, focused/watch checks, isolated test DB setup, red/green harness verification |
 | D05 | Implement baseline extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
 | D06 | Implement catalog snapshots, branch pointers, and access scopes | Immutable round-trip; unauthorized reads denied |

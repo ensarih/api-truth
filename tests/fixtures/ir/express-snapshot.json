@@ -1,0 +1,189 @@
+{
+  "ir_version": "1.0.0",
+  "identity_version": "1.0.0",
+  "snapshot_id": "snapshot-orders-rev-b",
+  "service": {
+    "service_id": "orders",
+    "repository_id": "commerce",
+    "root": "services/orders",
+    "label": "Orders API"
+  },
+  "source": {
+    "repository_id": "commerce",
+    "immutable_revision": "rev-b",
+    "source_digest": "sha256:source-b"
+  },
+  "analyzer": {
+    "analyzer_id": "typescript-express",
+    "analyzer_version": "1.2.0"
+  },
+  "config": {
+    "config_version": "1.0.0",
+    "config_fingerprint": "sha256:config-a"
+  },
+  "created_at": "2026-09-16T06:00:00Z",
+  "coverage": {
+    "status": "incomplete",
+    "analyzed_roots": ["src"],
+    "unresolved_roots": ["src/legacy"],
+    "reason": "computed route expressions remain",
+    "diagnostic_ids": ["diag-computed-route"]
+  },
+  "evidence": [
+    {
+      "evidence_id": "ev-type",
+      "source": { "kind": "source_code", "source_id": "commerce" },
+      "source_version": "rev-b",
+      "location": { "path": "src/types.ts", "symbol": "CreateOrderBody" },
+      "method": "type_declaration",
+      "scope": { "service_id": "orders", "snapshot_id": "snapshot-orders-rev-b" },
+      "limitations": ["declaration does not establish runtime presence"],
+      "access_label": "orders-read"
+    },
+    {
+      "evidence_id": "ev-validator",
+      "source": { "kind": "source_code", "source_id": "commerce" },
+      "source_version": "rev-b",
+      "location": { "path": "src/validation.ts", "symbol": "validateOrder" },
+      "method": "runtime_validator",
+      "scope": { "service_id": "orders", "snapshot_id": "snapshot-orders-rev-b", "endpoint_id": "ep-create" },
+      "limitations": [],
+      "access_label": "orders-read"
+    },
+    {
+      "evidence_id": "ev-inference",
+      "source": { "kind": "semantic_analysis", "source_id": "analysis-7" },
+      "source_version": "prompt-v2",
+      "location": { "pointer": "/claims/1" },
+      "method": "inference",
+      "scope": { "service_id": "orders", "snapshot_id": "snapshot-orders-rev-b", "endpoint_id": "ep-create" },
+      "limitations": ["requires owner verification"],
+      "access_label": "orders-read"
+    }
+  ],
+  "schemas": {
+    "CreateOrder": {
+      "schema_id": "CreateOrder",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "customer": { "$ref": "#/schemas/Customer" },
+          "items": { "type": "array", "items": { "$ref": "#/schemas/LineItem" } },
+          "priority": { "oneOf": [{ "type": "string", "enum": ["standard", "expedited"] }, { "type": "null" }] }
+        },
+        "required": ["customer", "items"]
+      },
+      "evidence_ids": ["ev-type", "ev-validator"]
+    },
+    "Customer": {
+      "schema_id": "Customer",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "address": { "type": "object", "properties": { "city": { "type": "string" } }, "required": ["city"] }
+        },
+        "required": ["id"]
+      },
+      "evidence_ids": ["ev-type"]
+    },
+    "LineItem": {
+      "schema_id": "LineItem",
+      "schema": {
+        "type": "object",
+        "properties": { "sku": { "type": "string" }, "quantity": { "type": "integer", "minimum": 1 } },
+        "required": ["sku"]
+      },
+      "evidence_ids": ["ev-type"]
+    }
+  },
+  "endpoints": [
+    {
+      "endpoint_id": "ep-get",
+      "identity": {
+        "identity_version": "1.0.0",
+        "route_key": "1.0.0|orders|GET|/api/orders/{}|{\"headers\":[],\"consumes\":[],\"produces\":[],\"query\":[]}",
+        "service_id": "orders",
+        "method": "GET",
+        "normalized_path_shape": "/api/orders/{}",
+        "selectors": {}
+      },
+      "application_path": "/api/orders/:orderId",
+      "parameters": [
+        {
+          "name": "orderId",
+          "in": "path",
+          "presence": { "state": "required", "evidence_ids": ["ev-type"] },
+          "schema": { "type": "string" },
+          "serialization": { "style": "simple", "explode": false }
+        },
+        {
+          "name": "includeItems",
+          "in": "query",
+          "presence": { "state": "unknown", "evidence_ids": ["ev-type"] },
+          "schema": { "type": "boolean" },
+          "serialization": { "style": "form", "explode": true }
+        }
+      ],
+      "request_bodies": [],
+      "responses": [
+        { "status": { "kind": "exact", "code": 200 }, "content": [{ "media_type": "application/json", "schema": { "$ref": "#/schemas/Customer" }, "serialization": { "format": "json" } }] }
+      ],
+      "security": { "alternatives": [{ "requirements": [{ "scheme": "apiToken", "scopes": [] }] }] },
+      "evidence_ids": ["ev-type"]
+    },
+    {
+      "endpoint_id": "ep-create",
+      "identity": {
+        "identity_version": "1.0.0",
+        "route_key": "1.0.0|orders|POST|/api/orders|{\"headers\":[],\"consumes\":[\"application/json\"],\"produces\":[],\"query\":[]}",
+        "service_id": "orders",
+        "method": "POST",
+        "normalized_path_shape": "/api/orders",
+        "selectors": { "consumes": ["application/json"] }
+      },
+      "application_path": "/api/orders",
+      "parameters": [],
+      "request_bodies": [
+        { "media_type": "application/json", "schema": { "$ref": "#/schemas/CreateOrder" }, "serialization": { "format": "json" }, "presence": { "state": "required", "evidence_ids": ["ev-validator"] } }
+      ],
+      "responses": [
+        { "status": { "kind": "exact", "code": 201 }, "content": [{ "media_type": "application/json", "schema": { "$ref": "#/schemas/Customer" }, "serialization": { "format": "json" } }] }
+      ],
+      "security": { "alternatives": [{ "requirements": [{ "scheme": "apiToken", "scopes": [] }, { "scheme": "tenant", "scopes": ["orders:write"] }] }] },
+      "evidence_ids": ["ev-type", "ev-validator"]
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "claim-priority-required",
+      "subject": { "service_id": "orders", "endpoint_id": "ep-create", "schema_pointer": "/properties/priority" },
+      "predicate": "field_presence",
+      "value": "required",
+      "verification": "declared",
+      "evidence_ids": ["ev-validator"]
+    },
+    {
+      "claim_id": "claim-priority-business-rule",
+      "subject": { "service_id": "orders", "endpoint_id": "ep-create", "schema_pointer": "/properties/priority" },
+      "predicate": "condition",
+      "value": "priority is required for selected accounts",
+      "verification": "inferred",
+      "condition": { "kind": "business_expression", "expression": "account.tier == managed", "scope": "request.account", "affected_schema_paths": ["/properties/priority"] },
+      "evidence_ids": ["ev-inference"]
+    }
+  ],
+  "editorial_reviews": [
+    { "review_id": "review-7", "claim_id": "claim-priority-business-rule", "state": "accepted", "reviewer_id": "orders-owner", "reviewed_at": "2026-09-16T07:00:00Z", "explanation": "Useful owner-approved guidance pending verification" }
+  ],
+  "export_eligibility": [
+    { "eligibility_id": "eligibility-1", "claim_id": "claim-priority-required", "status": "eligible", "scope": { "service_id": "orders", "snapshot_id": "snapshot-orders-rev-b", "endpoint_ids": ["ep-create"] }, "policy_version": "normative-v1", "evidence_fingerprint": "sha256:ev-validator", "basis": { "kind": "supported_runtime_validator", "evidence_ids": ["ev-validator"] } },
+    { "eligibility_id": "eligibility-2", "claim_id": "claim-priority-business-rule", "status": "ineligible", "scope": { "service_id": "orders", "snapshot_id": "snapshot-orders-rev-b", "endpoint_ids": ["ep-create"] }, "policy_version": "normative-v1", "evidence_fingerprint": "sha256:ev-inference", "reason": "editorial acceptance and inference are not normative verification" }
+  ],
+  "dependencies": [
+    { "from_endpoint_id": "ep-create", "to": { "kind": "schema", "id": "CreateOrder" }, "evidence_ids": ["ev-type"] }
+  ],
+  "diagnostics": [
+    { "diagnostic_id": "diag-computed-route", "code": "computed_route_path_unresolved", "severity": "warning", "message": "A route expression could not be resolved", "affected_endpoint_ids": [], "evidence_ids": ["ev-type"] }
+  ]
+}
