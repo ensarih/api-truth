@@ -1,7 +1,7 @@
 # API Truth — Implementation Plan
 
-**Status:** development preparation; no application implementation exists yet.  
-**Updated:** 2026-09-15  
+**Status:** development preparation; offline harness established, no application implementation exists yet.
+**Updated:** 2026-09-16
 **Working name:** API Truth (`api-truth`), pending public naming checks.  
 **License:** Apache-2.0 proposed, pending selection before publication.
 
@@ -73,14 +73,14 @@ Pin runtime/library versions and support ranges when creating the code skeleton.
 
 ## 6. First development backlog
 
-All tasks are unstarted. Split into smaller reviewable pull requests where needed.
+Task status is shown inline. Split remaining work into smaller reviewable pull requests where needed.
 
 | ID | Task | Completion evidence |
 |---|---|---|
-| D01 | Record pilot constraints and architecture decisions | Support matrix, branch/environment examples, event/log field inventory |
-| D02 | Create synthetic Node.js and small Java design fixtures | Expected routes, shared changes, event histories, unsupported cases |
+| D01 | **Complete:** record pilot constraints and architecture decisions | Support matrix, branch/environment examples, event/log field inventory |
+| D02 | **Complete:** create synthetic Node.js and small Java design fixtures | Expected routes, shared changes, event histories, unsupported cases |
 | D03 | Define executable IR, evidence, view, config, and event schemas | Valid/invalid fixtures; identity/version rules; separate editorial acceptance and verified export eligibility |
-| D04 | Scaffold workspace, local test harness, and Java adapter boundary | Reproducible build, pinned dependencies, focused/watch checks, isolated test DB setup, red/green harness verification |
+| D04 | **In progress:** offline workspace/test harness complete; Java boundary and isolated test DB remain | Reproducible build, pinned dependencies, focused/watch checks, isolated test DB setup, red/green harness verification |
 | D05 | Implement baseline extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
 | D06 | Implement catalog snapshots, branch pointers, and access scopes | Immutable round-trip; unauthorized reads denied |
 | D07 | Add dependency-aware updates and structured differences | Shared changes reach every affected API; fallback demonstrated |

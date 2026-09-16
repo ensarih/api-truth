@@ -35,7 +35,7 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-The repository currently contains the product specification, architecture, phased roadmap, and local TDD/testing plan. Implementation has not started yet.
+Development preparation is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, and a pinned offline TypeScript/Vitest workspace. The current unit smoke and fixture contract checks validate runner readiness and D02 fixture integrity only; product extraction, executable IR schemas, persistence, Java analysis, and application behavior are not implemented.
 
 Start with:
 
@@ -47,7 +47,7 @@ Start with:
 
 ## Development direction
 
-Functional development will follow test-driven development. Local checks will use deterministic fixtures, database isolation, mocked provider transports, and contract assertions. OpenAI, Gemini, and Claude are application providers for semantic API understanding; they are not test runners or test judges.
+Functional development follows test-driven development. The currently available local checks use deterministic fixtures and contract assertions without Docker, databases, network access, or provider credentials. Future database and provider-boundary checks will add their prerequisites alongside real implementations. OpenAI, Gemini, and Claude are application providers for semantic API understanding; they are not test runners or test judges.
 
 The first implementation will target a local developer workflow and Docker-backed test services, then add CI/CD adapters, runtime evidence connectors, the portal, and the read-only MCP server.
 
@@ -62,4 +62,3 @@ The first implementation will target a local developer workflow and Docker-backe
 ## License
 
 Apache-2.0 is the planned license. A `LICENSE` file will be added before the first public release.
-

@@ -1,7 +1,7 @@
 # Testing and Local Validation
 
-**Status:** proposed environment design; the harness and containers have not been created.  
-**Date:** 2026-09-15  
+**Status:** offline TypeScript harness implemented; database, Java, integration, and end-to-end harnesses pending.
+**Date:** 2026-09-16
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
 ## 1. Purpose
@@ -18,13 +18,13 @@ The harness must be in place before functional implementation. As each component
 | Everything in containers | More uniform tooling, but Docker is required even for a single function test and edit/watch setup is heavier |
 | Native tests + locally installed PostgreSQL | Avoids Docker, but requires careful local database setup and stronger protection against touching unrelated data |
 
-Choose the first approach for the proposed implementation. The TypeScript runtime and dependencies will be pinned during setup. Use Vitest projects to separate suites; Java-native tests join through the Java build wrapper when the Java analyzer is implemented. [Vitest test projects](https://vitest.dev/guide/projects).
+Choose the first approach for implementation. The offline workspace pins Node.js 24.6.0, npm 11.5.1, TypeScript 5.9.3, Vitest 5.0.1, and the matching V8 coverage provider 5.0.1. Vitest projects separate the current unit and contract suites; Java-native tests join through the Java build wrapper when the Java analyzer is implemented. [Vitest test projects](https://vitest.dev/guide/projects).
 
 ### Machine observations
 
-At design time, this machine has Node.js 24.6.0, npm 11.5.1, and a Docker CLI. The Docker engine was not reachable during the authorized readiness check. These are observations, not a supported-version policy. Confirm runtime compatibility during setup and start the engine before running container-backed checks.
+The initial workspace was validated on Node.js 24.6.0 and npm 11.5.1. TypeScript 5.9.3 supports Node 14.17 and later; Vitest 5.0.1 declares support for Node 24. The Docker engine was not reachable during the earlier readiness check; D04a does not require or start it.
 
-No database, application server, API keys, or test harness has been installed or started by this design document.
+No database, application server, API key, integration environment, or Java analyzer is required by the implemented offline checks.
 
 ## 3. Suite boundaries
 
@@ -65,22 +65,18 @@ The test environment is local to this project and has no relationship to the ent
 
 ## 6. Intended developer commands
 
-These names are proposed interfaces, not runnable commands yet:
+The commands marked available are runnable now:
 
 | Command | Intended behavior |
 |---|---|
-| `npm test` | Offline unit and contract suites; no external API calls |
-| `npm run test:unit -- <file>` | Focus on a function/module's behavior |
-| `npm run test:watch` | Rerun relevant offline tests during development |
-| `npm run test:contract` | Validate shared formats and adapter behavior |
-| `npm run test:integration` | Run real-dependency tests, failing clearly if setup is unavailable |
-| `npm run test:e2e` | Run implemented local lifecycle scenarios |
-| `npm run test:coverage` | Report coverage for implemented source behavior |
-| `npm run test:env:up` | Start only this project's isolated test dependencies |
-| `npm run test:env:down` | Stop only this project's test dependencies |
-| `npm run check` | Type checks and available deterministic suites used by CI |
+| `npm test` | **Available:** offline unit and contract suites; no external API calls |
+| `npm run test:unit -- <file>` | **Available:** focus the unit project; missing selections fail |
+| `npm run test:watch` | **Available:** rerun relevant offline tests during development |
+| `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
+| `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
+| `npm run check` | **Available:** strict type checks and all offline suites used by CI |
 
-Introduce suite commands only when they exist; an advertised suite with no tests must fail clearly. The first scaffold provides unit/contract execution and database readiness checks. Application integration/end-to-end commands are added alongside actual product components, rather than populated with empty success tests.
+Introduce suite commands only when they exist; an advertised suite with no tests must fail clearly. The first D04a scaffold provides unit/contract execution only. Database readiness arrives in D04b. Integration, end-to-end, environment-control, and Java commands are added alongside actual components rather than populated with empty success tests.
 
 ## 7. Semantic provider contract tests
 
@@ -115,8 +111,8 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document the supported runtime and exact dependency versions; install reproducibly through a lockfile.
 - Run a focused sample through the test runner and demonstrate that an intentional failing assertion returns nonzero, then verify the passing run. This checks the harness, not unimplemented product functions.
 - Confirm test selection and watch configuration; default tests make no external requests and require no provider keys.
-- Start the isolated database, verify readiness/connectivity and test isolation, and stop it without touching unrelated resources. If Docker remains unavailable, report this gate as incomplete.
+- In D04b, start the isolated database, verify readiness/connectivity and test isolation, and stop it without touching unrelated resources. If Docker remains unavailable, report that gate as incomplete.
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-This design awaits approval before scaffolding under the Superpowers architectural workflow. Completing the documentation does not mean the local environment is running.
+The offline D04a scaffold is implemented. Database and Java portions remain pending D04b; application-level checks remain pending their implementations.

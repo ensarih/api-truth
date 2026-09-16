@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node", "vitest/globals"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "vitest.config.ts",
+    "tests/**/*.ts",
+    "packages/**/*.ts",
+    "apps/**/*.ts",
+    "analyzers/**/*.ts",
+    "connectors/**/*.ts"
+  ]
+}
