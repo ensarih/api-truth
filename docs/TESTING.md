@@ -1,6 +1,6 @@
 # Testing and Local Validation
 
-**Status:** offline TypeScript harness implemented; database, Java, integration, and end-to-end harnesses pending.
+**Status:** offline TypeScript and isolated PostgreSQL harnesses implemented; Java implementation and end-to-end harness pending.
 **Date:** 2026-09-16
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
@@ -22,9 +22,11 @@ Choose the first approach for implementation. The offline workspace pins Node.js
 
 ### Machine observations
 
-The initial workspace was validated on Node.js 24.6.0 and npm 11.5.1. TypeScript 5.9.3 supports Node 14.17 and later; Vitest 5.0.1 declares support for Node 24. The Docker engine was not reachable during the earlier readiness check; D04a does not require or start it.
+The workspace was validated on Node.js 24.6.0, npm 11.5.1, Docker Engine 29.3.1, and Docker Compose 5.1.1. The D04b PostgreSQL image is pinned by tag and multi-architecture digest to `postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af`.
 
-No database, application server, API key, integration environment, or Java analyzer is required by the implemented offline checks.
+The machine's discovered system Java executable is an incompatible legacy binary (`Bad CPU type in executable`). Phase 1 checks do not invoke Java. The Phase 2 Java analyzer will use a pinned JDK and build wrapper and must pass the shared analyzer protocol conformance suite.
+
+No database, application server, API key, integration environment, or Java analyzer is required by the offline `npm run check` command.
 
 ## 3. Suite boundaries
 
@@ -32,7 +34,7 @@ No database, application server, API key, integration environment, or Java analy
 |---|---|---|
 | Unit | Function outputs, failure behavior, state transitions, pure schema/identity logic | Native runtime; no network or Docker |
 | Contract | IR/event schemas, plugin output, actual semantic-adapter request/response normalization | Synthetic fixtures and mocked provider transports; no API keys |
-| Integration | Persistence, jobs, migrations, publication, access filtering | Isolated local PostgreSQL plus real implemented components |
+| Integration | Current PostgreSQL connectivity, namespace isolation, and rollback; later persistence, jobs, migrations, publication, and access filtering | Isolated local PostgreSQL plus real implemented components |
 | End-to-end | CLI/event → catalog → OpenAPI/portal/MCP lifecycle | Local application and fixture services, as implemented |
 | Java | Java extractor behavior and common plugin conformance | Pinned JDK/build wrapper when the Java adapter is added |
 
@@ -65,7 +67,7 @@ The test environment is local to this project and has no relationship to the ent
 
 ## 6. Intended developer commands
 
-The commands marked available are runnable now:
+The commands marked available are runnable now. Environment commands always target the fixed `api-truth-test` Compose project and `127.0.0.1:55432`; they do not accept a database URL or reset target.
 
 | Command | Intended behavior |
 |---|---|
@@ -75,8 +77,12 @@ The commands marked available are runnable now:
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
 | `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
+| `npm run test:env:up` | **Available:** start the pinned disposable PostgreSQL service and wait up to 60 seconds for health |
+| `npm run test:env:ready` | **Available:** verify Docker, `pg_isready`, and a real SQL query |
+| `npm run test:integration` | **Available:** require the running fixed database, then run real isolation and rollback tests with up to two workers |
+| `npm run test:env:down` | **Available:** remove only the fixed Compose project's containers, network, and volumes |
 
-Introduce suite commands only when they exist; an advertised suite with no tests must fail clearly. The first D04a scaffold provides unit/contract execution only. Database readiness arrives in D04b. Integration, end-to-end, environment-control, and Java commands are added alongside actual components rather than populated with empty success tests.
+The integration suite fails nonzero with a distinct dependency message when Docker or PostgreSQL is unavailable. Its schemas use a random `api_truth_test_` prefix per run/worker and its `finally` cleanup drops only those schemas. The Compose service publishes only on loopback, stores PostgreSQL data on tmpfs, and uses synthetic test-only credentials. End-to-end and Java commands will be added with their implementations rather than as empty successful placeholders.
 
 ## 7. Semantic provider contract tests
 
@@ -111,8 +117,8 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document the supported runtime and exact dependency versions; install reproducibly through a lockfile.
 - Run a focused sample through the test runner and demonstrate that an intentional failing assertion returns nonzero, then verify the passing run. This checks the harness, not unimplemented product functions.
 - Confirm test selection and watch configuration; default tests make no external requests and require no provider keys.
-- In D04b, start the isolated database, verify readiness/connectivity and test isolation, and stop it without touching unrelated resources. If Docker remains unavailable, report that gate as incomplete.
+- Start the isolated database, verify readiness/connectivity and test isolation, and stop it without touching unrelated resources.
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The offline D04a scaffold is implemented. Database and Java portions remain pending D04b; application-level checks remain pending their implementations.
+The D04a offline scaffold and D04b PostgreSQL boundary are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and application-level checks remain pending their phases.

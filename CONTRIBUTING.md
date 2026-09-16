@@ -43,6 +43,24 @@ JSON, evidence source paths, route expectations, and lifecycle consistency.
 They do not prove endpoint extraction, schema behavior, database integration,
 Java analyzer behavior, or application lifecycles.
 
-Integration, end-to-end, and Java suite commands will be added with their real
-implementations and prerequisites. There are no empty successful placeholders
-for those suites.
+## PostgreSQL integration checks
+
+Docker-backed checks use only the fixed `api-truth-test` Compose project. The
+database listens on `127.0.0.1:55432`, uses synthetic credentials, and stores its
+data in a disposable tmpfs. Start, test, and stop it with:
+
+```sh
+npm run test:env:up
+npm run test:env:ready
+npm run test:integration
+npm run test:env:down
+```
+
+`test:integration` deliberately fails when the service is stopped. The teardown
+command removes only resources belonging to the fixed test project; do not replace
+it with broad Docker prune commands. Integration tests create random schemas under
+the `api_truth_test_` prefix and remove only the schemas they created.
+
+The Java analyzer and end-to-end suite commands will be added with their real
+implementations and prerequisites. The analyzer process boundary is documented in
+`analyzers/PLUGIN_API.md`; Phase 1 does not require the system JDK.

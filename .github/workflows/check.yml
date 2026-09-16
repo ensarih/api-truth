@@ -23,3 +23,21 @@ jobs:
           test "$(npm --version)" = "11.5.1"
       - run: npm ci
       - run: npm run check
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Start isolated PostgreSQL
+        run: npm run test:env:up
+      - name: Run PostgreSQL integration tests
+        run: npm run test:integration
+      - name: Stop isolated PostgreSQL
+        if: always()
+        run: npm run test:env:down

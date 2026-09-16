@@ -35,7 +35,7 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development preparation is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, and a pinned offline TypeScript/Vitest workspace. The current unit smoke and fixture contract checks validate runner readiness and D02 fixture integrity only; product extraction, executable IR schemas, persistence, Java analysis, and application behavior are not implemented.
+Development preparation is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, executable and semantically validated IR contracts, a pinned offline TypeScript/Vitest workspace, and an isolated PostgreSQL integration harness. Product extraction, catalog persistence, Java analysis, and application behavior are not implemented yet.
 
 Start with:
 
@@ -47,7 +47,7 @@ Start with:
 
 ## Development direction
 
-Functional development follows test-driven development. The currently available local checks use deterministic fixtures and contract assertions without Docker, databases, network access, or provider credentials. Future database and provider-boundary checks will add their prerequisites alongside real implementations. OpenAI, Gemini, and Claude are application providers for semantic API understanding; they are not test runners or test judges.
+Functional development follows test-driven development. `npm run check` uses deterministic fixtures and contract assertions without Docker, databases, network access, or provider credentials. The separate PostgreSQL suite uses a pinned, loopback-only, disposable Compose service. OpenAI, Gemini, and Claude are application providers for semantic API understanding; they are not test runners or test judges.
 
 The first implementation will target a local developer workflow and Docker-backed test services, then add CI/CD adapters, runtime evidence connectors, the portal, and the read-only MCP server.
 

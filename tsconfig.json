@@ -8,11 +8,14 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true
   },
   "include": [
     "vitest.config.ts",
+    "vitest.integration.config.ts",
+    "scripts/**/*.ts",
     "tests/**/*.ts",
     "packages/**/*.ts",
     "apps/**/*.ts",
