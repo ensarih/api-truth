@@ -76,7 +76,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:watch` | **Available:** rerun relevant offline tests during development |
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
-| `npm run extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | **Available:** emit a validated fixture `AnalyzerResult` as stdout JSON and diagnostics on stderr |
+| `npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | **Available:** emit a validated fixture `AnalyzerResult` as stdout JSON and diagnostics on stderr |
 | `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
 | `npm run test:env:up` | **Available:** start the pinned disposable PostgreSQL service and wait up to 60 seconds for health |

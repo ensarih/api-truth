@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -26,6 +27,9 @@ function request(): AnalyzerRequest {
     execution_policy: { network_access: false, side_effects: "none" },
   };
 }
+const sourceDigest = (files: Record<string, string>) => `sha256:${createHash("sha256").update(
+  Object.entries(files).sort(([left], [right]) => left.localeCompare(right)).map(([path, text]) => `${path}\0${text}`).join("\0"),
+).digest("hex")}`;
 
 test("invalid versions and out-of-service paths fail before filesystem access without leaking inputs", async () => {
   const adapter = createAnalyzer({ projectRoot: "/missing/private-secret" });
@@ -208,4 +212,75 @@ test("claimed SHA-256 digest mismatch fails instead of mislabeling a changed sou
   const { adapter } = await service({ "app.ts": 'import express from "express"; const app=express();' });
   const req = request(); req.source.source_digest = `sha256:${"0".repeat(64)}`;
   await expect(adapter.analyze(req)).rejects.toThrow("Source digest mismatch");
+});
+
+test("public API normalizes placeholder digests and verifies canonical SHA-256 claims", async () => {
+  const files = { "app.ts": 'import express from "express"; const app=express(); app.get("/x",(req,res)=>res.status(200).json({ok:true}));' };
+  const { adapter } = await service(files);
+  const expectedDigest = sourceDigest(files);
+
+  const placeholder = request();
+  placeholder.source.source_digest = "pending";
+  placeholder.resolution_inputs[0]!.digest = "malformed-placeholder";
+  const normalized = await adapter.analyze(placeholder);
+  expect(normalized.source.source_digest).toBe(expectedDigest);
+
+  const correct = request();
+  correct.source.source_digest = expectedDigest;
+  correct.resolution_inputs[0]!.digest = expectedDigest;
+  const verified = await adapter.analyze(correct);
+  expect(verified.source.source_digest).toBe(expectedDigest);
+  expect(verified.result_id).toBe(normalized.result_id);
+  expect(verified.snapshot_id).toBe(normalized.snapshot_id);
+  expect(verified.reproducibility_fingerprint).toBe(normalized.reproducibility_fingerprint);
+
+  for (const target of ["source", "resolution"] as const) {
+    const mismatch = request();
+    if (target === "source") mismatch.source.source_digest = `sha256:${"0".repeat(64)}`;
+    else mismatch.resolution_inputs[0]!.digest = `sha256:${"0".repeat(64)}`;
+    await expect(adapter.analyze(mismatch)).rejects.toThrow("Source digest mismatch");
+  }
+});
+
+test("result identities are stable for equal effective inputs and distinct for changed output mode", async () => {
+  const { adapter } = await service({ "app.ts": 'import express from "express"; const app=express(); app.get("/x",(req,res)=>res.status(204).end());' });
+  const baseline = request();
+  const baselineAgain = request();
+  const incremental = request(); incremental.extraction_mode = "incremental";
+  const fallback = request(); fallback.extraction_mode = "fallback_full_service";
+  const [first, second, changed, equivalentFallback] = await Promise.all([
+    adapter.analyze(baseline), adapter.analyze(baselineAgain), adapter.analyze(incremental), adapter.analyze(fallback),
+  ]);
+  expect([second.result_id, second.snapshot_id, second.reproducibility_fingerprint]).toEqual([first.result_id, first.snapshot_id, first.reproducibility_fingerprint]);
+  expect([changed.result_id, changed.snapshot_id, changed.reproducibility_fingerprint]).not.toEqual([first.result_id, first.snapshot_id, first.reproducibility_fingerprint]);
+  expect([equivalentFallback.result_id, equivalentFallback.snapshot_id, equivalentFallback.reproducibility_fingerprint]).toEqual([changed.result_id, changed.snapshot_id, changed.reproducibility_fingerprint]);
+});
+
+test("discovers static app and imported mounted router factories but rejects conditional factory routes", async () => {
+  const { adapter } = await service({
+    "routes.ts": `import {Router} from "express"; export function makeRouter() { const router=Router();
+      router.get("/item",(req,res)=>res.status(200).json({ok:true}));
+      if (process.env.EXTRA) router.get("/conditional",(req,res)=>res.json({})); return router; }`,
+    "app.ts": `import express from "express"; import {makeRouter as inventoryRouter} from "./routes";
+      export function makeApp() { const app=express(); app.use("/v3", inventoryRouter()); return app; }`,
+  });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/v3/item"]);
+  expect(result.diagnostics.map(diagnostic => diagnostic.code)).toContain("routing_predicate_unsupported");
+});
+
+test("tracks separate literal response state and clears it across branches or dynamic resets", async () => {
+  const { adapter } = await service({ "app.ts": `import express from "express"; const app=express();
+    app.get("/separate",(req,res)=>{ res.status(201); res.type("application/json"); res.json({ok:true}); });
+    app.get("/branch",(req,res)=>{ res.status(202); if (req.flag) res.status(203); res.json({ok:true}); });
+    app.get("/reset",(req,res)=>{ res.status(201); res.status(req.code); res.type("application/json"); res.type(req.media); res.json({ok:true}); });
+    app.get("/alias",(req,res)=>{ res.status(204); const out=res; out.status(205); out.type("application/json"); res.json({ok:true}); });` });
+  const result = await adapter.analyze(request());
+  const separate = result.endpoints.find(endpoint => endpoint.application_path === "/separate")!;
+  expect(separate.responses).toContainEqual(expect.objectContaining({ status: { kind: "exact", code: 201 }, content: [expect.objectContaining({ media_type: "application/json" })] }));
+  for (const path of ["/branch", "/reset", "/alias"]) {
+    const response = result.endpoints.find(endpoint => endpoint.application_path === path)!.responses[0]!;
+    expect(response.status.kind).toBe("unknown");
+    expect(response.content).toEqual([]);
+  }
 });

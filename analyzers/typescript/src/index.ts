@@ -13,7 +13,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
   return { async analyze(input: unknown): Promise<AnalyzerResult> {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
-    const request = parsed.value;
+    let request = parsed.value;
     if (request.analyzer.analyzer_id !== ANALYZER.analyzer_id || request.analyzer.analyzer_version !== ANALYZER.analyzer_version) throw new Error("Unsupported analyzer version");
     const selectedRoot = resolve(options.projectRoot, request.source.service_root);
     if (request.resolution_inputs.some(item => item.kind === "classpath" || !inside(selectedRoot, resolve(options.projectRoot, item.path)))
@@ -26,6 +26,11 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const claimedDigests = [request.source.source_digest, ...request.resolution_inputs.map(input => input.digest)]
       .filter(digest => /^sha256:[a-f0-9]{64}$/i.test(digest));
     if (claimedDigests.some(digest => digest.toLowerCase() !== actualDigest)) throw new Error("Source digest mismatch");
+    request = {
+      ...request,
+      source: { ...request.source, source_digest: actualDigest },
+      resolution_inputs: request.resolution_inputs.map(input => ({ ...input, digest: actualDigest })),
+    };
     const result = extract(files, root, request, budget);
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
@@ -39,7 +44,14 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 
 function extract(files: Map<string, string>, root: string, request: AnalyzerRequest, budget: () => void): AnalyzerResult {
   const sourceDigest = digestSources(files, root);
-  const fingerprint = hash(JSON.stringify({ sourceDigest, analyzer: ANALYZER, compiler: ts.version, config: "1.0.0", source: request.source, inputs: request.resolution_inputs }));
+  const effectiveExtractionMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
+  const fingerprint = hash(JSON.stringify({
+    request: { ...request, extraction_mode: effectiveExtractionMode },
+    sourceDigest,
+    analyzer: ANALYZER,
+    compiler: ts.version,
+    config: "1.0.0",
+  }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -111,12 +123,28 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       if (sym && kind) receivers.set(sym, { node, app: kind === "app", routes: [], uses: [] });
     }
   });
+  const enclosingFunction = (node: ts.Node): ts.FunctionLikeDeclaration | undefined => {
+    for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
+      if (ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent) || ts.isArrowFunction(parent) || ts.isMethodDeclaration(parent)) return parent;
+    }
+    return undefined;
+  };
+  const factoryScopes = new Map<Receiver, ts.FunctionLikeDeclaration>();
+  for (const [receiverSymbol, receiver] of receivers) {
+    const scope = enclosingFunction(receiver.node);
+    if (!scope?.body) continue;
+    let returnsReceiver = false;
+    walk(scope.body, node => {
+      if (ts.isReturnStatement(node) && node.parent === scope.body && node.expression && symbol(node.expression) === receiverSymbol) returnsReceiver = true;
+    });
+    if (returnsReceiver) factoryScopes.set(receiver, scope);
+  }
   const methods = new Set(["get", "post", "put", "patch", "delete", "options", "head", "all"]);
-  const conditional = (node: ts.Node): boolean => {
+  const conditional = (node: ts.Node, staticScope?: ts.FunctionLikeDeclaration): boolean => {
     for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
       if (ts.isIfStatement(parent) || ts.isIterationStatement(parent, false) || ts.isSwitchStatement(parent) || ts.isConditionalExpression(parent)
-        || (ts.isBinaryExpression(parent) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(parent.operatorToken.kind))
-        || ts.isFunctionLike(parent)) return true;
+        || (ts.isBinaryExpression(parent) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(parent.operatorToken.kind))) return true;
+      if (ts.isFunctionLike(parent) && parent !== staticScope) return true;
     }
     return false;
   };
@@ -129,7 +157,8 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       if (methods.has(node.expression.name.text) || ["route", "use"].includes(node.expression.name.text)) diagnostic("route_receiver_unsupported", node);
       return;
     }
-    if (conditional(node) || conditional(receiver.node)) { diagnostic("routing_predicate_unsupported", node); return; }
+    const staticScope = factoryScopes.get(receiver);
+    if (conditional(node, staticScope) || conditional(receiver.node, staticScope)) { diagnostic("routing_predicate_unsupported", node); return; }
     if (node.expression.name.text === "use") receiver.uses.push(node);
     else if (methods.has(node.expression.name.text) && node.expression.name.text !== "all") receiver.routes.push(node);
     else diagnostic("routing_construct_unsupported", node);
@@ -140,6 +169,14 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (decl && ts.isFunctionDeclaration(decl)) return decl;
     if (decl && ts.isVariableDeclaration(decl) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) return decl.initializer;
     return undefined;
+  };
+  const receiverFor = (node: ts.Expression): Receiver | undefined => {
+    const direct = receivers.get(symbol(node)!);
+    if (direct) return direct;
+    if (!ts.isCallExpression(node)) return undefined;
+    const factory = functionFor(node.expression);
+    if (!factory) return undefined;
+    return [...factoryScopes].find(([, scope]) => scope === factory)?.[0];
   };
   const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], node: ts.Node, method: Evidence["method"], pointer?: string) => {
     const ev = evidence(node, method);
@@ -242,26 +279,70 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
   const responses = (fn: ts.FunctionLikeDeclaration, endpoint: Endpoint) => {
     const responseName = fn.parameters[1]?.name.getText();
     if (!responseName || !fn.body) return;
-    walk(fn.body, node => {
-      if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression) || !["json", "send", "end"].includes(node.expression.name.text)) return;
-      let current: ts.Expression = node.expression.expression;
-      let status: Endpoint["responses"][number]["status"] = { kind: "unknown", reason: "No explicit response status" };
-      let media: string | undefined;
+    const body = fn.body;
+    type ResponseStatus = Endpoint["responses"][number]["status"];
+    type ResponseState = { status: ResponseStatus; media: string | undefined };
+    const responseChain = (expression: ts.Expression): { root: string | undefined; calls: ts.CallExpression[] } => {
+      const calls: ts.CallExpression[] = [];
+      let current = expression;
       while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
-        if (current.expression.name.text === "status" && current.arguments[0] && ts.isNumericLiteral(current.arguments[0])) {
-          const code = Number(current.arguments[0].text);
-          status = code >= 100 && code <= 599 ? { kind: "exact", code } : { kind: "unknown", reason: "Invalid explicit response status" };
-        }
-        if (current.expression.name.text === "type") media = literal(current.arguments[0]);
+        calls.unshift(current);
         current = current.expression.expression;
       }
-      if (!ts.isIdentifier(current) || current.text !== responseName) return;
+      return { root: ts.isIdentifier(current) ? current.text : undefined, calls };
+    };
+    const applyStateCalls = (state: ResponseState, calls: ts.CallExpression[], uncertain: boolean) => {
+      for (const call of calls) {
+        if (!ts.isPropertyAccessExpression(call.expression)) continue;
+        if (call.expression.name.text === "status") {
+          const argument = call.arguments[0];
+          const code = argument && ts.isNumericLiteral(argument) ? Number(argument.text) : undefined;
+          state.status = !uncertain && code !== undefined && code >= 100 && code <= 599
+            ? { kind: "exact", code }
+            : { kind: "unknown", reason: code !== undefined ? "Invalid explicit response status" : "Unsupported explicit response status" };
+        }
+        if (call.expression.name.text === "type") state.media = uncertain ? undefined : literal(call.arguments[0]);
+      }
+    };
+    const precedingState = (serialization: ts.CallExpression): ResponseState => {
+      const state: ResponseState = { status: { kind: "unknown", reason: "No explicit response status" }, media: undefined };
+      if (!ts.isBlock(body)) return state;
+      let topLevel: ts.Node = serialization;
+      while (topLevel.parent && topLevel.parent !== body) topLevel = topLevel.parent;
+      if (!(ts.isExpressionStatement(topLevel) || ts.isReturnStatement(topLevel))) return state;
+      const aliases = new Set<string>();
+      for (const statement of body.statements) {
+        if (statement === topLevel) break;
+        if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
+          if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isIdentifier(declaration.initializer)
+            && (declaration.initializer.text === responseName || aliases.has(declaration.initializer.text))) aliases.add(declaration.name.text);
+        }
+        if (ts.isExpressionStatement(statement)) {
+          const chain = responseChain(statement.expression);
+          if (chain.root === responseName) applyStateCalls(state, chain.calls, false);
+          else if (chain.root && aliases.has(chain.root)) applyStateCalls(state, chain.calls, true);
+          continue;
+        }
+        walk(statement, candidate => {
+          if (!ts.isCallExpression(candidate)) return;
+          const chain = responseChain(candidate);
+          if (chain.root === responseName || (chain.root && aliases.has(chain.root))) applyStateCalls(state, chain.calls, true);
+        });
+      }
+      return state;
+    };
+    walk(fn.body, node => {
+      if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression) || !["json", "send", "end"].includes(node.expression.name.text)) return;
+      const chain = responseChain(node);
+      if (chain.root !== responseName) return;
+      const state = precedingState(node);
+      applyStateCalls(state, chain.calls, false);
       const schema = expressionSchema(node.arguments[0], endpoint);
-      const response = { status, content: media ? [{ media_type: media, schema, serialization: { format: node.expression.name.text } }] : [] };
+      const response = { status: state.status, content: state.media ? [{ media_type: state.media, schema, serialization: { format: node.expression.name.text } }] : [] };
       if (!endpoint.responses.some(item => JSON.stringify(item) === JSON.stringify(response))) endpoint.responses.push(response);
-      claim(endpoint, "response.serialization", { status, media_type: media ?? null, schema }, node, "deterministic_analysis");
-      if (!media) diagnostic("response_media_type_unknown", node, endpoint);
-      if (status.kind === "unknown") diagnostic("response_status_unknown", node, endpoint);
+      claim(endpoint, "response.serialization", { status: state.status, media_type: state.media ?? null, schema }, node, "deterministic_analysis");
+      if (!state.media) diagnostic("response_media_type_unknown", node, endpoint);
+      if (state.status.kind === "unknown") diagnostic("response_status_unknown", node, endpoint);
     });
   };
   const analyzeFunction = (fn: ts.FunctionLikeDeclaration, endpoint: Endpoint, middleware: boolean, reference: ts.Node) => {
@@ -367,7 +448,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (cycleChecked.has(receiver)) return;
     cycleChecked.add(receiver);
     for (const use of receiver.uses) for (const arg of use.arguments) {
-      const child = receivers.get(symbol(arg)!);
+      const child = receiverFor(arg);
       if (child) checkCycles(child, new Set(ancestors).add(receiver));
     }
   };
@@ -376,7 +457,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
   const middlewareArguments = (use: ts.CallExpression, before?: ts.Expression): ts.Expression[] => {
     const argumentsAfterPrefix = literal(use.arguments[0]) === undefined ? [...use.arguments] : [...use.arguments.slice(1)];
     const bounded = before ? argumentsAfterPrefix.slice(0, argumentsAfterPrefix.indexOf(before)) : argumentsAfterPrefix;
-    return bounded.filter(argument => !receivers.has(symbol(argument)!) && functionFor(argument));
+    return bounded.filter(argument => !receiverFor(argument) && functionFor(argument));
   };
   const uniqueExpressions = (expressions: ts.Expression[]) => [...new Map(expressions.map(expression => [`${expression.getSourceFile().fileName}:${expression.getStart()}`, expression])).values()];
   const scopedMiddleware = (receiver: Receiver, before: ts.CallExpression, path: string): ts.Expression[] => receiver.uses
@@ -405,7 +486,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         parameters: [...applicationPath.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)].map(match => ({ name: match[1]!, in: "path", presence: { state: "required", evidence_ids: [ev] }, schema: { type: "string" }, serialization: { style: "simple" } })),
         request_bodies: [], responses: [], security: { alternatives: [] }, evidence_ids: [ev] };
       result.endpoints.push(endpoint);
-      claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, config_version: "1.0.0", extraction_mode: request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode }, receiver.node, "deterministic_analysis");
+      claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, config_version: "1.0.0", extraction_mode: effectiveExtractionMode }, receiver.node, "deterministic_analysis");
       for (const node of [...context, receiver.node, call]) dependency(endpoint, node);
       const shared = scopedMiddleware(receiver, call, path);
       const handlers = uniqueExpressions([...inherited, ...shared, ...call.arguments.slice(1)]);
@@ -418,10 +499,10 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     }
     for (const use of receiver.uses) {
       const prefixArg = literal(use.arguments[0]);
-      const hasDynamicPrefix = prefixArg === undefined && use.arguments.length > 1 && !receivers.has(symbol(use.arguments[0]!)!) && !functionFor(use.arguments[0]!);
+      const hasDynamicPrefix = prefixArg === undefined && use.arguments.length > 1 && !receiverFor(use.arguments[0]!) && !functionFor(use.arguments[0]!);
       if (hasDynamicPrefix) { diagnostic("computed_mount_path_unresolved", use); continue; }
       for (const arg of use.arguments) {
-        const child = receivers.get(symbol(arg)!);
+        const child = receiverFor(arg);
         const mountedPrefix = `${prefix}/${prefixArg ?? ""}`.replace(/\/+/g, "/").replace(/\/$/, "");
         const shared = scopedMiddleware(receiver, use, prefixArg ?? "");
         const local = middlewareArguments(use, arg);
