@@ -1,22 +1,14 @@
 {
   "fixture_kind": "synthetic_static_route_snapshot",
-  "service_id": "orders",
-  "revision_alias": "rev-a",
-  "source_root": "typescript/orders/baseline/src",
+  "service_id": "orders", "revision_alias": "rev-a", "source_root": "typescript/orders/baseline/src",
+  "declaration_schema_catalog": "typescript/orders/declaration-schemas.json",
   "mounts": [{ "prefix": "/api", "router_symbol": "ordersRouter", "source": "typescript/orders/baseline/src/app.ts" }],
   "security_declarations": [{ "middleware_symbol": "requireApiToken", "scope": "ordersRouter", "source": "typescript/orders/baseline/src/orders-routes.ts", "guarantee": "unknown" }],
-  "shared_validators": [{
-    "symbol": "validateOrder",
-    "source": "typescript/orders/baseline/src/validation.ts",
-    "dependent_endpoint_ids": ["create-order", "update-order"],
-    "runtime_required_fields": ["customer.id", "customer.address.city", "items"],
-    "runtime_optional_fields": ["priority"],
-    "runtime_enum": { "priority": ["standard", "expedited"] }
-  }],
+  "shared_validators": [{ "symbol": "validateOrder", "source": "typescript/orders/baseline/src/validation.ts", "dependent_endpoint_ids": ["create-order", "update-order"], "runtime_presence": { "customer.id": "required", "customer.address.city": "required", "items": "required", "priority": "optional" }, "runtime_enum": { "priority": ["standard", "expedited"] }, "response": { "statuses": [400], "media_types": "unknown_not_declared" } }],
   "routes": [
-    { "id": "get-order", "method": "GET", "source_path": "/orders/:orderId", "application_path": "/api/orders/:orderId", "source": "typescript/orders/baseline/src/orders-routes.ts", "handler_symbol": "getOrder", "handler_source": "typescript/orders/baseline/src/orders-service.ts", "request": { "path_parameters": ["orderId"], "query_parameters": [{ "name": "includeItems", "required": "unknown" }], "type_declaration": "OrderView response declaration exists; request query has no runtime validation evidence" }, "response": { "statuses": [200], "media_types": ["application/json"], "type_declaration": "OrderView" }, "security_declaration": "requireApiToken" },
-    { "id": "create-order", "method": "POST", "source_path": "/orders", "application_path": "/api/orders", "source": "typescript/orders/baseline/src/orders-routes.ts", "handler_symbol": "createOrder", "handler_source": "typescript/orders/baseline/src/orders-service.ts", "request": { "body_type_declaration": "CreateOrderBody", "runtime_validator": "validateOrder", "body_shape": { "customer": { "id": "string", "address": { "city": "string" } }, "items": "Array<{ sku: string; quantity: number }>", "priority": "Priority | undefined" }, "requiredness": { "customer.id": "required_by_runtime_validation", "customer.address.city": "required_by_runtime_validation", "items": "required_by_runtime_validation", "priority": "optional_by_runtime_validation" } }, "response": { "statuses": [201], "media_types": ["application/json"], "type_declaration": "OrderView" }, "security_declaration": "requireApiToken" },
-    { "id": "update-order", "method": "PUT", "source_path": "/orders/:orderId", "application_path": "/api/orders/:orderId", "source": "typescript/orders/baseline/src/orders-routes.ts", "handler_symbol": "updateOrder", "handler_source": "typescript/orders/baseline/src/orders-service.ts", "request": { "path_parameters": ["orderId"], "body_type_declaration": "CreateOrderBody", "runtime_validator": "validateOrder", "requiredness": { "priority": "optional_by_runtime_validation" } }, "response": { "statuses": [200], "media_types": ["application/json"], "type_declaration": "OrderView" }, "security_declaration": "requireApiToken" }
+    { "id": "get-order", "method": "GET", "source_path": "/orders/:orderId", "application_path": "/api/orders/:orderId", "source": "typescript/orders/baseline/src/orders-routes.ts", "handler_symbol": "getOrder", "handler_source": "typescript/orders/baseline/src/orders-service.ts", "request": { "path_parameters": ["orderId"], "query_parameters": [{ "name": "includeItems", "presence": "unknown_no_runtime_validation" }] }, "response": { "handler": { "statuses": [200], "media_types": ["application/json"], "declaration_schema_ref": "OrderView.rev-a" } }, "security_declaration": "requireApiToken" },
+    { "id": "create-order", "method": "POST", "source_path": "/orders", "application_path": "/api/orders", "source": "typescript/orders/baseline/src/orders-routes.ts", "handler_symbol": "createOrder", "handler_source": "typescript/orders/baseline/src/orders-service.ts", "request": { "declaration_schema_ref": "CreateOrderBody.rev-a", "runtime_validator": "validateOrder" }, "response": { "handler": { "statuses": [201], "media_types": ["application/json"], "declaration_schema_ref": "OrderView.rev-a" }, "middleware": ["validateOrder"] }, "security_declaration": "requireApiToken" },
+    { "id": "update-order", "method": "PUT", "source_path": "/orders/:orderId", "application_path": "/api/orders/:orderId", "source": "typescript/orders/baseline/src/orders-routes.ts", "handler_symbol": "updateOrder", "handler_source": "typescript/orders/baseline/src/orders-service.ts", "request": { "path_parameters": ["orderId"], "declaration_schema_ref": "CreateOrderBody.rev-a", "runtime_validator": "validateOrder" }, "response": { "handler": { "statuses": [200], "media_types": ["application/json"], "declaration_schema_ref": "OrderView.rev-a" }, "middleware": ["validateOrder"] }, "security_declaration": "requireApiToken" }
   ],
   "unresolved": [{ "method": "GET", "source": "typescript/orders/baseline/src/orders-routes.ts", "expression": "\"/orders/legacy/\" + legacySuffix", "diagnostic": "computed_route_path_unresolved", "preserve": true }]
 }

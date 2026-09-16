@@ -1,0 +1,16 @@
+{
+  "fixture_kind": "synthetic_java_declaration_schemas",
+  "source": "java/orders/src/OrdersController.java",
+  "schemas": {
+    "CreateOrderRequest": {
+      "kind": "record", "fields": {
+        "customer": { "shape": "Customer", "parent_presence": "unknown_no_NotNull", "cascade": "@Valid" },
+        "items": { "shape": "List<LineItem>", "parent_presence": "required_by_@NotEmpty", "cascade": "@Valid_element" }
+      }
+    },
+    "Customer": { "kind": "record", "fields": { "id": { "shape": "String", "presence": "required_by_@NotBlank" }, "address": { "shape": "Address", "parent_presence": "unknown_no_NotNull", "cascade": "@Valid" } } },
+    "Address": { "kind": "record", "fields": { "city": { "shape": "String", "presence": "required_by_@NotBlank" } } },
+    "LineItem": { "kind": "record", "fields": { "sku": { "shape": "String", "presence": "required_by_@NotBlank" }, "quantity": { "shape": "int", "presence": "required_by_@Min(1)" } } },
+    "OrderResponse": { "kind": "record", "fields": { "id": { "shape": "String", "presence": "declaration_only" }, "state": { "shape": "String", "presence": "declaration_only" } } }
+  }
+}

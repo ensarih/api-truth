@@ -1,0 +1,19 @@
+{
+  "fixture_kind": "synthetic_typescript_declaration_schemas",
+  "schemas": {
+    "CreateOrderBody.rev-a": {
+      "source": "typescript/orders/baseline/src/types.ts",
+      "symbol": "CreateOrderBody",
+      "kind": "interface",
+      "fields": { "customer": { "presence": "declared_required", "shape": { "id": "string", "address": { "city": "string" } } }, "items": { "presence": "declared_required", "shape": "Array<{ sku: string; quantity: number }>" }, "priority": { "presence": "declared_optional", "shape": "Priority" } }
+    },
+    "CreateOrderBody.rev-b": {
+      "source": "typescript/orders/changed/src/types.ts",
+      "symbol": "CreateOrderBody",
+      "kind": "interface",
+      "fields": { "customer": { "presence": "declared_required", "shape": { "id": "string", "address": { "city": "string" } } }, "items": { "presence": "declared_required", "shape": "Array<{ sku: string; quantity: number }>" }, "priority": { "presence": "declared_required", "shape": "Priority" } }
+    },
+    "OrderView.rev-a": { "source": "typescript/orders/baseline/src/types.ts", "symbol": "OrderView", "kind": "interface", "fields": { "id": { "presence": "declared_required", "shape": "string" }, "state": { "presence": "declared_required", "shape": "pending | confirmed" } } },
+    "OrderView.rev-b": { "source": "typescript/orders/changed/src/types.ts", "symbol": "OrderView", "kind": "interface", "fields": { "id": { "presence": "declared_required", "shape": "string" }, "state": { "presence": "declared_required", "shape": "pending | confirmed | cancelling" } } }
+  }
+}

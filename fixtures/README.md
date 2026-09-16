@@ -3,6 +3,7 @@
 These compact, fictional inputs are design fixtures for the API Truth pilot. They do not run an application, model a provider wire format, or claim support beyond the declarations and evidence shown in the source.
 
 - `typescript/orders/` compares immutable `baseline` and `changed` Express/TypeScript snapshots. Each snapshot has source and adjacent `expected.json` facts.
+- `typescript/orders/declaration-schemas.json` and `java/orders/declaration-schemas.json` hold reusable declaration-only shapes. Route facts reference them separately from runtime validation/presence evidence.
 - `java/orders/` is a small Spring MVC source fixture and its expected route facts.
 - `lifecycle/cases.json` is design data for D03. It is intentionally not a canonical event schema or transport format.
 - `tests/validate-fixtures.mjs` performs the static consistency checks documented below.
@@ -16,3 +17,5 @@ node fixtures/tests/validate-fixtures.mjs
 ```
 
 No source is intended to be started, compiled, or connected to an external system.
+
+The validator deliberately checks only these fixed fixtures: their literal registrations, named handler segments, response middleware, declaration references/shapes, Spring annotations/selectors, and lifecycle authority separation. It is not a general-purpose parser or product scanner.

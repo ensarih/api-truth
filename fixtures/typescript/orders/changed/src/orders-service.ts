@@ -15,6 +15,6 @@ export async function updateOrder(request: Request<{ orderId: string }, OrderVie
   response.type("application/json").status(200).json({ id: request.params.orderId, state: "pending" });
 }
 
-export async function cancelOrder(request: Request<{ orderId: string }>, response: Response) {
+export async function cancelOrder(request: Request<{ orderId: string }>, response: Response<OrderView>) {
   response.type("application/json").status(202).json({ id: request.params.orderId, state: "cancelling" });
 }
