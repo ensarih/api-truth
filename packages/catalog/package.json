@@ -1,0 +1,13 @@
+{
+  "name": "@api-truth/catalog",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@api-truth/ir": "0.0.0",
+    "pg": "8.23.0"
+  }
+}
