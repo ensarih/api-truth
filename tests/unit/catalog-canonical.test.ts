@@ -82,6 +82,23 @@ describe("catalog canonical values", () => {
     );
   });
 
+  test("converts hostile canonical Proxy traps to a safe input error", () => {
+    const plantedSecret = "secret://provider-reference-and-password";
+    const hostile = new Proxy({}, {
+      getPrototypeOf: () => { throw new Error(plantedSecret); },
+    });
+
+    let caught: unknown;
+    try {
+      canonicalJson(hostile);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CatalogError);
+    expect(caught).toMatchObject({ code: "INVALID_CATALOG_INPUT" });
+    expect(`${String(caught)} ${JSON.stringify(caught)}`).not.toContain(plantedSecret);
+  });
+
   test("normalizes away only the top-level snapshot creation time", () => {
     const later = { ...snapshot, created_at: "2026-09-17T12:00:00.000Z" };
     expect(snapshotContentSha256(later)).toBe(snapshotContentSha256(snapshot));
@@ -194,6 +211,25 @@ describe("analyzer result conversion", () => {
     expect(exposed).not.toContain("postgresql://");
     expect(exposed).not.toContain("scope-top-secret");
     expect(exposed).not.toContain("provider-secret-ref");
+  });
+
+  test("converts hostile analyzer accessors to a safe snapshot error", () => {
+    const plantedSecret = "secret://provider-reference-and-password";
+    const hostile = structuredClone(partialResult);
+    Object.defineProperty(hostile, "status", {
+      enumerable: true,
+      get: () => { throw new Error(plantedSecret); },
+    });
+
+    let caught: unknown;
+    try {
+      contractSnapshotFromAnalyzerResult(hostile, "sha256:config");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CatalogError);
+    expect(caught).toMatchObject({ code: "INVALID_SNAPSHOT" });
+    expect(`${String(caught)} ${JSON.stringify(caught)}`).not.toContain(plantedSecret);
   });
 
   test("wraps raw storage errors with a stable safe error", () => {

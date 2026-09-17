@@ -14,13 +14,28 @@ export type ConvertedAnalyzerSnapshot = {
   analyzerStatus: "success" | "partial";
 };
 
+const withSnapshotInputBoundary = <Value>(operation: () => Value): Value => {
+  try {
+    return operation();
+  } catch (error) {
+    let isCatalogError = false;
+    try {
+      isCatalogError = error instanceof CatalogError;
+    } catch {
+      // A thrown Proxy can itself have hostile prototype traps.
+    }
+    if (isCatalogError) throw error;
+    throw new CatalogError("INVALID_SNAPSHOT");
+  }
+};
+
 export const contractSnapshotFromAnalyzerResult = (
   result: AnalyzerResult,
   configFingerprint: string,
 ): ConvertedAnalyzerSnapshot => {
-  const parsedResult = parseAnalyzerResult(result);
+  const parsedResult = withSnapshotInputBoundary(() => parseAnalyzerResult(result));
   if (!parsedResult.ok) throw catalogValidationError("INVALID_SNAPSHOT", parsedResult.error);
-  const validatedResult = structuredClone(parsedResult.value);
+  const validatedResult = withSnapshotInputBoundary(() => structuredClone(parsedResult.value));
 
   if (validatedResult.status === "failed") throw new CatalogError("SNAPSHOT_INELIGIBLE");
 
@@ -56,10 +71,10 @@ export const contractSnapshotFromAnalyzerResult = (
     diagnostics: validatedResult.diagnostics,
   };
 
-  const parsedSnapshot = parseContractSnapshot(snapshot);
+  const parsedSnapshot = withSnapshotInputBoundary(() => parseContractSnapshot(snapshot));
   if (!parsedSnapshot.ok) throw catalogValidationError("INVALID_SNAPSHOT", parsedSnapshot.error);
   return {
-    snapshot: structuredClone(parsedSnapshot.value),
+    snapshot: withSnapshotInputBoundary(() => structuredClone(parsedSnapshot.value)),
     requiredScopeIds,
     analyzerStatus: validatedResult.status,
   };
