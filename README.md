@@ -35,7 +35,7 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, executable and semantically validated IR contracts, a baseline read-only TypeScript/Express analyzer, a pinned offline TypeScript/Vitest workspace, and an isolated PostgreSQL integration harness. Catalog persistence, Java analysis, and application behavior are not implemented yet.
+Development is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, executable and semantically validated IR contracts, a baseline read-only TypeScript/Express analyzer, a pinned offline TypeScript/Vitest workspace, an isolated PostgreSQL integration harness, and the D06 catalog package for immutable snapshots, current access policy, and explicitly selected branch pointers. Java analysis and the later event, environment, publication, query, portal, and MCP layers are not implemented yet.
 
 Start with:
 
@@ -45,12 +45,13 @@ Start with:
 - [Phased roadmap](docs/ROADMAP.md)
 - [Testing and local validation](docs/TESTING.md)
 - [TypeScript/Express analyzer and support matrix](analyzers/typescript/README.md)
+- [Catalog package and local round-trip](packages/catalog/README.md)
 
 ## Development direction
 
 Functional development follows test-driven development. `npm run check` uses deterministic fixtures and contract assertions without Docker, databases, network access, or provider credentials. The separate PostgreSQL suite uses a pinned, loopback-only, disposable Compose service. OpenAI, Gemini, and Claude are application providers for semantic API understanding; they are not test runners or test judges.
 
-The first implementation will target a local developer workflow and Docker-backed test services, then add CI/CD adapters, runtime evidence connectors, the portal, and the read-only MCP server.
+The current local workflow can extract the synthetic baseline and round-trip it through an ephemeral schema in the fixed Docker-backed test database. Later phases add CI/CD adapters, runtime evidence connectors, the portal, and the read-only MCP server.
 
 ## Open-source principles
 

@@ -1,7 +1,7 @@
 # Testing and Local Validation
 
-**Status:** offline TypeScript and isolated PostgreSQL harnesses implemented; Java implementation and end-to-end harness pending.
-**Date:** 2026-09-16
+**Status:** offline TypeScript and isolated PostgreSQL catalog suites implemented; Java implementation and later end-to-end surfaces pending.
+**Date:** 2026-09-22
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
 ## 1. Purpose
@@ -34,7 +34,7 @@ No database, application server, API key, integration environment, or Java analy
 |---|---|---|
 | Unit | Function outputs, failure behavior, state transitions, pure schema/identity logic | Native runtime; no network or Docker |
 | Contract | IR/event schemas, plugin output, actual semantic-adapter request/response normalization | Synthetic fixtures and mocked provider transports; no API keys |
-| Integration | Current PostgreSQL connectivity, namespace isolation, and rollback; later persistence, jobs, migrations, publication, and access filtering | Isolated local PostgreSQL plus real implemented components |
+| Integration | PostgreSQL connectivity/isolation plus D06 migrations, immutable snapshots, current access policy, branch ordering/concurrency, and the ephemeral catalog round-trip | Isolated local PostgreSQL plus real implemented components |
 | End-to-end | CLI/event → catalog → OpenAPI/portal/MCP lifecycle | Local application and fixture services, as implemented |
 | Java | Java extractor behavior and common plugin conformance | Pinned JDK/build wrapper when the Java adapter is added |
 
@@ -77,6 +77,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
 | `npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | **Available:** emit a validated fixture `AnalyzerResult` as stdout JSON and diagnostics on stderr |
+| `npm run catalog:roundtrip -- --input <file> --tenant <id> --principal <id> --branch <configured-branch>` | **Available:** use only the fixed local test database, create/migrate/drop one random schema, seed synthetic policy, ingest/promote/read, and emit a safe summary |
 | `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
 | `npm run test:env:up` | **Available:** start the pinned disposable PostgreSQL service and wait up to 60 seconds for health |
@@ -84,7 +85,28 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:integration` | **Available:** require the running fixed database, then run real isolation and rollback tests with up to two workers |
 | `npm run test:env:down` | **Available:** remove only the fixed Compose project's containers, network, and volumes |
 
-The integration suite fails nonzero with a distinct dependency message when Docker or PostgreSQL is unavailable. Its schemas use a random `api_truth_test_` prefix per run/worker and its `finally` cleanup drops only those schemas. The Compose service publishes only on loopback, stores PostgreSQL data on tmpfs, and uses synthetic test-only credentials. End-to-end and Java commands will be added with their implementations rather than as empty successful placeholders.
+The integration suite fails nonzero with a distinct dependency message when Docker or PostgreSQL is unavailable. Its schemas use a random `api_truth_test_` prefix per run/worker and its `finally` cleanup drops only those schemas. The Compose service publishes only on loopback, stores PostgreSQL data on tmpfs, and uses synthetic test-only credentials. The catalog command accepts no database target or reset option. It requires the ready fixed service and stores only the explicitly supplied branch pointer; it does not enumerate branches. The v0.1 `intended_branches` array is the exact per-service scan allowlist for later orchestration, and empty means scan none. End-to-end publication/query and Java commands will be added with their implementations rather than as empty successful placeholders.
+
+### D05-to-D06 developer round-trip
+
+```sh
+npm run test:env:up
+npm run test:env:ready
+result_file="$(mktemp -t api-truth-analyzer-result).json"
+npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$result_file"
+npm run catalog:roundtrip -- --input "$result_file" --tenant local-demo --principal local-developer --branch main
+rm "$result_file"
+npm run test:env:down
+```
+
+The extractor reads the synthetic baseline at an immutable revision. The
+round-trip validates D03 input before connecting, then migrates an isolated
+schema, uses the trusted control-plane API to create synthetic scope/grant
+state, ingests the snapshot, promotes the selected branch, performs authorized
+reads, reparses the returned D03 snapshot, and drops the schema in `finally`.
+Its script output contains only snapshot ID, branch, pointer version, and
+`round_trip_valid`; use `npm run --silent catalog:roundtrip -- ...` for
+machine-readable stdout without npm's own lifecycle banner.
 
 ## 7. Semantic provider contract tests
 
@@ -123,4 +145,4 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The D04a offline scaffold, D04b PostgreSQL boundary, and D05 baseline TypeScript/Express analyzer are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and later application-level checks remain pending their phases. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`.
+The D04a offline scaffold, D04b PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, and D06 catalog are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and D07–D11 application behavior remain pending their phases. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, and catalog APIs and invariants are documented in `packages/catalog/README.md`.

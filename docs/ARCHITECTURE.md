@@ -1,10 +1,10 @@
 # API Truth — Architecture and Interface Design
 
-**Status:** proposed implementation design, 2026-09-15.  
+**Status:** D03 IR, D05 TypeScript analyzer, and D06 catalog persistence implemented; later application layers remain design, 2026-09-22.
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 
-Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). Transport interfaces and migrations remain Phase 1 deliverables.
+Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). Event/job orchestration, environment resolution, publication, and query transports remain Phase 1 deliverables.
 
 ## 1. Components
 
@@ -48,7 +48,25 @@ Start with a modular service and worker rather than a microservice per component
 
 A branch is a mutable reference to source history. An environment binding references deployment evidence. Neither is part of contract content identity. Promoting an unchanged artifact can reuse a contract while changing URL mappings, configuration, and examples.
 
-### 2.1 Endpoint identity
+### 2.1 Implemented catalog persistence
+
+D06 stores each validated `success` or `partial` analyzer result as one immutable
+D03 contract snapshot. The normalized content digest excludes only top-level
+`created_at`; the complete first validated document remains stored. Required
+access scope IDs are a canonical immutable array on the snapshot row, and every
+snapshot or branch read checks all members against current active scopes and
+principal grants in the same SQL statement. Revocation therefore applies to
+historical reads. Missing and denied resources share one safe result.
+
+Branch pointers are tenant/repository/service/branch records promoted through
+locked transactions. Decimal provider sequences use unbounded text ordering;
+opaque provider state uses pointer-version compare-and-swap. D06 stores and
+resolves only a branch explicitly supplied by its caller. The v0.1 service
+configuration's `intended_branches` is the exact scan allowlist: later D08
+orchestration must ignore unlisted branches, and an empty list means scan none.
+D06 does not enumerate repository branches or implement scanning.
+
+### 2.2 Endpoint identity
 
 - Service IDs are configured; renaming a label does not invalidate history.
 - A versioned route key includes service ID, method, normalized application path shape, and supported routing selectors. Exclude public hosts, branches, line numbers, and deployments.
@@ -58,7 +76,7 @@ A branch is a mutable reference to source history. An environment binding refere
 - Identity collisions and unresolved predicates produce diagnostics and block strict export of affected ambiguous operations.
 - Version identity algorithms and provide migrations/aliases before changing them. Scope schema components to services; content digests can deduplicate schemas without relying on class names alone.
 
-### 2.2 OpenAPI projection of route variants
+### 2.3 OpenAPI projection of route variants
 
 Catalog identity and OpenAPI operation identity are different. Distinct, fully resolved handlers may share a method/path while selecting behavior through headers or content types. The compiler groups endpoints by their projected OpenAPI method/path and checks representability even when extraction has no collisions or unknowns.
 
@@ -69,7 +87,7 @@ Catalog identity and OpenAPI operation identity are different. Distinct, fully r
 
 Compiler fixtures must include compatible media-type aggregation and header-dependent variants that cannot be faithfully combined into one operation.
 
-### 2.3 Schemas and claims
+### 2.4 Schemas and claims
 
 The IR must support multiple request/response media types, declared status ranges/default responses, recursive references, unions, serialization names, and structured security alternatives. Use JSON Schema-compatible structure plus evidence metadata; a flat list of string types is insufficient.
 
@@ -105,7 +123,7 @@ Represent editorial review and normative-export eligibility separately. Eligibil
 
 Field presence supports required, optional, conditional, and unknown. Conditions contain a supported predicate tree or a scoped business-rule expression, affected schema paths, sources, and verification state. Sample frequency is a separate claim with denominator, window, and completeness metadata.
 
-### 2.4 Environment axes
+### 2.5 Environment axes
 
 | Axis | Illustrative states |
 |---|---|

@@ -1,7 +1,7 @@
 # API Truth — Implementation Plan
 
-**Status:** development preparation; offline harness established, no application implementation exists yet.
-**Updated:** 2026-09-16
+**Status:** development; executable IR, baseline TypeScript analysis, and the PostgreSQL catalog core are implemented.
+**Updated:** 2026-09-22
 **Working name:** API Truth (`api-truth`), pending public naming checks.  
 **License:** Apache-2.0 proposed, pending selection before publication.
 
@@ -60,14 +60,14 @@ These are logical workstreams, not a requirement for separate teams or services.
 | First Node.js adapter | Express; replace with pilot's actual framework if different | Provisional |
 | First Java adapter | Spring MVC / Spring Boot, separate Java analyzer process | Provisional |
 | IR exchange | Versioned JSON, executable schemas, conformance fixtures | Required approach |
-| Storage/jobs | PostgreSQL and immutable artifact storage | Proposed |
+| Storage/jobs | PostgreSQL catalog core implemented; durable jobs and external immutable artifact storage pending | Partially implemented |
 | Portal | TypeScript client; browse/detail/environment views first | UI framework to select at setup |
 | CI/CD interface | Provider-neutral CLI/event envelope and deployment records | Required |
 | Reference CI | GitHub Actions for public synthetic fixtures | Proposed; enterprise CI remains unconfirmed |
 | Logs | Normalized file fixtures, then one ELK connector if applicable | Backend/version to confirm |
 | Confluence | One read-only connector for pilot edition | Cloud/Data Center to confirm |
 | Semantic inference | Common interface with OpenAI, Gemini, and Claude API adapters | Providers required; model IDs and data policy to configure |
-| Local tests | Native TypeScript/Vitest checks plus isolated Docker PostgreSQL for integration | Design proposed in [TESTING.md](docs/TESTING.md); setup pending |
+| Local tests | Native TypeScript/Vitest checks plus isolated Docker PostgreSQL for integration | Implemented for D03–D06; later suites join with their components |
 
 Pin runtime/library versions and support ranges when creating the code skeleton. Interfaces in these documents are proposed and not runnable commands.
 
@@ -80,9 +80,9 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 | D01 | **Complete:** record pilot constraints and architecture decisions | Support matrix, branch/environment examples, event/log field inventory |
 | D02 | **Complete:** create synthetic Node.js and small Java design fixtures | Expected routes, shared changes, event histories, unsupported cases |
 | D03 | **Complete:** executable IR, evidence, view, config, event, and analyzer exchange schemas | Valid/invalid fixtures; identity/version rules; separate editorial acceptance and verified export eligibility |
-| D04 | **In progress:** offline workspace/test harness complete; Java boundary and isolated test DB remain | Reproducible build, pinned dependencies, focused/watch checks, isolated test DB setup, red/green harness verification |
-| D05 | Implement baseline extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
-| D06 | Implement catalog snapshots, branch pointers, and access scopes | Immutable round-trip; unauthorized reads denied |
+| D04 | **Complete:** offline workspace/test harness, Java process boundary, and isolated test database | Reproducible build, pinned dependencies, focused/watch checks, isolated test DB setup, red/green harness verification |
+| D05 | **Complete:** baseline read-only TypeScript/Express extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
+| D06 | **Complete:** immutable catalog snapshots, current access scopes/grants, and atomic selected-branch pointers | Real PostgreSQL round-trip; unauthorized and revoked reads denied; provider ordering/CAS verified |
 | D07 | Add dependency-aware updates and structured differences | Shared changes reach every affected API; fallback demonstrated |
 | D08 | Add events, durable jobs, deduplication, and reconciliation | Duplicate, stale, missed-event cases pass |
 | D09 | Add deployment/configuration and environment resolution | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
@@ -93,9 +93,16 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 
 D01–D03 test the model before the full second adapter; do not permanently freeze a plugin contract designed from one framework. D05–D12 together constitute the first working product. A static-only exporter is insufficient.
 
+D06 stores and resolves only explicitly supplied branch keys. The executable
+v0.1 service `intended_branches` array is the exact scan allowlist for later D08
+orchestration: unlisted branches are ignored, and an empty list means scan none.
+D06 does not enumerate repository branches or implement scan orchestration.
+
 ## 7. Proposed repository structure
 
-Only planning documents currently exist. This is the intended implementation layout.
+The repository now implements the IR, test harness, baseline TypeScript analyzer,
+and catalog portions of this layout. Remaining entries describe intended later
+phases.
 
 ```text
 api-truth/
