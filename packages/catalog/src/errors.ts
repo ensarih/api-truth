@@ -53,7 +53,11 @@ export const catalogValidationError = (
 });
 
 export const catalogStorageError = (_cause?: unknown): CatalogError =>
-  new CatalogError("CATALOG_STORAGE_ERROR", { retryable: true });
+  Object.defineProperty(
+    new CatalogError("CATALOG_STORAGE_ERROR", { retryable: true }),
+    "cause",
+    { value: _cause, enumerable: false, configurable: true },
+  );
 
 export const asCatalogError = (error: unknown): CatalogError =>
   error instanceof CatalogError ? error : catalogStorageError(error);

@@ -233,8 +233,11 @@ describe("analyzer result conversion", () => {
   });
 
   test("wraps raw storage errors with a stable safe error", () => {
-    const wrapped = catalogStorageError(new Error("postgresql://user:password@database private SQL"));
+    const cause = new Error("postgresql://user:password@database private SQL");
+    const wrapped = catalogStorageError(cause);
     expect(wrapped).toMatchObject({ code: "CATALOG_STORAGE_ERROR", retryable: true });
+    expect((wrapped as Error & { cause?: unknown }).cause).toBe(cause);
+    expect(Object.keys(wrapped)).not.toContain("cause");
     expect(`${wrapped.message} ${JSON.stringify(wrapped)}`).not.toContain("password");
   });
 });
