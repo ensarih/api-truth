@@ -54,3 +54,4 @@ export {
   type UpdatePlanningInput,
 } from "./schema.js";
 export { parseUpdatePlanningInput, validateUpdatePlanningInput } from "./input.js";
+export { planUpdate } from "./planner.js";
