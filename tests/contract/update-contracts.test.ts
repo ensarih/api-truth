@@ -266,14 +266,18 @@ describe("D07 update contracts", () => {
         service_id: "orders",
         affected_endpoint_ids: ["endpoint-a"],
         fact_kind: "diagnostic",
-        fact_key: '["diagnostic","unsupported_construct","[\\"endpoint-a\\"]"]',
+        fact_key: '["diagnostic","unsupported_construct",["endpoint-a"]]',
       },
       after: { code: "unsupported_construct", severity: "warning", affected_endpoint_ids: ["endpoint-a"] },
     };
     expect(parseContractDifference(diagnostic)).toMatchObject({ ok: true });
     expect(parseContractDifference({
       ...diagnostic,
-      subject: { ...diagnostic.subject, fact_key: '["diagnostic","unsupported_construct","[]"]' },
+      subject: { ...diagnostic.subject, fact_key: '["diagnostic","unsupported_construct",[]]' },
+    }).ok).toBe(false);
+    expect(parseContractDifference({
+      ...diagnostic,
+      subject: { ...diagnostic.subject, fact_key: '["diagnostic","unsupported_construct","[\\"endpoint-a\\"]"]' },
     }).ok).toBe(false);
 
     const invalidSet = validDifferenceSet([base]);
@@ -348,7 +352,7 @@ describe("D07 update contracts", () => {
         kind,
         subject: {
           service_id: "orders", affected_endpoint_ids: ["endpoint-a"], fact_kind: "diagnostic",
-          fact_key: '["diagnostic","unsupported_construct","[\\"endpoint-a\\"]"]',
+          fact_key: '["diagnostic","unsupported_construct",["endpoint-a"]]',
         },
       })),
       ...([
@@ -546,6 +550,158 @@ describe("D07 update contracts", () => {
     const safeOutput = { ...validOutput(), differences: validDifferenceSet([safeDifference]) };
     const safeResult = parseContractChangesOutput(safeOutput);
     expect(safeResult, JSON.stringify(safeResult)).toMatchObject({ ok: true });
+  });
+
+  test("rejects permutations and duplicates in every set-like safe projection", () => {
+    const endpointDifference = (after: any) => ({
+      difference_id: "shape-only",
+      kind: "endpoint.added" as const,
+      compatibility: "non_breaking" as const,
+      subject: {
+        service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "endpoint" as const,
+        fact_key: '["endpoint","endpoint-a"]',
+      },
+      after,
+    });
+    const canonicalEndpoint: Record<string, any> = {
+      endpoint_id: "endpoint-a",
+      identity: {
+        identity_version: "1.0.0",
+        route_key: "route-a",
+        service_id: "orders",
+        method: "GET",
+        normalized_path_shape: "/orders/{}",
+        selectors: {
+          headers: [
+            { name: "alpha", operator: "present" },
+            { name: "zeta", operator: "present" },
+          ],
+          consumes: ["application/json", "text/plain"],
+          produces: ["application/json", "text/plain"],
+          query: [
+            { name: "alpha", operator: "present" },
+            { name: "zeta", operator: "present" },
+          ],
+        },
+      },
+      method: "GET",
+      parameters: [
+        { name: "alpha", in: "query", presence: { state: "optional" }, schema: { type: "string" }, serialization: { style: "form" } },
+        { name: "zeta", in: "query", presence: { state: "optional" }, schema: { type: "string" }, serialization: { style: "form" } },
+      ],
+      request_bodies: [
+        { media_type: "application/json", presence: { state: "optional" }, schema: { type: "object" }, serialization: { format: "json" } },
+        { media_type: "text/plain", presence: { state: "optional" }, schema: { type: "string" }, serialization: { format: "text" } },
+      ],
+      responses: [
+        {
+          status: { kind: "exact", code: 200 },
+          content: [
+            { media_type: "application/json", schema: { type: "object" }, serialization: { format: "json" } },
+            { media_type: "text/plain", schema: { type: "string" }, serialization: { format: "text" } },
+          ],
+          headers: [
+            { name: "alpha", schema: { type: "string" } },
+            { name: "zeta", schema: { type: "string" } },
+          ],
+        },
+        { status: { kind: "exact", code: 404 }, content: [], headers: [] },
+      ],
+      security: {
+        alternatives: [
+          { requirements: [
+            { scheme: "apiKey", scopes: ["alpha", "zeta"] },
+            { scheme: "oauth", scopes: ["read", "write"] },
+          ] },
+          { requirements: [{ scheme: "apiKey", scopes: ["alpha", "zeta"] }] },
+        ],
+      },
+    };
+    const canonicalEndpointResult = parseContractDifference(endpointDifference(canonicalEndpoint));
+    expect(canonicalEndpointResult, JSON.stringify(canonicalEndpointResult)).toMatchObject({ ok: true });
+
+    const endpointMutations: Array<[string, (value: Record<string, any>) => void]> = [
+      ["parameters", (value) => value.parameters.reverse()],
+      ["parameter duplicates", (value) => { value.parameters[1] = structuredClone(value.parameters[0]); }],
+      ["request bodies", (value) => value.request_bodies.reverse()],
+      ["request body duplicates", (value) => { value.request_bodies[1] = structuredClone(value.request_bodies[0]); }],
+      ["responses", (value) => value.responses.reverse()],
+      ["response duplicates", (value) => { value.responses[1] = structuredClone(value.responses[0]); }],
+      ["response content", (value) => value.responses[0].content.reverse()],
+      ["response content duplicates", (value) => { value.responses[0].content[1] = structuredClone(value.responses[0].content[0]); }],
+      ["response headers", (value) => value.responses[0].headers.reverse()],
+      ["response header duplicates", (value) => { value.responses[0].headers[1] = { ...value.responses[0].headers[0], name: "ALPHA" }; }],
+      ["response header case", (value) => { value.responses[0].headers[0].name = "Alpha"; }],
+      ["security alternatives", (value) => value.security.alternatives.reverse()],
+      ["security alternative duplicates", (value) => { value.security.alternatives[1] = structuredClone(value.security.alternatives[0]); }],
+      ["security requirements", (value) => value.security.alternatives[0].requirements.reverse()],
+      ["security requirement duplicates", (value) => { value.security.alternatives[0].requirements[1] = structuredClone(value.security.alternatives[0].requirements[0]); }],
+      ["security scopes", (value) => value.security.alternatives[0].requirements[0].scopes.reverse()],
+      ["security scope duplicates", (value) => { value.security.alternatives[0].requirements[0].scopes[1] = "alpha"; }],
+      ["identity headers", (value) => value.identity.selectors.headers.reverse()],
+      ["identity header duplicates", (value) => { value.identity.selectors.headers[1] = { ...value.identity.selectors.headers[0], name: "ALPHA" }; }],
+      ["identity consumes", (value) => value.identity.selectors.consumes.reverse()],
+      ["identity consumes duplicates", (value) => { value.identity.selectors.consumes[1] = "application/json"; }],
+      ["identity produces", (value) => value.identity.selectors.produces.reverse()],
+      ["identity query", (value) => value.identity.selectors.query.reverse()],
+      ["identity query duplicates", (value) => { value.identity.selectors.query[1] = structuredClone(value.identity.selectors.query[0]); }],
+    ];
+    for (const [label, mutate] of endpointMutations) {
+      const candidate = structuredClone(canonicalEndpoint);
+      mutate(candidate);
+      expect(parseContractDifference(endpointDifference(candidate)), label).toMatchObject({ ok: false });
+    }
+
+    const factCases: Array<[
+      string, Record<string, any>,
+      (value: Record<string, any>) => void,
+      (value: Record<string, any>) => void,
+    ]> = [
+      ["path names", {
+        kind: "endpoint.path_parameter_names_changed", compatibility: "potentially_breaking",
+        subject: endpointDifference({}).subject, after: ["alpha", "zeta"],
+      }, (value) => value.after.reverse(), (value) => { value.after[1] = value.after[0]; }],
+      ["claim members", {
+        kind: "claim.added", compatibility: "unknown",
+        subject: { service_id: "orders", fact_kind: "claim", fact_key: '["claim",null,null,"predicate"]' },
+        after: [
+          { value: "alpha", verification: "declared" },
+          { value: "zeta", verification: "declared" },
+        ],
+      }, (value) => value.after.reverse(), (value) => { value.after[1] = structuredClone(value.after[0]); }],
+      ["diagnostic affected IDs", {
+        kind: "analysis.diagnostic_added", compatibility: "unknown",
+        subject: {
+          service_id: "orders", affected_endpoint_ids: ["alpha", "zeta"], fact_kind: "diagnostic",
+          fact_key: '["diagnostic","code",["alpha","zeta"]]',
+        },
+        after: { code: "code", severity: "warning", affected_endpoint_ids: ["alpha", "zeta"] },
+      }, (value) => value.after.affected_endpoint_ids.reverse(), (value) => { value.after.affected_endpoint_ids[1] = "alpha"; }],
+      ["coverage roots", {
+        kind: "analysis.coverage_changed", compatibility: "unknown",
+        subject: { service_id: "orders", fact_kind: "coverage", fact_key: '["coverage"]' },
+        after: { status: "incomplete", analyzed_roots: ["alpha", "zeta"], unresolved_roots: ["alpha", "zeta"], reason: "partial" },
+      }, (value) => value.after.analyzed_roots.reverse(), (value) => { value.after.analyzed_roots[1] = "alpha"; }],
+      ["schema required", {
+        kind: "schema.added", compatibility: "non_breaking",
+        subject: { service_id: "orders", component_id: "schema-a", fact_kind: "schema", fact_key: '["schema","schema-a"]' },
+        after: { schema_id: "schema-a", schema: { type: ["null", "string"], required: ["alpha", "zeta"], enum: ["alpha", "zeta"], anyOf: [{ type: "number" }, { type: "string" }] } },
+      }, (value) => value.after.schema.required.reverse(), (value) => { value.after.schema.required[1] = "alpha"; }],
+    ];
+    for (const [label, fact, permute, duplicate] of factCases) {
+      expect(parseContractDifference({ difference_id: "shape-only", ...fact }), `${label} canonical`).toMatchObject({ ok: true });
+      const permuted = structuredClone(fact);
+      permute(permuted);
+      expect(parseContractDifference({ difference_id: "shape-only", ...permuted }), label).toMatchObject({ ok: false });
+      const duplicated = structuredClone(fact);
+      duplicate(duplicated);
+      expect(parseContractDifference({ difference_id: "shape-only", ...duplicated }), `${label} duplicate`).toMatchObject({ ok: false });
+    }
+
+    const metadata = { service_id: "orders", base_snapshot_id: "snapshot-base", target_snapshot_id: "snapshot-base" };
+    const canonicalWithoutId = endpointDifference(canonicalEndpoint);
+    const { difference_id: _shapeId, ...content } = canonicalWithoutId;
+    expect(differenceId(content, metadata)).toBe(differenceId(structuredClone(content), metadata));
   });
 
   test("contains non-JSON and hostile values without exposing planted values", () => {

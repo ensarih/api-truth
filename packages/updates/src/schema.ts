@@ -561,6 +561,9 @@ const validateAssignmentOrder = (
   issues: ValidationIssue[],
 ) => {
   if (!isCanonicalBy(assignments, canonicalJson)) issues.push(orderIssue(path));
+  if (!assignments.every((assignment) => conditionSetsAreCanonical(assignment.condition))) {
+    issues.push(orderIssue(path));
+  }
 };
 
 const projectionReferences = [JsonValueSchema, ApiSchemaSchema, ConditionSchema, EndpointIdentitySchema];
@@ -575,6 +578,159 @@ const parsePathParameterNamesProjection = safeParserFor(PathParameterNamesProjec
 const parseDiagnosticProjection = safeParserFor(DiagnosticProjectionSchema);
 const parseCoverageProjection = safeParserFor(CoverageProjectionSchema);
 const parseIdentityProjection = safeParserFor(IdentityProjectionSchema);
+
+const asciiLower = (value: string): string => value.replace(/[A-Z]/g, (character) => character.toLowerCase());
+
+const canonicalArrayBy = <Value>(values: readonly Value[], key: (value: Value) => string): boolean =>
+  isCanonicalBy(values, key);
+
+const apiSchemaSetsAreCanonical = (candidate: unknown): boolean => {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  const schema = candidate as Record<string, unknown>;
+  if (Array.isArray(schema.type) && !isCanonicalStringSet(schema.type as string[])) return false;
+  if (Array.isArray(schema.required) && !isCanonicalStringSet(schema.required as string[])) return false;
+  if (Array.isArray(schema.enum) && !canonicalArrayBy(schema.enum, canonicalJson)) return false;
+  for (const keyword of ["oneOf", "anyOf", "allOf"] as const) {
+    const members = schema[keyword];
+    if (Array.isArray(members)) {
+      if (!canonicalArrayBy(members, canonicalJson) || !members.every(apiSchemaSetsAreCanonical)) return false;
+    }
+  }
+  if (schema.properties !== undefined) {
+    if (schema.properties === null || typeof schema.properties !== "object" || Array.isArray(schema.properties)) return false;
+    if (!Object.values(schema.properties).every(apiSchemaSetsAreCanonical)) return false;
+  }
+  if (schema.items !== undefined && !apiSchemaSetsAreCanonical(schema.items)) return false;
+  if (Array.isArray(schema.prefixItems) && !schema.prefixItems.every(apiSchemaSetsAreCanonical)) return false;
+  if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== "boolean"
+    && !apiSchemaSetsAreCanonical(schema.additionalProperties)) return false;
+  if (schema.not !== undefined && !apiSchemaSetsAreCanonical(schema.not)) return false;
+  return true;
+};
+
+const conditionSetsAreCanonical = (candidate: unknown): boolean => {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  const condition = candidate as Record<string, unknown>;
+  if (!Array.isArray(condition.affected_schema_paths)
+    || !isCanonicalStringSet(condition.affected_schema_paths as string[])) return false;
+  if (Array.isArray(condition.operands)) {
+    if (!condition.operands.every(conditionSetsAreCanonical)) return false;
+    if ((condition.operator === "and" || condition.operator === "or")
+      && !canonicalArrayBy(condition.operands, canonicalJson)) return false;
+  }
+  return true;
+};
+
+const presenceSetsAreCanonical = (candidate: unknown): boolean => {
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  const presence = candidate as Record<string, unknown>;
+  return presence.condition === undefined || conditionSetsAreCanonical(presence.condition);
+};
+
+const parameterSetsAreCanonical = (candidate: Record<string, unknown>): boolean =>
+  (candidate.presence === undefined || presenceSetsAreCanonical(candidate.presence))
+  && (candidate.schema === undefined || apiSchemaSetsAreCanonical(candidate.schema));
+
+const requestBodySetsAreCanonical = (candidate: Record<string, unknown>): boolean =>
+  parameterSetsAreCanonical(candidate);
+
+const responseStatusKey = (candidate: unknown): string => {
+  const status = candidate as Record<string, unknown>;
+  if (status.kind === "exact") return canonicalJson(["exact", status.code]);
+  if (status.kind === "range") return canonicalJson(["range", status.range]);
+  if (status.kind === "default") return canonicalJson(["default"]);
+  return canonicalJson(["unknown", status.reason]);
+};
+
+const responseSetsAreCanonical = (candidate: Record<string, any>): boolean => {
+  if (candidate.content !== undefined) {
+    if (!canonicalArrayBy(candidate.content, (item: Record<string, any>) => item.media_type)
+      || !candidate.content.every((item: Record<string, unknown>) => apiSchemaSetsAreCanonical(item.schema))) return false;
+  }
+  if (candidate.headers !== undefined) {
+    if (!candidate.headers.every((item: Record<string, unknown>) =>
+      typeof item.name === "string" && item.name === asciiLower(item.name)
+      && apiSchemaSetsAreCanonical(item.schema))) return false;
+    if (!canonicalArrayBy(candidate.headers, (item: Record<string, any>) => asciiLower(item.name))) return false;
+  }
+  return true;
+};
+
+const securitySetsAreCanonical = (candidate: Record<string, any>): boolean => {
+  if (!Array.isArray(candidate.alternatives)) return false;
+  for (const alternative of candidate.alternatives) {
+    if (!canonicalArrayBy(alternative.requirements, (requirement: Record<string, unknown>) => String(requirement.scheme))) return false;
+    for (const requirement of alternative.requirements) {
+      if (!isCanonicalStringSet(requirement.scopes)) return false;
+    }
+  }
+  return canonicalArrayBy(candidate.alternatives, canonicalJson);
+};
+
+const selectorKey = (selector: Record<string, unknown>, normalizeName: boolean): string => canonicalJson([
+  normalizeName ? asciiLower(String(selector.name)) : selector.name,
+  selector.operator,
+  "value" in selector ? selector.value : "",
+]);
+
+const identitySetsAreCanonical = (candidate: Record<string, any>): boolean => {
+  const selectors = candidate.selectors;
+  if (selectors === undefined) return true;
+  if (selectors.headers !== undefined) {
+    if (!selectors.headers.every((selector: Record<string, unknown>) =>
+      typeof selector.name === "string" && selector.name === asciiLower(selector.name))) return false;
+    if (!canonicalArrayBy(selectors.headers, (selector: Record<string, unknown>) => selectorKey(selector, true))) return false;
+  }
+  for (const field of ["consumes", "produces"] as const) {
+    if (selectors[field] !== undefined) {
+      if (!selectors[field].every((value: string) => value === asciiLower(value))
+        || !canonicalArrayBy(selectors[field], asciiLower)) return false;
+    }
+  }
+  return selectors.query === undefined
+    || canonicalArrayBy(selectors.query, (selector: Record<string, unknown>) => selectorKey(selector, false));
+};
+
+const endpointSetsAreCanonical = (candidate: Record<string, any>): boolean => {
+  if (candidate.identity !== undefined && !identitySetsAreCanonical(candidate.identity)) return false;
+  if (candidate.parameters !== undefined) {
+    if (!canonicalArrayBy(candidate.parameters, (parameter: Record<string, any>) => canonicalJson([parameter.in, parameter.name]))) return false;
+    if (!candidate.parameters.every(parameterSetsAreCanonical)) return false;
+  }
+  if (candidate.request_bodies !== undefined) {
+    if (!canonicalArrayBy(candidate.request_bodies, (body: Record<string, any>) => body.media_type)
+      || !candidate.request_bodies.every(requestBodySetsAreCanonical)) return false;
+  }
+  if (candidate.responses !== undefined) {
+    if (!candidate.responses.every(responseSetsAreCanonical)) return false;
+    const responseKeys = candidate.responses.map((response: Record<string, any>) => canonicalJson([
+      responseStatusKey(response.status),
+      (response.content ?? []).map((item: Record<string, unknown>) => item.media_type),
+      (response.headers ?? []).map((item: Record<string, unknown>) => asciiLower(String(item.name))),
+      response,
+    ]));
+    if (!canonicalArrayBy(responseKeys, (key: string) => key)) return false;
+    const contentByStatus = new Map<string, Set<string>>();
+    const headersByStatus = new Map<string, Set<string>>();
+    for (const response of candidate.responses) {
+      const status = responseStatusKey(response.status);
+      const contentKeys = contentByStatus.get(status) ?? new Set<string>();
+      const headerKeys = headersByStatus.get(status) ?? new Set<string>();
+      for (const content of response.content ?? []) {
+        if (contentKeys.has(content.media_type)) return false;
+        contentKeys.add(content.media_type);
+      }
+      for (const header of response.headers ?? []) {
+        const key = asciiLower(header.name);
+        if (headerKeys.has(key)) return false;
+        headerKeys.add(key);
+      }
+      contentByStatus.set(status, contentKeys);
+      headersByStatus.set(status, headerKeys);
+    }
+  }
+  return candidate.security === undefined || securitySetsAreCanonical(candidate.security);
+};
 
 type ParsedFactKey = { factKind: Static<typeof FactKindSchema>; tuple: unknown[] };
 
@@ -707,7 +863,8 @@ const parseAndValidateFactKey = (
       valid = noUnexpectedSubjectFields(difference, new Set(["affected_endpoint_ids"]))
         && tuple.length === 3 && tuple[0] === "diagnostic"
         && typeof tuple[1] === "string" && tuple[1].length > 0
-        && typeof tuple[2] === "string" && tuple[2] === canonicalJson(affectedIds);
+        && Array.isArray(tuple[2]) && isCanonicalStringSet(tuple[2] as string[])
+        && canonicalJson(tuple[2]) === canonicalJson(affectedIds);
       break;
     case "coverage":
       valid = noUnexpectedSubjectFields(difference, new Set())
@@ -768,6 +925,46 @@ const projectionAgreesWithFact = (
   }
 };
 
+const projectionSetsAreCanonical = (
+  value: unknown,
+  difference: ContractDifference,
+  fact: ParsedFactKey,
+): boolean => {
+  if (fact.factKind === "identity" && typeof value === "string") return true;
+  if (value === null || typeof value !== "object") return false;
+  if (difference.kind === "endpoint.path_parameter_names_changed") {
+    return Array.isArray(value) && isCanonicalStringSet(value as string[]);
+  }
+  switch (fact.factKind) {
+    case "endpoint": return !Array.isArray(value) && endpointSetsAreCanonical(value as Record<string, any>);
+    case "parameter": return !Array.isArray(value) && parameterSetsAreCanonical(value as Record<string, unknown>);
+    case "request_body": return !Array.isArray(value) && requestBodySetsAreCanonical(value as Record<string, unknown>);
+    case "response": return !Array.isArray(value) && responseSetsAreCanonical(value as Record<string, any>);
+    case "security": return !Array.isArray(value) && securitySetsAreCanonical(value as Record<string, any>);
+    case "schema": {
+      if (Array.isArray(value)) return false;
+      const record = value as Record<string, unknown>;
+      return apiSchemaSetsAreCanonical(record.schema ?? record);
+    }
+    case "claim": return Array.isArray(value)
+      && canonicalArrayBy(value, canonicalJson)
+      && value.every((member) => {
+        const record = member as Record<string, unknown>;
+        return record.condition === undefined || conditionSetsAreCanonical(record.condition);
+      });
+    case "diagnostic": return !Array.isArray(value)
+      && isCanonicalStringSet((value as Record<string, any>).affected_endpoint_ids);
+    case "coverage": {
+      if (Array.isArray(value)) return false;
+      const record = value as Record<string, any>;
+      return isCanonicalStringSet(record.analyzed_roots)
+        && (record.unresolved_roots === undefined || isCanonicalStringSet(record.unresolved_roots));
+    }
+    case "identity": return !Array.isArray(value) && identitySetsAreCanonical(value as Record<string, any>);
+    case "condition_group": return true;
+  }
+};
+
 const validateFactProjections = (
   difference: ContractDifference,
   fact: ParsedFactKey,
@@ -785,6 +982,8 @@ const validateFactProjections = (
         "semantic.unsafe_fact_projection",
         "fact projection contains unsupported or private metadata",
       ));
+    } else if (!projectionSetsAreCanonical(value, difference, fact)) {
+      issues.push(orderIssue(`${path}/${side}`));
     }
   }
   return issues;

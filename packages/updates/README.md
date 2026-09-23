@@ -8,3 +8,7 @@ immutable target revision.
 Planning input paths are project-relative paths under that service root. The
 public parser rejects duplicate or non-UTF-8-byte-sorted `changed_paths` with
 `semantic.noncanonical_order`, so equivalent path sets have one boundary form.
+
+Safe difference projections apply the same rejection rule to every declared
+set-like IR array. Diagnostic fact keys embed the canonical affected-endpoint
+array directly, for example `["diagnostic","code",["endpoint-a"]]`.
