@@ -59,6 +59,22 @@ export const DIFFERENCE_KINDS = [
 export type DifferenceKind = typeof DIFFERENCE_KINDS[number];
 export type CompatibilityLabel = "non_breaking" | "potentially_breaking" | "unknown";
 
+export const FACT_KINDS = [
+  "endpoint",
+  "parameter",
+  "request_body",
+  "response",
+  "security",
+  "schema",
+  "claim",
+  "condition_group",
+  "diagnostic",
+  "coverage",
+  "identity",
+] as const;
+
+export type FactKind = typeof FACT_KINDS[number];
+
 export type UpdateErrorCode =
   | "INVALID_UPDATE_INPUT"
   | "UPDATE_SCOPE_MISMATCH"

@@ -67,11 +67,14 @@ const validPlan = (): UpdatePlan => {
 const differenceId = (
   difference: Omit<ContractDifference, "difference_id">,
   metadata: { service_id: string; base_snapshot_id: string; target_snapshot_id: string },
-): string => `difference-${digest({
-  version: "1.0.0",
-  ...metadata,
-  ...difference,
-})}`;
+): string => {
+  const { compatibility: _compatibility, ...identityDifference } = difference;
+  return `difference-${digest({
+    version: "1.0.0",
+    ...metadata,
+    ...identityDifference,
+  })}`;
+};
 
 const validDifferenceSet = (differences: ContractDifference[] = []): ContractDifferenceSet => {
   const content: Omit<ContractDifferenceSet, "difference_set_id"> = {
@@ -166,7 +169,7 @@ describe("D07 update contracts", () => {
       subject: {
         service_id: "orders",
         endpoint_id: "endpoint-a",
-        fact_kind: "endpoint",
+        fact_kind: "endpoint" as const,
         fact_key: '["endpoint","endpoint-a"]',
       },
       after: { method: "GET" },
@@ -190,6 +193,190 @@ describe("D07 update contracts", () => {
     expect(parseContractDifferenceSet(validDifferenceSet([invalidLabel as ContractDifference])).ok).toBe(false);
     expect(parseContractDifferenceSet(validDifferenceSet([first, first])).ok).toBe(false);
     expect(parseContractDifferenceSet(validDifferenceSet([second, first])).ok).toBe(false);
+  });
+
+  test("requires each taxonomy kind to use its exact canonical fact tuple and matching subject", () => {
+    const base = {
+      difference_id: "deliberately-not-a-valid-content-hash",
+      kind: "parameter.changed" as const,
+      compatibility: "potentially_breaking" as const,
+      subject: {
+        service_id: "orders",
+        endpoint_id: "endpoint-a",
+        fact_kind: "parameter" as const,
+        fact_key: '["parameter","endpoint-a","query","priority"]',
+      },
+    };
+    expect(parseContractDifference(base)).toMatchObject({ ok: true });
+
+    const invalid = [
+      { ...base, subject: { ...base.subject, fact_kind: "caller_chosen" } },
+      { ...base, subject: { ...base.subject, fact_kind: "response" } },
+      { ...base, subject: { ...base.subject, fact_key: '["parameter","endpoint-b","query","priority"]' } },
+      { ...base, subject: { ...base.subject, fact_key: '["parameter","endpoint-a","priority","query"]' } },
+      { ...base, subject: { ...base.subject, fact_key: '[ "parameter", "endpoint-a", "query", "priority" ]' } },
+      { ...base, subject: { ...base.subject, component_id: "component-a" } },
+    ];
+    for (const candidate of invalid) expect(parseContractDifference(candidate).ok).toBe(false);
+
+    const absence = {
+      ...base,
+      kind: "fact.absence_unconfirmed" as const,
+      compatibility: "unknown" as const,
+    };
+    expect(parseContractDifference(absence)).toMatchObject({ ok: true });
+    expect(parseContractDifference({
+      ...absence,
+      subject: { ...absence.subject, fact_kind: "endpoint" },
+    }).ok).toBe(false);
+
+    const condition = {
+      difference_id: "condition-shape-only",
+      kind: "condition.added" as const,
+      compatibility: "potentially_breaking" as const,
+      subject: {
+        service_id: "orders",
+        endpoint_id: "endpoint-a",
+        fact_kind: "condition_group" as const,
+        fact_key: '["condition_group","claim","endpoint-a",null,"request.field.presence"]',
+      },
+      before: [] as [],
+      after: [{
+        value: "urgent",
+        verification: "declared" as const,
+        condition: {
+          kind: "predicate" as const,
+          operator: "present" as const,
+          field: "priority",
+          affected_schema_paths: ["/priority"],
+        },
+      }] as [ClaimConditionAssignment],
+    };
+    expect(parseContractDifference(condition)).toMatchObject({ ok: true });
+    expect(parseContractDifference({
+      ...condition,
+      subject: { ...condition.subject, fact_key: '["condition_group","claim",null,null,"request.field.presence"]' },
+    }).ok).toBe(false);
+
+    const diagnostic = {
+      difference_id: "diagnostic-shape-only",
+      kind: "analysis.diagnostic_added" as const,
+      compatibility: "unknown" as const,
+      subject: {
+        service_id: "orders",
+        affected_endpoint_ids: ["endpoint-a"],
+        fact_kind: "diagnostic",
+        fact_key: '["diagnostic","unsupported_construct","[\\"endpoint-a\\"]"]',
+      },
+      after: { code: "unsupported_construct", severity: "warning", affected_endpoint_ids: ["endpoint-a"] },
+    };
+    expect(parseContractDifference(diagnostic)).toMatchObject({ ok: true });
+    expect(parseContractDifference({
+      ...diagnostic,
+      subject: { ...diagnostic.subject, fact_key: '["diagnostic","unsupported_construct","[]"]' },
+    }).ok).toBe(false);
+
+    const invalidSet = validDifferenceSet([base]);
+    invalidSet.differences[0]!.subject.fact_key = '["parameter","endpoint-b","query","priority"]';
+    const result = parseContractDifferenceSet(invalidSet);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.issues.some((candidate) => candidate.code === "semantic.fact_key_mismatch")).toBe(true);
+      expect(result.error.issues.some((candidate) => candidate.code === "semantic.identity_mismatch")).toBe(false);
+    }
+  });
+
+  test("covers every non-condition taxonomy kind and each absence fact tuple", () => {
+    const endpointSubject = {
+      service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "endpoint",
+      fact_key: '["endpoint","endpoint-a"]',
+    } as const;
+    const facts: Array<{ kind: Exclude<ContractDifference["kind"], `condition.${string}`>; subject: Record<string, unknown> }> = [
+      ...(["endpoint.added", "endpoint.removed", "endpoint.absence_unconfirmed", "endpoint.path_parameter_names_changed"] as const)
+        .map((kind) => ({ kind, subject: endpointSubject })),
+      ...(["parameter.added", "parameter.removed", "parameter.changed"] as const).map((kind) => ({
+        kind,
+        subject: {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "parameter",
+          fact_key: '["parameter","endpoint-a","query","priority"]',
+        },
+      })),
+      ...(["request_body.added", "request_body.removed", "request_body.changed"] as const).map((kind) => ({
+        kind,
+        subject: {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "request_body",
+          fact_key: '["request_body","endpoint-a","application/json"]',
+        },
+      })),
+      ...(["response.added", "response.removed", "response.changed"] as const).map((kind) => ({
+        kind,
+        subject: {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "response",
+          fact_key: '["response","endpoint-a","[\\"exact\\",200]"]',
+        },
+      })),
+      {
+        kind: "security.changed",
+        subject: {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "security",
+          fact_key: '["security","endpoint-a"]',
+        },
+      },
+      ...(["schema.added", "schema.removed", "schema.changed"] as const).map((kind) => ({
+        kind,
+        subject: {
+          service_id: "orders", component_id: "component-a", affected_endpoint_ids: ["endpoint-a"],
+          fact_kind: "schema", fact_key: '["schema","component-a"]',
+        },
+      })),
+      ...(["claim.added", "claim.removed", "claim.changed"] as const).map((kind) => ({
+        kind,
+        subject: {
+          service_id: "orders", fact_kind: "claim",
+          fact_key: '["claim",null,"#/properties/priority","request.field.presence"]',
+        },
+      })),
+      {
+        kind: "analysis.coverage_changed",
+        subject: { service_id: "orders", fact_kind: "coverage", fact_key: '["coverage"]' },
+      },
+      {
+        kind: "analysis.identity_changed",
+        subject: { service_id: "orders", fact_kind: "identity", fact_key: '["identity"]' },
+      },
+      ...(["analysis.diagnostic_added", "analysis.diagnostic_resolved"] as const).map((kind) => ({
+        kind,
+        subject: {
+          service_id: "orders", affected_endpoint_ids: ["endpoint-a"], fact_kind: "diagnostic",
+          fact_key: '["diagnostic","unsupported_construct","[\\"endpoint-a\\"]"]',
+        },
+      })),
+      ...([
+        ["parameter", '["parameter","endpoint-a","query","priority"]', { endpoint_id: "endpoint-a" }],
+        ["request_body", '["request_body","endpoint-a","application/json"]', { endpoint_id: "endpoint-a" }],
+        ["response", '["response","endpoint-a","[\\"default\\"]"]', { endpoint_id: "endpoint-a" }],
+        ["schema", '["schema","component-a"]', { component_id: "component-a", affected_endpoint_ids: ["endpoint-a"] }],
+        ["claim", '["claim",null,null,"response.description"]', {}],
+      ] as const).map(([factKind, factKey, fields]) => ({
+        kind: "fact.absence_unconfirmed" as const,
+        subject: { service_id: "orders", ...fields, fact_kind: factKind, fact_key: factKey },
+      })),
+    ];
+
+    for (const [index, fact] of facts.entries()) {
+      const difference = {
+        difference_id: `shape-${index}`,
+        kind: fact.kind,
+        compatibility: "unknown",
+        subject: fact.subject,
+      };
+      expect(parseContractDifference(difference), `${fact.kind}/${String(fact.subject.fact_kind)} should accept its exact tuple`)
+        .toMatchObject({ ok: true });
+      expect(parseContractDifference({
+        ...difference,
+        subject: { ...fact.subject, fact_key: '["wrong"]' },
+      }), `${fact.kind} should reject another kind's tuple`).toMatchObject({ ok: false });
+    }
   });
 
   test("validates complete partition-aware claim-condition assignments", () => {
@@ -273,6 +460,92 @@ describe("D07 update contracts", () => {
     })) {
       expect(parseContractChangesOutput({ ...validOutput(), [key]: value }).ok).toBe(false);
     }
+  });
+
+  test("rejects private metadata in fact projections but permits API schema properties named source", () => {
+    const metadata = {
+      service_id: "orders",
+      base_snapshot_id: "snapshot-base",
+      target_snapshot_id: "snapshot-base",
+    };
+    const endpoint = {
+      kind: "endpoint.added" as const,
+      compatibility: "non_breaking" as const,
+      subject: {
+        service_id: "orders",
+        endpoint_id: "endpoint-a",
+        fact_kind: "endpoint" as const,
+        fact_key: '["endpoint","endpoint-a"]',
+      },
+      after: { method: "GET" },
+    };
+    for (const [key, value] of Object.entries({
+      source: "private source content",
+      evidence: [{ evidence_id: "evidence-secret" }],
+      evidence_ids: ["evidence-secret"],
+      location: { path: "services/orders/src/private.ts" },
+      span: { line: 14 },
+      access_label: "credential-scope",
+      snapshot_id: "volatile-snapshot",
+      claim_id: "volatile-claim",
+      diagnostic_id: "volatile-diagnostic",
+      message: "raw diagnostic message",
+    })) {
+      expect(parseContractDifference({
+        difference_id: "shape-only",
+        ...endpoint,
+        after: { ...endpoint.after, [key]: value },
+      }).ok).toBe(false);
+    }
+
+    const schema = {
+      difference_id: "schema-shape-only",
+      kind: "schema.added" as const,
+      compatibility: "non_breaking" as const,
+      subject: {
+        service_id: "orders",
+        component_id: "component-a",
+        affected_endpoint_ids: ["endpoint-a"],
+        fact_kind: "schema" as const,
+        fact_key: '["schema","component-a"]',
+      },
+      after: {
+        schema_id: "component-a",
+        schema: {
+          type: "object",
+          properties: {
+            source: { type: "string", description: "A legitimate API field" },
+          },
+        },
+      },
+    };
+    expect(parseContractDifference(schema)).toMatchObject({ ok: true });
+
+    const metadataLeak = structuredClone(schema) as Record<string, any>;
+    metadataLeak.after.source = "private source content";
+    expect(parseContractDifference(metadataLeak).ok).toBe(false);
+
+    const privateEndpoint = {
+      ...endpoint,
+      after: { method: "GET", location: { path: "secret/provider/source.ts" } },
+    };
+    const privateDifference = {
+      difference_id: differenceId(privateEndpoint, metadata),
+      ...privateEndpoint,
+    } as ContractDifference;
+    const privateOutput = { ...validOutput(), differences: validDifferenceSet([privateDifference]) };
+    const privateResult = parseContractChangesOutput(privateOutput);
+    expect(privateResult.ok).toBe(false);
+    expect(JSON.stringify(privateResult)).not.toContain("secret/provider/source.ts");
+
+    const { difference_id: _shapeOnlyId, ...safeSchema } = schema;
+    const safeDifference = {
+      difference_id: differenceId(safeSchema, metadata),
+      ...safeSchema,
+    } as ContractDifference;
+    const safeOutput = { ...validOutput(), differences: validDifferenceSet([safeDifference]) };
+    const safeResult = parseContractChangesOutput(safeOutput);
+    expect(safeResult, JSON.stringify(safeResult)).toMatchObject({ ok: true });
   });
 
   test("contains non-JSON and hostile values without exposing planted values", () => {

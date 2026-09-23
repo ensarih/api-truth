@@ -76,6 +76,60 @@ describe("D07 planning input boundary", () => {
     );
   });
 
+  test("rejects duplicate or non-UTF-8-sorted changed paths at the public boundary", () => {
+    const duplicate = input();
+    duplicate.changed_paths = [
+      "services/orders/src/routes.ts",
+      "services/orders/src/routes.ts",
+    ];
+    const duplicateResult = parseUpdatePlanningInput(duplicate);
+    expect(duplicateResult.ok).toBe(false);
+    if (!duplicateResult.ok) {
+      expect(duplicateResult.error.issues).toContainEqual(expect.objectContaining({
+        path: "/changed_paths",
+        code: "semantic.noncanonical_order",
+      }));
+    }
+
+    const unordered = input();
+    unordered.changed_paths = [
+      "services/orders/src/zeta.ts",
+      "services/orders/src/alpha.ts",
+    ];
+    const unorderedResult = parseUpdatePlanningInput(unordered);
+    expect(unorderedResult.ok).toBe(false);
+    if (!unorderedResult.ok) {
+      expect(unorderedResult.error.issues).toContainEqual(expect.objectContaining({
+        path: "/changed_paths",
+        code: "semantic.noncanonical_order",
+      }));
+    }
+  });
+
+  test("redacts caller-controlled D03 record keys from public update errors", () => {
+    const secret = "secret-provider.example/tenant/source?credential=hunter2";
+    const candidate = input();
+    const [componentKey, component] = Object.entries(candidate.base_snapshot.schemas)[0]!;
+    delete candidate.base_snapshot.schemas[componentKey];
+    candidate.base_snapshot.schemas[secret] = component;
+
+    let caught: unknown;
+    try {
+      validateUpdatePlanningInput(candidate);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UpdateError);
+    expect(String(caught)).not.toContain(secret);
+    expect(JSON.stringify(caught)).not.toContain(secret);
+    expect(caught).toMatchObject({
+      code: "INVALID_UPDATE_INPUT",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: expect.stringContaining("/base_snapshot/schemas/*") }),
+      ]),
+    });
+  });
+
   test("contains hostile input as a safe validation error", () => {
     const planted = "secret://source-and-credential";
     const hostile = new Proxy({}, {

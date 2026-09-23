@@ -1,10 +1,12 @@
 export {
   CONTRACT_CHANGES_OUTPUT_VERSION,
   CONTRACT_DIFFERENCE_VERSION,
+  FACT_KINDS,
   UPDATE_PLAN_VERSION,
   type CompatibilityLabel,
   type DifferenceIncompleteReason,
   type DifferenceKind,
+  type FactKind,
   type UpdateErrorCode,
   type UpdateFallbackReason,
 } from "./types.js";
@@ -27,6 +29,7 @@ export {
   DifferenceIncompleteReasonSchema,
   DifferenceKindSchema,
   DifferenceSubjectSchema,
+  FactKindSchema,
   UpdateFallbackReasonSchema,
   UpdatePlanSchema,
   UpdatePlanningInputSchema,

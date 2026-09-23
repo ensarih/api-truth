@@ -5,8 +5,8 @@ import {
   type ValidationIssue,
   type ValidationResult,
 } from "@api-truth/ir";
-import { canonicalJson } from "./canonical.js";
-import { UpdateError, updateValidationError } from "./errors.js";
+import { canonicalJson, isCanonicalStringSet } from "./canonical.js";
+import { UpdateError, sanitizeUpdateIssuePath, updateValidationError } from "./errors.js";
 import {
   unsafeParseUpdatePlanningInputShape,
   type UpdatePlanningInput,
@@ -14,13 +14,20 @@ import {
 
 const prefixed = (prefix: string, validationIssues: readonly ValidationIssue[]): ValidationIssue[] =>
   validationIssues.map((candidate) => issue(
-    `${prefix}${candidate.path === "/" ? "" : candidate.path}`,
+    sanitizeUpdateIssuePath(`${prefix}${candidate.path === "/" ? "" : candidate.path}`),
     candidate.code,
     "nested contract is invalid",
   ));
 
 const semanticIssues = (input: UpdatePlanningInput): ValidationIssue[] => {
   const issues: ValidationIssue[] = [];
+  if (!isCanonicalStringSet(input.changed_paths)) {
+    issues.push(issue(
+      "/changed_paths",
+      "semantic.noncanonical_order",
+      "changed paths must be unique and UTF-8 byte sorted",
+    ));
+  }
   const snapshotResult = parseContractSnapshot(input.base_snapshot);
   if (!snapshotResult.ok) {
     issues.push(...prefixed("/base_snapshot", snapshotResult.error.issues));
@@ -74,7 +81,13 @@ export const parseUpdatePlanningInput = (
   value: unknown,
 ): ValidationResult<UpdatePlanningInput> => {
   const shape = unsafeParseUpdatePlanningInputShape(value);
-  if (!shape.ok) return shape;
+  if (!shape.ok) {
+    return failure(shape.error.issues.map((candidate) => issue(
+      sanitizeUpdateIssuePath(candidate.path),
+      candidate.code,
+      candidate.message,
+    )));
+  }
   try {
     const issues = semanticIssues(shape.value);
     return issues.length === 0 ? shape : failure(issues);
