@@ -5,7 +5,7 @@ import type {
   Evidence,
   SchemaComponent,
 } from "@api-truth/ir";
-import { canonicalSha256Hex, compareUtf8 } from "./canonical.js";
+import { canonicalJson, canonicalSha256Hex, compareUtf8 } from "./canonical.js";
 import { UpdateError } from "./errors.js";
 import { validateUpdatePlanningInput } from "./input.js";
 import {
@@ -402,10 +402,62 @@ type OwnershipBuilder = (snapshot: ContractSnapshot) => EndpointOwnershipIndex;
 // verify trust-boundary rejection happens before dependency-index work.
 export const createUpdatePlanner = (ownershipBuilder: OwnershipBuilder) => (value: unknown): UpdatePlan => {
   const input = canonicalPlanningInput(value);
+  const baseAnalysis = input.base_analysis_key;
+  const targetAnalysis = input.target.analysis_key;
+  const analyzerChanged = canonicalJson({
+    analyzer: baseAnalysis.analyzer,
+    analyzer_exchange_version: baseAnalysis.analyzer_exchange_version,
+  }) !== canonicalJson({
+    analyzer: targetAnalysis.analyzer,
+    analyzer_exchange_version: targetAnalysis.analyzer_exchange_version,
+  });
+  const configChanged = baseAnalysis.config_version !== targetAnalysis.config_version
+    || baseAnalysis.config_fingerprint !== targetAnalysis.config_fingerprint;
+  const irChanged = baseAnalysis.ir_version !== targetAnalysis.ir_version;
+  const identityChanged = baseAnalysis.identity_version !== targetAnalysis.identity_version;
+  const analysisBoundaryChanged = analyzerChanged || configChanged || irChanged || identityChanged;
+  const sourceDigestMatches = input.base_snapshot.source.source_digest === input.target.source_digest;
+  const priorCoverageIncomplete = input.base_snapshot.coverage.status !== "complete";
+  const mayReuse = sourceDigestMatches
+    && !analysisBoundaryChanged
+    && !priorCoverageIncomplete
+    && input.changed_paths_complete
+    && input.changed_paths.length === 0;
+
+  if (mayReuse) {
+    const content = {
+      update_plan_version: UPDATE_PLAN_VERSION,
+      service: {
+        repository_id: input.target.repository_id,
+        service_id: input.target.service_id,
+        service_root: input.target.service_root,
+        base_snapshot_id: input.base_snapshot.snapshot_id,
+        base_revision: input.base_snapshot.source.immutable_revision,
+        target_revision: input.target.immutable_revision,
+        base_source_digest: input.base_snapshot.source.source_digest,
+        target_source_digest: input.target.source_digest,
+      },
+      analysis: { base: baseAnalysis, target: targetAnalysis },
+      changed_paths: input.changed_paths,
+      dependency_coverage: "complete" as const,
+      affected_endpoint_ids: [],
+      action: "reuse_base_snapshot" as const,
+      fallback_reasons: [],
+    };
+    const plan: UpdatePlan = {
+      ...content,
+      plan_id: `update-plan-${canonicalSha256Hex(content)}`,
+    };
+    const parsed = parseUpdatePlan(plan);
+    if (!parsed.ok) throw new UpdateError("INVALID_UPDATE_INPUT");
+    return parsed.value;
+  }
+
   const ownership = ownershipBuilder(input.base_snapshot);
   const affectedEndpointIds = new Set<string>();
   let dependencyIndexIncomplete = endpointWithoutSourceClosure(input.base_snapshot, ownership)
     || ownedSourcePathIsInvalid(input.base_snapshot, ownership);
+  let changedPathUnindexed = false;
 
   for (const projectPath of input.changed_paths) {
     const records = changedRecords(
@@ -414,13 +466,36 @@ export const createUpdatePlanner = (ownershipBuilder: OwnershipBuilder) => (valu
       serviceRelativePath(projectPath, input.target.service_root),
     );
     for (const endpointId of records.affectedEndpointIds) affectedEndpointIds.add(endpointId);
+    changedPathUnindexed ||= !records.indexed;
     dependencyIndexIncomplete ||= records.incomplete;
+  }
+
+  if (analysisBoundaryChanged) {
+    for (const endpointId of ownership.endpointIds) affectedEndpointIds.add(endpointId);
   }
 
   const fallbackReasons = new Set<UpdateFallbackReason>([
     "adapter_incremental_targets_unsupported",
   ]);
+  if (priorCoverageIncomplete) fallbackReasons.add("prior_coverage_incomplete");
+  if (!input.changed_paths_complete) {
+    fallbackReasons.add("changed_paths_incomplete");
+  } else if (!sourceDigestMatches && input.changed_paths.length === 0) {
+    fallbackReasons.add("changed_paths_digest_mismatch");
+  }
+  if (changedPathUnindexed) fallbackReasons.add("changed_path_unindexed");
   if (dependencyIndexIncomplete) fallbackReasons.add("dependency_index_incomplete");
+  if (analyzerChanged) fallbackReasons.add("analyzer_changed");
+  if (configChanged) fallbackReasons.add("config_changed");
+  if (irChanged) fallbackReasons.add("ir_changed");
+  if (identityChanged) fallbackReasons.add("identity_changed");
+
+  const dependencyCoverageIncomplete = priorCoverageIncomplete
+    || !input.changed_paths_complete
+    || (!sourceDigestMatches && input.changed_paths.length === 0)
+    || changedPathUnindexed
+    || dependencyIndexIncomplete
+    || analysisBoundaryChanged;
 
   const content = {
     update_plan_version: UPDATE_PLAN_VERSION,
@@ -439,7 +514,7 @@ export const createUpdatePlanner = (ownershipBuilder: OwnershipBuilder) => (valu
       target: input.target.analysis_key,
     },
     changed_paths: input.changed_paths,
-    dependency_coverage: dependencyIndexIncomplete ? "incomplete" as const : "complete" as const,
+    dependency_coverage: dependencyCoverageIncomplete ? "incomplete" as const : "complete" as const,
     affected_endpoint_ids: [...affectedEndpointIds].sort(compareUtf8),
     action: "analyze_full_service" as const,
     extraction_mode: "fallback_full_service" as const,

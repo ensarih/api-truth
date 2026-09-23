@@ -426,3 +426,181 @@ describe("D07 reverse dependency planning", () => {
     expect(plan.affected_endpoint_ids).toHaveLength(2);
   });
 });
+
+describe("D07 fallback boundaries and changed-path certainty", () => {
+  test("preserves known impact while incomplete prior coverage independently invalidates dependency coverage", () => {
+    const snapshot = baseSnapshot(false);
+    snapshot.coverage = {
+      status: "incomplete",
+      analyzed_roots: ["src"],
+      unresolved_roots: ["src/generated"],
+      reason: "unsupported generated registration",
+      diagnostic_ids: ["diagnostic-incomplete"],
+    };
+    snapshot.diagnostics = [{
+      diagnostic_id: "diagnostic-incomplete",
+      code: "UNRESOLVED_REGISTRATION",
+      severity: "warning",
+      message: "A generated route registration could not be resolved",
+      affected_endpoint_ids: [],
+      evidence_ids: [],
+    }];
+
+    const plan = planUpdate(planningInput(snapshot, [
+      `${serviceRoot}/src/routes/build-nest.ts`,
+    ]));
+
+    expect(plan.affected_endpoint_ids).toEqual(["endpoint-build-nest"]);
+    expect(plan.dependency_coverage).toBe("incomplete");
+    expect(plan.fallback_reasons).toEqual([
+      "adapter_incremental_targets_unsupported",
+      "prior_coverage_incomplete",
+    ]);
+  });
+
+  test("distinguishes unindexed paths, incomplete lists, and a complete-empty digest mismatch", () => {
+    const snapshot = baseSnapshot(false);
+    const added = planUpdate(planningInput(snapshot, [`${serviceRoot}/src/routes/new-nest.ts`]));
+    expect(added).toMatchObject({
+      affected_endpoint_ids: [],
+      dependency_coverage: "incomplete",
+      action: "analyze_full_service",
+      fallback_reasons: [
+        "adapter_incremental_targets_unsupported",
+        "changed_path_unindexed",
+      ],
+    });
+
+    const incompleteInput = planningInput(snapshot, []);
+    incompleteInput.target.source_digest = baseDigest;
+    incompleteInput.changed_paths_complete = false;
+    const incomplete = planUpdate(incompleteInput);
+    expect(incomplete.dependency_coverage).toBe("incomplete");
+    expect(incomplete.fallback_reasons).toEqual([
+      "adapter_incremental_targets_unsupported",
+      "changed_paths_incomplete",
+    ]);
+
+    const digestMismatch = planUpdate(planningInput(snapshot, []));
+    expect(digestMismatch.dependency_coverage).toBe("incomplete");
+    expect(digestMismatch.fallback_reasons).toEqual([
+      "adapter_incremental_targets_unsupported",
+      "changed_paths_digest_mismatch",
+    ]);
+    expect(digestMismatch.fallback_reasons).not.toContain("changed_paths_incomplete");
+  });
+
+  test("marks a prior endpoint without path-backed ownership as an incomplete dependency index", () => {
+    const snapshot = baseSnapshot(false);
+    delete snapshot.evidence.find(
+      (candidate) => candidate.evidence_id === "ev-health-handler",
+    )!.location.path;
+
+    const plan = planUpdate(planningInput(snapshot, [
+      `${serviceRoot}/src/routes/build-nest.ts`,
+    ]));
+
+    expect(plan.affected_endpoint_ids).toEqual(["endpoint-build-nest"]);
+    expect(plan.dependency_coverage).toBe("incomplete");
+    expect(plan.fallback_reasons).toEqual([
+      "adapter_incremental_targets_unsupported",
+      "dependency_index_incomplete",
+    ]);
+  });
+
+  test("uses base evidence for deletions and combines old rename impact with new-path uncertainty", () => {
+    const snapshot = baseSnapshot(false);
+    const deleted = planUpdate(planningInput(snapshot, [
+      `${serviceRoot}/src/routes/build-nest.ts`,
+    ]));
+    expect(deleted.affected_endpoint_ids).toEqual(["endpoint-build-nest"]);
+    expect(deleted.dependency_coverage).toBe("complete");
+
+    const renamed = planUpdate(planningInput(snapshot, [
+      `${serviceRoot}/src/routes/build-nest-renamed.ts`,
+      `${serviceRoot}/src/routes/build-nest.ts`,
+    ]));
+    expect(renamed.affected_endpoint_ids).toEqual(["endpoint-build-nest"]);
+    expect(renamed.dependency_coverage).toBe("incomplete");
+    expect(renamed.fallback_reasons).toEqual([
+      "adapter_incremental_targets_unsupported",
+      "changed_path_unindexed",
+    ]);
+  });
+
+  test.each([
+    ["analyzer id", "analyzer_changed", (candidate: ReturnType<typeof planningInput>) => {
+      candidate.target.analysis_key.analyzer.analyzer_id = "different-analyzer";
+    }],
+    ["analyzer version", "analyzer_changed", (candidate: ReturnType<typeof planningInput>) => {
+      candidate.target.analysis_key.analyzer.analyzer_version = "9.0.0";
+    }],
+    ["analyzer exchange version", "analyzer_changed", (candidate: ReturnType<typeof planningInput>) => {
+      (candidate.target.analysis_key as unknown as { analyzer_exchange_version: string }).analyzer_exchange_version = "2.0.0";
+    }],
+    ["config version", "config_changed", (candidate: ReturnType<typeof planningInput>) => {
+      (candidate.target.analysis_key as unknown as { config_version: string }).config_version = "2.0.0";
+    }],
+    ["config fingerprint", "config_changed", (candidate: ReturnType<typeof planningInput>) => {
+      candidate.target.analysis_key.config_fingerprint = "config-aviary-v2";
+    }],
+    ["IR version", "ir_changed", (candidate: ReturnType<typeof planningInput>) => {
+      (candidate.target.analysis_key as unknown as { ir_version: string }).ir_version = "2.0.0";
+    }],
+    ["identity version", "identity_changed", (candidate: ReturnType<typeof planningInput>) => {
+      (candidate.target.analysis_key as unknown as { identity_version: string }).identity_version = "2.0.0";
+    }],
+  ])("invalidates every prior endpoint across the %s boundary", (_label, reason, mutate) => {
+    const candidate = planningInput(baseSnapshot(false), []);
+    candidate.target.source_digest = baseDigest;
+    mutate(candidate);
+
+    const plan = planUpdate(candidate);
+
+    expect(plan.affected_endpoint_ids).toEqual([
+      "endpoint-build-nest",
+      "endpoint-health",
+      "endpoint-repair-nest",
+      "endpoint-retire-nest",
+    ]);
+    expect(plan.dependency_coverage).toBe("incomplete");
+    expect(plan.fallback_reasons).toEqual([
+      "adapter_incremental_targets_unsupported",
+      reason,
+    ]);
+  });
+
+  test("reuses only exact source and analysis inputs with a complete empty path list", () => {
+    const candidate = planningInput(baseSnapshot(false), []);
+    candidate.target.source_digest = baseDigest;
+
+    const plan = planUpdate(candidate);
+
+    expect(plan).toMatchObject({
+      action: "reuse_base_snapshot",
+      dependency_coverage: "complete",
+      affected_endpoint_ids: [],
+      fallback_reasons: [],
+      service: {
+        base_revision: baseRevision,
+        target_revision: targetRevision,
+        base_source_digest: baseDigest,
+        target_source_digest: baseDigest,
+      },
+    });
+    expect(plan).not.toHaveProperty("extraction_mode");
+    expect(parseUpdatePlan(plan)).toEqual({ ok: true, value: plan });
+  });
+
+  test("treats a service-root change as affecting every endpoint", () => {
+    const plan = planUpdate(planningInput(baseSnapshot(false), [serviceRoot]));
+
+    expect(plan.affected_endpoint_ids).toEqual([
+      "endpoint-build-nest",
+      "endpoint-health",
+      "endpoint-repair-nest",
+      "endpoint-retire-nest",
+    ]);
+    expect(plan.action).toBe("analyze_full_service");
+  });
+});

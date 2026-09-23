@@ -1,6 +1,5 @@
 import { type Static, type TSchema, Type } from "@sinclair/typebox";
 import {
-  AnalyzerExchangeVersionSchema,
   ApiSchemaSchema,
   ConditionSchema,
   ConfigVersionSchema,
@@ -53,10 +52,10 @@ export const AnalysisKeySchema = Type.Object({
     analyzer_id: NonEmptyString(),
     analyzer_version: NonEmptyString(),
   }, { additionalProperties: false }),
-  analyzer_exchange_version: AnalyzerExchangeVersionSchema,
-  ir_version: IrVersionSchema,
-  identity_version: IdentityVersionSchema,
-  config_version: ConfigVersionSchema,
+  analyzer_exchange_version: NonEmptyString(),
+  ir_version: NonEmptyString(),
+  identity_version: NonEmptyString(),
+  config_version: NonEmptyString(),
   config_fingerprint: NonEmptyString(),
 }, {
   $id: "https://api-truth.dev/schemas/analysis-key-1.0.0.json",
