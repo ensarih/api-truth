@@ -1,0 +1,15 @@
+{
+  "name": "@api-truth/updates",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@api-truth/ir": "0.0.0",
+    "@sinclair/typebox": "0.34.41",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  }
+}
