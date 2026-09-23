@@ -77,7 +77,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
 | `npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | **Available:** emit a validated fixture `AnalyzerResult` as stdout JSON and diagnostics on stderr |
-| `npm run catalog:roundtrip -- --input <file> --tenant <id> --principal <id> --branch <configured-branch>` | **Available:** use only the fixed local test database, create/migrate/drop one random schema, seed synthetic policy, ingest/promote/read, and emit a safe summary |
+| `npm run --silent catalog:roundtrip -- --input <file> --tenant <id> --principal <id> --branch <configured-branch>` | **Available:** use only the fixed local test database, create/migrate/drop one random schema, seed synthetic policy, ingest/promote/read, and emit a safe JSON-only summary |
 | `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
 | `npm run test:env:up` | **Available:** start the pinned disposable PostgreSQL service and wait up to 60 seconds for health |
@@ -94,7 +94,7 @@ npm run test:env:up
 npm run test:env:ready
 result_file="$(mktemp -t api-truth-analyzer-result).json"
 npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$result_file"
-npm run catalog:roundtrip -- --input "$result_file" --tenant local-demo --principal local-developer --branch main
+npm run --silent catalog:roundtrip -- --input "$result_file" --tenant local-demo --principal local-developer --branch main
 rm "$result_file"
 npm run test:env:down
 ```
@@ -104,9 +104,9 @@ round-trip validates D03 input before connecting, then migrates an isolated
 schema, uses the trusted control-plane API to create synthetic scope/grant
 state, ingests the snapshot, promotes the selected branch, performs authorized
 reads, reparses the returned D03 snapshot, and drops the schema in `finally`.
-Its script output contains only snapshot ID, branch, pointer version, and
-`round_trip_valid`; use `npm run --silent catalog:roundtrip -- ...` for
-machine-readable stdout without npm's own lifecycle banner.
+Its complete stdout contains only snapshot ID, branch, pointer version, and
+`round_trip_valid`. Npm's silent mode suppresses the lifecycle banner and keeps
+the input path, tenant, and principal out of stdout.
 
 ## 7. Semantic provider contract tests
 

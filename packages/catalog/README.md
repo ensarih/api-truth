@@ -200,7 +200,7 @@ npm run test:env:up
 npm run test:env:ready
 result_file="$(mktemp -t api-truth-analyzer-result).json"
 npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$result_file"
-npm run catalog:roundtrip -- --input "$result_file" --tenant local-demo --principal local-developer --branch main
+npm run --silent catalog:roundtrip -- --input "$result_file" --tenant local-demo --principal local-developer --branch main
 rm "$result_file"
 npm run test:env:down
 ```
@@ -214,9 +214,9 @@ reads, reparses the returned D03 documents, and emits this safe summary:
 {"snapshot_id":"snapshot-...","branch":"main","pointer_version":"1","round_trip_valid":true}
 ```
 
-Use `npm run --silent catalog:roundtrip -- ...` when another process must parse
-stdout without npm's lifecycle banner. The command still requires the four
-named arguments and rejects duplicates or unknown arguments.
+The exact command uses npm's silent mode so stdout begins with the JSON object
+and contains no lifecycle banner or echoed arguments. The command requires the
+four named arguments and rejects duplicates or unknown arguments.
 
 ## Tests and limits
 

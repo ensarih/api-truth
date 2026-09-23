@@ -54,17 +54,6 @@ const runRoundtrip = (input: string, extraArguments: string[] = []) => {
   });
 };
 
-const runDocumentedRoundtrip = (input: string) => spawnSync("npm", [
-  "run",
-  "catalog:roundtrip",
-  "--",
-  ...cliArguments.map((argument) => argument === "INPUT_FILE" ? input : argument),
-], {
-  cwd: repositoryRoot,
-  encoding: "utf8",
-  timeout: 30_000,
-});
-
 const catalogSchemas = async (): Promise<string[]> => {
   assertSafeTestDatabaseUrl(FIXED_TEST_DATABASE_URL);
   const pool = new Pool({ connectionString: FIXED_TEST_DATABASE_URL });
@@ -117,7 +106,7 @@ afterAll(async () => {
   await rm(temporaryRoot, { recursive: true, force: true });
 });
 
-test("the exact documented command round-trips the D05 baseline with JSON-only safe output", async () => {
+test("the exact documented silent command emits only the safe D05-to-D06 JSON summary", async () => {
   const schemasBefore = await catalogSchemas();
   const output = runRoundtrip(resultFile);
 
@@ -136,12 +125,11 @@ test("the exact documented command round-trips the D05 baseline with JSON-only s
     "pointer_version",
     "round_trip_valid",
   ]);
+  expect(output.stdout).toBe(`${JSON.stringify(summary)}\n`);
+  expect(output.stdout).not.toContain(resultFile);
+  expect(output.stdout).not.toContain("> api-truth@");
+  expect(output.stdout).not.toContain("node scripts/catalog-roundtrip.ts");
   for (const secret of secretValues) expect(output.stdout).not.toContain(secret);
-
-  const documentedOutput = runDocumentedRoundtrip(resultFile);
-  expect(documentedOutput.status).toBe(0);
-  expect(documentedOutput.stderr).toBe("");
-  expect(JSON.parse(documentedOutput.stdout.trim().split("\n").at(-1)!)).toEqual(summary);
   expect(await catalogSchemas()).toEqual(schemasBefore);
 });
 
@@ -167,6 +155,7 @@ test("argument and ineligible-result failures are stable, secret-safe, and leave
     expect(output.stdout).toBe("");
     expect(output.stderr).not.toContain("planted-secret-value");
     expect(output.stderr).not.toContain(resultFile);
+    expect(output.stderr).not.toContain(failedResultFile);
     for (const secret of secretValues) expect(output.stderr).not.toContain(secret);
   }
   expect(await readFile(failedResultFile, "utf8")).not.toBe("");
