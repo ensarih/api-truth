@@ -12,6 +12,8 @@ import {
   type UpdatePlanningInput,
 } from "./schema.js";
 
+const canonicalSha256 = /^sha256:[a-f0-9]{64}$/;
+
 const prefixed = (prefix: string, validationIssues: readonly ValidationIssue[]): ValidationIssue[] =>
   validationIssues.map((candidate) => issue(
     sanitizeUpdateIssuePath(`${prefix}${candidate.path === "/" ? "" : candidate.path}`),
@@ -35,6 +37,13 @@ const semanticIssues = (input: UpdatePlanningInput): ValidationIssue[] => {
   }
 
   const snapshot = snapshotResult.value;
+  if (!canonicalSha256.test(snapshot.source.source_digest)) {
+    issues.push(issue(
+      "/base_snapshot/source/source_digest",
+      "shape.pattern",
+      "base source digest must be canonical SHA-256",
+    ));
+  }
   if (input.target.repository_id !== snapshot.service.repository_id) {
     issues.push(issue("/target/repository_id", "semantic.scope_mismatch", "target repository differs from base service"));
   }

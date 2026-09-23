@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, test } from "vitest";
-import type { ContractSnapshot } from "../../packages/ir/src/index.js";
+import { parseContractSnapshot, type ContractSnapshot } from "../../packages/ir/src/index.js";
 import {
   UpdateError,
   parseUpdatePlanningInput,
@@ -15,6 +15,7 @@ beforeAll(async () => {
     fileURLToPath(new URL("../fixtures/ir/express-snapshot.json", import.meta.url)),
     "utf8",
   )) as ContractSnapshot;
+  baseSnapshot.source.source_digest = `sha256:${"0".repeat(64)}`;
 });
 
 const analysisKey = () => ({
@@ -60,6 +61,35 @@ describe("D07 planning input boundary", () => {
     expect(() => validateUpdatePlanningInput(candidate())).toThrowError(
       expect.objectContaining({ code: "INVALID_UPDATE_INPUT" }),
     );
+  });
+
+  test("rejects a D03-valid historical base digest at the planning boundary", () => {
+    const historicalDigest = "sha256:source-b";
+    const candidate = input();
+    candidate.base_snapshot.source.source_digest = historicalDigest;
+    expect(parseContractSnapshot(candidate.base_snapshot)).toMatchObject({ ok: true });
+
+    const parsed = parseUpdatePlanningInput(candidate);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error.issues).toContainEqual(expect.objectContaining({
+        path: "/base_snapshot/source/source_digest",
+        code: "shape.pattern",
+      }));
+      expect(JSON.stringify(parsed.error)).not.toContain(historicalDigest);
+    }
+
+    let caught: unknown;
+    try {
+      validateUpdatePlanningInput(candidate);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: "INVALID_UPDATE_INPUT",
+      issues: [{ path: "/base_snapshot/source/source_digest", code: "shape.pattern" }],
+    });
+    expect(JSON.stringify(caught)).not.toContain(historicalDigest);
   });
 
   test("distinguishes scope and recorded analysis mismatches", () => {

@@ -396,9 +396,13 @@ const fallbackReasonRank = new Map<UpdateFallbackReason, number>([
   ["identity_changed", 9],
 ]);
 
-export const planUpdate = (value: unknown): UpdatePlan => {
+type OwnershipBuilder = (snapshot: ContractSnapshot) => EndpointOwnershipIndex;
+
+// Kept internal to the package export map; focused tests inject a builder to
+// verify trust-boundary rejection happens before dependency-index work.
+export const createUpdatePlanner = (ownershipBuilder: OwnershipBuilder) => (value: unknown): UpdatePlan => {
   const input = canonicalPlanningInput(value);
-  const ownership = buildEndpointOwnershipIndex(input.base_snapshot);
+  const ownership = ownershipBuilder(input.base_snapshot);
   const affectedEndpointIds = new Set<string>();
   let dependencyIndexIncomplete = endpointWithoutSourceClosure(input.base_snapshot, ownership)
     || ownedSourcePathIsInvalid(input.base_snapshot, ownership);
@@ -451,3 +455,5 @@ export const planUpdate = (value: unknown): UpdatePlan => {
   if (!parsed.ok) throw new UpdateError("INVALID_UPDATE_INPUT");
   return parsed.value;
 };
+
+export const planUpdate = createUpdatePlanner(buildEndpointOwnershipIndex);

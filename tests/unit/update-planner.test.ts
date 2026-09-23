@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createAnalyzer, ANALYZER } from "../../analyzers/typescript/src/index.js";
 import { contractSnapshotFromAnalyzerResult } from "../../packages/catalog/src/index.js";
 import {
@@ -11,6 +11,7 @@ import {
   type Evidence,
 } from "../../packages/ir/src/index.js";
 import { parseUpdatePlan, planUpdate } from "../../packages/updates/src/index.js";
+import { createUpdatePlanner } from "../../packages/updates/src/planner.js";
 
 const serviceRoot = "services/aviary";
 const baseRevision = "a".repeat(40);
@@ -310,6 +311,32 @@ describe("D07 reverse dependency planning", () => {
       `${serviceRoot}/src/guards/nest-validator.ts`,
       `${serviceRoot}/src/dto/nest-details.ts`,
     ]))).toThrowError(expect.objectContaining({ code: "INVALID_UPDATE_INPUT" }));
+  });
+
+  test("rejects a historical base digest at the boundary before ownership planning", () => {
+    const historicalDigest = "sha256:source-b";
+    const snapshot = baseSnapshot();
+    snapshot.source.source_digest = historicalDigest;
+    const candidate = planningInput(snapshot, [`${serviceRoot}/src/guards/nest-validator.ts`]);
+
+    let caught: unknown;
+    try {
+      planUpdate(candidate);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      code: "INVALID_UPDATE_INPUT",
+      issues: [{ path: "/base_snapshot/source/source_digest", code: "shape.pattern" }],
+    });
+    expect(JSON.stringify(caught)).not.toContain(historicalDigest);
+
+    const ownershipBuilder = vi.fn(() => { throw new Error("ownership construction must not run"); });
+    const isolatedPlanner = createUpdatePlanner(ownershipBuilder);
+    expect(() => isolatedPlanner(candidate)).toThrowError(expect.objectContaining({
+      code: "INVALID_UPDATE_INPUT",
+    }));
+    expect(ownershipBuilder).not.toHaveBeenCalled();
   });
 
   test("joins opaque dependency target IDs through evidence locations", () => {
