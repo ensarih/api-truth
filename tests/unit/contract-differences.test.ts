@@ -1072,4 +1072,58 @@ describe("D07 endpoint contract differences", () => {
     expect(transition("conditional", "optional")).toMatchObject({ compatibility: "non_breaking" });
     expect(transition("required", "conditional")).toMatchObject({ compatibility: "unknown" });
   });
+
+  test("keeps presence tightening potentially breaking when verification and condition also change", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = [claim(
+      "base-tightening",
+      "optional",
+      condition("mode", "legacy"),
+      "declared",
+      "request.field.presence",
+    )];
+    target.claims = [claim(
+      "target-tightening",
+      "required",
+      condition("mode", "strict"),
+      "observed",
+      "request.field.presence",
+    )];
+
+    expect(compareContractSnapshots({ base_snapshot: base, target_snapshot: target }).differences)
+      .toEqual([expect.objectContaining({
+        kind: "claim.changed",
+        compatibility: "potentially_breaking",
+      })]);
+
+    base.claims[0]!.value = "required";
+    target.claims[0]!.value = "optional";
+    expect(compareContractSnapshots({ base_snapshot: base, target_snapshot: target }).differences)
+      .toEqual([expect.objectContaining({
+        kind: "claim.changed",
+        compatibility: "unknown",
+      })]);
+  });
+
+  test("applies tightening precedence to a grouped multi-member presence change", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = [
+      claim("base-optional", "optional", undefined, "declared", "request.field.presence"),
+      claim("base-unknown", "unknown", undefined, "inferred", "request.field.presence"),
+    ];
+    target.claims = [
+      claim("target-required", "conditional", undefined, "owner_asserted", "request.field.presence"),
+      claim("target-unknown", "unknown", undefined, "observed", "request.field.presence"),
+    ];
+
+    const changed = compareContractSnapshots({ base_snapshot: base, target_snapshot: target })
+      .differences.find(({ kind }) => kind === "claim.changed");
+    expect(changed).toMatchObject({ compatibility: "potentially_breaking" });
+    expect((changed as any).before).toHaveLength(2);
+    expect((changed as any).after).toHaveLength(2);
+  });
 });

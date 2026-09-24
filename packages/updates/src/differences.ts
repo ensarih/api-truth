@@ -588,9 +588,13 @@ const changedClaimCompatibility = (
   before: readonly ClaimMemberProjection[],
   after: readonly ClaimMemberProjection[],
 ): CompatibilityLabel => {
-  if (owner.predicate !== "request.field.presence" || before.length !== 1 || after.length !== 1) {
+  if (owner.predicate !== "request.field.presence") {
     return "unknown";
   }
+  const hasTightening = before.some((member) => member.value === "optional")
+    && after.some((member) => member.value === "required" || member.value === "conditional");
+  if (hasTightening) return "potentially_breaking";
+  if (before.length !== 1 || after.length !== 1) return "unknown";
   const oldMember = before[0]!;
   const newMember = after[0]!;
   const otherwiseEqual = oldMember.verification === newMember.verification
