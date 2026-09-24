@@ -103,6 +103,450 @@ const compare = (
 });
 
 describe("D07 endpoint contract differences", () => {
+  test("compares retained parameter facts by canonical key", () => {
+    const before = endpoint("endpoint-parameters", "GET", "/pets");
+    before.parameters = [{
+      name: "limit",
+      in: "query",
+      presence: { state: "optional", evidence_ids: ["ev-route"] },
+      schema: { type: "integer" },
+      serialization: { style: "form" },
+    }];
+    const after = structuredClone(before);
+    after.parameters[0]!.presence = { state: "required", evidence_ids: ["ev-route"] };
+
+    expect(compare([before], [after]).differences).toEqual([
+      expect.objectContaining({
+        kind: "parameter.changed",
+        compatibility: "potentially_breaking",
+        subject: expect.objectContaining({
+          fact_kind: "parameter",
+          fact_key: '["parameter","endpoint-parameters","query","limit"]',
+        }),
+      }),
+    ]);
+  });
+
+  test.each([
+    ["optional", "non_breaking"],
+    ["required", "potentially_breaking"],
+    ["conditional", "potentially_breaking"],
+    ["unknown", "unknown"],
+  ] as const)("labels an added %s parameter", (state, compatibility) => {
+    const before = endpoint("endpoint-add-parameter", "GET", "/pets");
+    const after = structuredClone(before);
+    after.parameters = [{
+      name: "filter",
+      in: "query",
+      presence: state === "conditional"
+        ? {
+            state,
+            condition: {
+              kind: "predicate",
+              operator: "present",
+              field: "mode",
+              affected_schema_paths: ["/mode"],
+            },
+            evidence_ids: ["ev-route"],
+          }
+        : { state, evidence_ids: ["ev-route"] },
+      schema: { type: "string" },
+      serialization: { style: "form" },
+    }];
+
+    expect(compare([before], [after]).differences).toEqual([
+      expect.objectContaining({ kind: "parameter.added", compatibility }),
+    ]);
+  });
+
+  test.each([
+    ["optional", "required", "potentially_breaking"],
+    ["optional", "conditional", "potentially_breaking"],
+    ["required", "optional", "non_breaking"],
+    ["conditional", "optional", "non_breaking"],
+    ["unknown", "optional", "unknown"],
+    ["optional", "unknown", "unknown"],
+  ] as const)("labels parameter presence %s to %s", (from, to, compatibility) => {
+    const makePresence = (state: typeof from | typeof to) => state === "conditional"
+      ? {
+          state,
+          condition: {
+            kind: "predicate" as const,
+            operator: "present" as const,
+            field: "mode",
+            affected_schema_paths: ["/mode"],
+          },
+          evidence_ids: ["ev-route"],
+        }
+      : { state, evidence_ids: ["ev-route"] };
+    const before = endpoint("endpoint-transition", "GET", "/pets");
+    before.parameters = [{ name: "filter", in: "query", presence: makePresence(from), schema: { type: "string" }, serialization: { style: "form" } }];
+    const after = structuredClone(before);
+    after.parameters[0]!.presence = makePresence(to);
+
+    expect(compare([before], [after]).differences[0]).toMatchObject({
+      kind: "parameter.changed",
+      compatibility,
+    });
+  });
+
+  test.each(["optional", "required", "unknown"] as const)(
+    "uses conservative compatibility for an unchanged-%s schema or serialization change",
+    (state) => {
+      const before = endpoint("endpoint-schema-change", "GET", "/pets");
+      before.parameters = [{ name: "filter", in: "query", presence: { state, evidence_ids: ["ev-route"] }, schema: { type: "string" }, serialization: { style: "form" } }];
+      const after = structuredClone(before);
+      after.parameters[0]!.schema = { type: "integer" };
+      expect(compare([before], [after]).differences[0]).toMatchObject({
+        kind: "parameter.changed",
+        compatibility: "potentially_breaking",
+      });
+      after.parameters[0]!.schema = { type: "string" };
+      after.parameters[0]!.serialization = { style: "simple" };
+      expect(compare([before], [after]).differences[0]).toMatchObject({
+        kind: "parameter.changed",
+        compatibility: "potentially_breaking",
+      });
+    },
+  );
+
+  test.each([
+    ["optional", "required", "potentially_breaking"],
+    ["required", "optional", "non_breaking"],
+    ["unknown", "optional", "unknown"],
+    ["optional", "unknown", "unknown"],
+  ] as const)("labels request-body presence %s to %s", (from, to, compatibility) => {
+    const before = endpoint("endpoint-body-transition", "POST", "/pets");
+    before.request_bodies = [{
+      media_type: "application/json",
+      presence: { state: from, evidence_ids: ["ev-route"] },
+      schema: { type: "object" },
+      serialization: { format: "json" },
+    }];
+    const after = structuredClone(before);
+    after.request_bodies[0]!.presence = { state: to, evidence_ids: ["ev-route"] };
+    expect(compare([before], [after]).differences[0]).toMatchObject({
+      kind: "request_body.changed",
+      compatibility,
+    });
+  });
+
+  test.each([
+    ["optional", "non_breaking"],
+    ["required", "potentially_breaking"],
+    ["conditional", "potentially_breaking"],
+    ["unknown", "unknown"],
+  ] as const)("labels an added %s request body", (state, compatibility) => {
+    const before = endpoint("endpoint-add-body", "POST", "/pets");
+    const after = structuredClone(before);
+    after.request_bodies = [{
+      media_type: "application/json",
+      presence: state === "conditional"
+        ? {
+            state,
+            condition: {
+              kind: "predicate",
+              operator: "present",
+              field: "mode",
+              affected_schema_paths: ["/mode"],
+            },
+            evidence_ids: ["ev-route"],
+          }
+        : { state, evidence_ids: ["ev-route"] },
+      schema: { type: "object" },
+      serialization: { format: "json" },
+    }];
+    expect(compare([before], [after]).differences).toEqual([
+      expect.objectContaining({ kind: "request_body.added", compatibility }),
+    ]);
+  });
+
+  test.each(["optional", "required", "unknown"] as const)(
+    "uses conservative compatibility for an unchanged-%s request-body schema or serialization change",
+    (state) => {
+      const before = endpoint("endpoint-body-change", "POST", "/pets");
+      before.request_bodies = [{ media_type: "application/json", presence: { state, evidence_ids: ["ev-route"] }, schema: { type: "object" }, serialization: { format: "json" } }];
+      const after = structuredClone(before);
+      after.request_bodies[0]!.schema = { type: "string" };
+      expect(compare([before], [after]).differences[0]).toMatchObject({
+        kind: "request_body.changed",
+        compatibility: "potentially_breaking",
+      });
+      after.request_bodies[0]!.schema = { type: "object" };
+      after.request_bodies[0]!.serialization = { format: "xml" };
+      expect(compare([before], [after]).differences[0]).toMatchObject({
+        kind: "request_body.changed",
+        compatibility: "potentially_breaking",
+      });
+    },
+  );
+
+  test("compares bodies, grouped responses, and security as narrow canonical facts", () => {
+    const before = endpoint("endpoint-members", "POST", "/pets");
+    before.request_bodies = [{
+      media_type: "application/json",
+      presence: { state: "optional", evidence_ids: ["ev-route"] },
+      schema: { type: "object" },
+      serialization: { format: "json" },
+    }];
+    before.responses = [{
+      status: { kind: "exact", code: 200 },
+      content: [{ media_type: "application/json", schema: { type: "object" }, serialization: { format: "json" } }],
+      headers: [{ name: "X-Rate", schema: { type: "integer" } }],
+    }];
+    const after = structuredClone(before);
+    after.request_bodies[0]!.presence = { state: "required", evidence_ids: ["ev-route"] };
+    after.responses[0]!.headers![0]!.schema = { type: "string" };
+    after.security = { alternatives: [{ requirements: [{ scheme: "oauth", scopes: ["write", "read"] }] }] };
+
+    const result = compare([before], [after]);
+    expect(result.differences.map(({ kind }) => kind)).toEqual([
+      "request_body.changed",
+      "response.changed",
+      "security.changed",
+    ]);
+    expect(result.differences.map(({ subject }) => subject.fact_key)).toEqual([
+      '["request_body","endpoint-members","application/json"]',
+      '["response","endpoint-members","[\\"exact\\",200]"]',
+      '["security","endpoint-members"]',
+    ]);
+    expect(result.differences.every(({ compatibility }) => compatibility === "potentially_breaking")).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("evidence_ids");
+    expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
+  });
+
+  test("uses absence-unconfirmed for missing retained members under incomplete target coverage", () => {
+    const before = endpoint("endpoint-missing-members", "POST", "/pets");
+    before.parameters = [{ name: "q", in: "query", presence: { state: "optional", evidence_ids: ["ev-route"] }, schema: { type: "string" }, serialization: { style: "form" } }];
+    before.request_bodies = [{ media_type: "application/json", presence: { state: "optional", evidence_ids: ["ev-route"] }, schema: { type: "object" }, serialization: { format: "json" } }];
+    before.responses.push({ status: { kind: "exact", code: 400 }, content: [] });
+    const after = structuredClone(before);
+    after.parameters = [];
+    after.request_bodies = [];
+    after.responses = after.responses.filter(({ status }) => status.kind !== "exact" || status.code !== 400);
+
+    const absences = compare([before], [after], "incomplete").differences
+      .filter(({ kind }) => kind === "fact.absence_unconfirmed");
+    expect(absences).toHaveLength(3);
+    expect(absences.map(({ subject }) => subject.fact_kind)).toEqual(["parameter", "request_body", "response"]);
+    expect(absences.every(({ compatibility }) => compatibility === "unknown")).toBe(true);
+  });
+
+  test("compares component schemas with their complete canonical endpoint ownership union", () => {
+    const baseEndpoint = endpoint("endpoint-zeta", "GET", "/pets");
+    const targetEndpoint = endpoint("endpoint-alpha", "GET", "/animals");
+    const base = snapshot("snapshot-base", baseRevision, [baseEndpoint]);
+    const target = snapshot("snapshot-target", targetRevision, [targetEndpoint]);
+    base.endpoints[0]!.parameters = [{ name: "pet", in: "query", presence: { state: "optional", evidence_ids: ["ev-route"] }, schema: { $ref: "#/schemas/Pet" }, serialization: { style: "form" } }];
+    target.endpoints[0]!.responses = [{ status: { kind: "exact", code: 200 }, content: [{ media_type: "application/json", schema: { $ref: "#/schemas/Pet" }, serialization: { format: "json" } }] }];
+    base.schemas.Pet = { schema_id: "Pet", schema: { type: "object", required: ["name"], properties: { name: { type: "string" } } }, evidence_ids: ["ev-route"] };
+    target.schemas.Pet = { schema_id: "Pet", schema: { type: "object", required: ["age", "name"], properties: { age: { type: "integer" }, name: { type: "string" } } }, evidence_ids: ["ev-route"] };
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    const changed = result.differences.find(({ kind }) => kind === "schema.changed");
+    expect(changed).toMatchObject({
+      compatibility: "potentially_breaking",
+      subject: {
+        component_id: "Pet",
+        affected_endpoint_ids: ["endpoint-alpha", "endpoint-zeta"],
+        fact_kind: "schema",
+        fact_key: '["schema","Pet"]',
+      },
+    });
+    expect(JSON.stringify(changed)).not.toContain("evidence_ids");
+  });
+
+  test("projects coverage and diagnostics without volatile IDs, evidence, or wording", () => {
+    const base = snapshot("snapshot-base", baseRevision, []);
+    const target = snapshot("snapshot-target", targetRevision, [], "incomplete");
+    const first = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    target.diagnostics[0]!.diagnostic_id = "diag-renamed";
+    target.diagnostics[0]!.message = "different private wording";
+    target.coverage.diagnostic_ids = ["diag-renamed"];
+    const second = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+
+    expect(second).toEqual(first);
+    expect(first.differences.map(({ kind }) => kind)).toEqual([
+      "analysis.coverage_changed",
+      "analysis.diagnostic_added",
+    ]);
+    expect(first.differences.map(({ subject }) => subject.fact_key)).toEqual([
+      '["coverage"]',
+      '["diagnostic","fixture.incomplete",[]]',
+    ]);
+    expect(JSON.stringify(first)).not.toContain("diagnostic_id");
+    expect(JSON.stringify(first)).not.toContain("wording");
+  });
+
+  test("covers member and schema additions, removals, and incomplete schema absence", () => {
+    const baseEndpoint = endpoint("endpoint-taxonomy", "POST", "/pets");
+    baseEndpoint.parameters = [{ name: "old", in: "query", presence: { state: "optional", evidence_ids: ["ev-route"] }, schema: { type: "string" }, serialization: { style: "form" } }];
+    baseEndpoint.request_bodies = [{ media_type: "text/plain", presence: { state: "optional", evidence_ids: ["ev-route"] }, schema: { type: "string" }, serialization: { format: "text" } }];
+    baseEndpoint.responses.push({ status: { kind: "exact", code: 400 }, content: [] });
+    const targetEndpoint = structuredClone(baseEndpoint);
+    targetEndpoint.parameters = [{ name: "new", in: "query", presence: { state: "optional", evidence_ids: ["ev-route"] }, schema: { type: "string" }, serialization: { style: "form" } }];
+    targetEndpoint.request_bodies = [{ media_type: "application/json", presence: { state: "unknown", evidence_ids: ["ev-route"] }, schema: { type: "object" }, serialization: { format: "json" } }];
+    targetEndpoint.responses = targetEndpoint.responses.filter(({ status }) => status.kind !== "exact" || status.code !== 400);
+    targetEndpoint.responses.push({ status: { kind: "exact", code: 201 }, content: [] });
+    const base = snapshot("snapshot-base", baseRevision, [baseEndpoint]);
+    const target = snapshot("snapshot-target", targetRevision, [targetEndpoint]);
+    base.schemas.Old = { schema_id: "Old", schema: { type: "string" }, evidence_ids: ["ev-route"] };
+    target.schemas.New = { schema_id: "New", schema: { type: "string" }, evidence_ids: ["ev-route"] };
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    expect(result.differences.map(({ kind }) => kind)).toEqual([
+      "schema.added",
+      "schema.removed",
+      "parameter.added",
+      "parameter.removed",
+      "request_body.added",
+      "request_body.removed",
+      "response.added",
+      "response.removed",
+    ]);
+    expect(result.differences.map(({ compatibility }) => compatibility)).toEqual([
+      "non_breaking",
+      "potentially_breaking",
+      "non_breaking",
+      "potentially_breaking",
+      "unknown",
+      "potentially_breaking",
+      "potentially_breaking",
+      "potentially_breaking",
+    ]);
+
+    target.coverage = {
+      status: "incomplete",
+      analyzed_roots: ["src"],
+      unresolved_roots: ["src/legacy"],
+      reason: "partial",
+      diagnostic_ids: ["diag-partial"],
+    };
+    target.diagnostics = [{
+      diagnostic_id: "diag-partial",
+      code: "fixture.partial",
+      severity: "warning",
+      message: "partial",
+      affected_endpoint_ids: [],
+      evidence_ids: [],
+    }];
+    const partial = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    const oldSchema = partial.differences.find(({ subject }) => subject.fact_key === '["schema","Old"]');
+    expect(oldSchema).toMatchObject({ kind: "fact.absence_unconfirmed", compatibility: "unknown" });
+  });
+
+  test.each([
+    ["request body", (candidate: Endpoint) => {
+      candidate.request_bodies = ["first", "second"].map((format) => ({
+        media_type: "application/json",
+        presence: { state: "optional" as const, evidence_ids: ["ev-route"] },
+        schema: { type: "string" as const },
+        serialization: { format },
+      }));
+    }, "/target_snapshot/endpoints/0/request_bodies/1"],
+    ["response content", (candidate: Endpoint) => {
+      candidate.responses = ["first", "second"].map((format) => ({
+        status: { kind: "exact" as const, code: 200 },
+        content: [{ media_type: "application/json", schema: { type: "string" as const }, serialization: { format } }],
+      }));
+    }, "/target_snapshot/endpoints/0/responses/1/content/0"],
+    ["ASCII-normalized response header", (candidate: Endpoint) => {
+      candidate.responses = [
+        { status: { kind: "exact", code: 200 }, content: [], headers: [{ name: "X-Rate", schema: { type: "integer" } }] },
+        { status: { kind: "exact", code: 200 }, content: [], headers: [{ name: "x-rate", schema: { type: "string" } }] },
+      ];
+    }, "/target_snapshot/endpoints/0/responses/1/headers/0"],
+  ] as const)("rejects a duplicate %s comparison key safely", (_label, mutate, expectedPath) => {
+    const duplicate = endpoint("endpoint-duplicate-member", "GET", "/pets");
+    mutate(duplicate);
+    let thrown: unknown;
+    try {
+      compare([], [duplicate]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      code: "UPDATE_COMPARISON_INCOMPATIBLE",
+      issues: [{ path: expectedPath, code: "semantic.duplicate_comparison_key" }],
+    });
+    expect(JSON.stringify(thrown)).not.toContain("first");
+    expect(JSON.stringify(thrown)).not.toContain("second");
+  });
+
+  test("rejects duplicate projected diagnostic keys safely", () => {
+    const target = snapshot("snapshot-target", targetRevision, []);
+    target.diagnostics = ["private one", "private two"].map((message, index) => ({
+      diagnostic_id: `diag-${index}`,
+      code: "duplicate.code",
+      severity: index === 0 ? "warning" as const : "error" as const,
+      message,
+      affected_endpoint_ids: [],
+      evidence_ids: [],
+    }));
+    target.coverage.diagnostic_ids = ["diag-0", "diag-1"];
+
+    let thrown: unknown;
+    try {
+      compareContractSnapshots({
+        base_snapshot: snapshot("snapshot-base", baseRevision, []),
+        target_snapshot: target,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      code: "UPDATE_COMPARISON_INCOMPATIBLE",
+      issues: [{ path: "/target_snapshot/diagnostics/1", code: "semantic.duplicate_comparison_key" }],
+    });
+    expect(JSON.stringify(thrown)).not.toContain("private one");
+    expect(JSON.stringify(thrown)).not.toContain("duplicate.code");
+  });
+
+  test("diagnostic severity changes are a projected resolution and addition", () => {
+    const base = snapshot("snapshot-base", baseRevision, []);
+    const target = snapshot("snapshot-target", targetRevision, []);
+    base.diagnostics = [{ diagnostic_id: "base-diag", code: "contract.warning", severity: "warning", message: "old", affected_endpoint_ids: [], evidence_ids: [] }];
+    target.diagnostics = [{ diagnostic_id: "target-diag", code: "contract.warning", severity: "error", message: "new", affected_endpoint_ids: [], evidence_ids: [] }];
+    base.coverage.diagnostic_ids = ["base-diag"];
+    target.coverage.diagnostic_ids = ["target-diag"];
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    expect(result.differences.map(({ kind }) => kind)).toEqual([
+      "analysis.diagnostic_added",
+      "analysis.diagnostic_resolved",
+    ]);
+    expect(new Set(result.differences.map(({ difference_id }) => difference_id)).size).toBe(2);
+    expect(new Set(result.differences.map(({ subject, kind }) => JSON.stringify([kind, subject]))).size).toBe(2);
+  });
+
+  test("canonical set permutations and volatile snapshot bookkeeping preserve bytes and IDs", () => {
+    const before = endpoint("endpoint-canonical", "GET", "/pets");
+    const after = structuredClone(before);
+    after.security = { alternatives: [
+      { requirements: [{ scheme: "oauth", scopes: ["write", "read"] }] },
+      { requirements: [{ scheme: "api-key", scopes: [] }] },
+    ] };
+    const firstBase = snapshot("snapshot-base", baseRevision, [before]);
+    const firstTarget = snapshot("snapshot-target", targetRevision, [after]);
+    const secondBase = structuredClone(firstBase);
+    const secondTarget = structuredClone(firstTarget);
+    secondBase.created_at = "2030-01-01T00:00:00.000Z";
+    secondTarget.created_at = "2031-01-01T00:00:00.000Z";
+    secondBase.evidence[0]!.location = { path: "src/renamed.ts", line: 99 };
+    secondTarget.evidence[0]!.location = { path: "src/other.ts", line: 101 };
+    secondTarget.endpoints[0]!.security.alternatives.reverse();
+    secondTarget.endpoints[0]!.security.alternatives[1]!.requirements[0]!.scopes.reverse();
+
+    const first = compareContractSnapshots({ base_snapshot: firstBase, target_snapshot: firstTarget });
+    const second = compareContractSnapshots({ base_snapshot: secondBase, target_snapshot: secondTarget });
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    expect(parseContractDifferenceSet(second)).toMatchObject({ ok: true });
+
+    secondTarget.endpoints[0]!.security.alternatives[0]!.requirements[0]!.scopes.push("admin");
+    const changed = compareContractSnapshots({ base_snapshot: secondBase, target_snapshot: secondTarget });
+    expect(changed.differences[0]!.difference_id).not.toBe(first.differences[0]!.difference_id);
+  });
+
   test("emits deterministic endpoint additions and confirmed removals", () => {
     const added = endpoint("endpoint-add", "POST", "/pets");
     const removed = endpoint("endpoint-remove", "DELETE", "/pets/:petId");
@@ -139,8 +583,12 @@ describe("D07 endpoint contract differences", () => {
 
     expect(result.comparison_status).toBe("incomplete");
     expect(result.incomplete_reason_codes).toEqual(["target_coverage_incomplete"]);
-    expect(result.differences.map(({ kind }) => kind)).toEqual(["endpoint.absence_unconfirmed"]);
-    expect(result.differences[0]).toMatchObject({
+    expect(result.differences.map(({ kind }) => kind)).toEqual([
+      "analysis.coverage_changed",
+      "analysis.diagnostic_added",
+      "endpoint.absence_unconfirmed",
+    ]);
+    expect(result.differences.find(({ kind }) => kind === "endpoint.absence_unconfirmed")).toMatchObject({
       compatibility: "unknown",
       subject: {
         endpoint_id: "endpoint-old",
@@ -160,7 +608,9 @@ describe("D07 endpoint contract differences", () => {
       "endpoint.added",
       "endpoint.removed",
     ]);
-    expect(compare([before], [after], "incomplete").differences.map(({ kind }) => kind)).toEqual([
+    expect(compare([before], [after], "incomplete").differences
+      .map(({ kind }) => kind)
+      .filter((kind) => kind.startsWith("endpoint."))).toEqual([
       "endpoint.added",
       "endpoint.absence_unconfirmed",
     ]);
@@ -187,12 +637,14 @@ describe("D07 endpoint contract differences", () => {
     expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
   });
 
-  test("does not emit a whole-endpoint change for retained endpoint member changes", () => {
+  test("emits the narrow retained member change instead of a whole-endpoint blob", () => {
     const before = endpoint("endpoint-pet", "GET", "/pets/:petId");
     const after = structuredClone(before);
     after.security = { alternatives: [{ requirements: [{ scheme: "oauth", scopes: ["read"] }] }] };
 
-    expect(compare([before], [after]).differences).toEqual([]);
+    expect(compare([before], [after]).differences).toEqual([
+      expect.objectContaining({ kind: "security.changed", compatibility: "potentially_breaking" }),
+    ]);
   });
 
   test("groups same-status response records into one canonical semantic projection", () => {

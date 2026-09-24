@@ -23,6 +23,7 @@ import {
   type DifferenceIncompleteReason,
   type DifferenceKind,
 } from "./types.js";
+import { buildEndpointOwnershipIndex } from "./planner.js";
 
 type ComparisonInput = {
   base_snapshot: ContractSnapshot;
@@ -202,6 +203,17 @@ const duplicateComparisonKeyIssues = (snapshot: ContractSnapshot, prefix: string
       headersByStatus.set(key, headerKeys);
     });
   });
+  const diagnosticKeys = new Set<string>();
+  snapshot.diagnostics.forEach((diagnostic, index) => {
+    const affectedEndpointIds = canonicalStrings(diagnostic.affected_endpoint_ids);
+    const key = canonicalJson([diagnostic.code, affectedEndpointIds]);
+    if (diagnosticKeys.has(key)) issues.push(issue(
+      `${prefix}/diagnostics/${index}`,
+      "semantic.duplicate_comparison_key",
+      "duplicate diagnostic comparison key",
+    ));
+    diagnosticKeys.add(key);
+  });
   return issues;
 };
 
@@ -320,6 +332,183 @@ const endpointProjection = (endpoint: Endpoint): JsonValue => {
     responses,
     security: { alternatives },
   } as JsonValue;
+};
+
+type Parameter = Endpoint["parameters"][number];
+type RequestBody = Endpoint["request_bodies"][number];
+type Response = Endpoint["responses"][number];
+
+const parameterKey = (parameter: Parameter): string => canonicalJson([parameter.in, parameter.name]);
+const parameterProjection = (parameter: Parameter): JsonValue => ({
+  name: parameter.name,
+  in: parameter.in,
+  presence: presenceProjection(parameter.presence),
+  schema: canonicalSchema(parameter.schema),
+  serialization: structuredClone(parameter.serialization),
+});
+
+const bodyProjection = (body: RequestBody): JsonValue => ({
+  media_type: body.media_type,
+  presence: presenceProjection(body.presence),
+  schema: canonicalSchema(body.schema),
+  serialization: structuredClone(body.serialization),
+});
+
+type ResponseGroup = {
+  status: Response["status"];
+  content: Array<{ media_type: string; schema: any; serialization: Record<string, unknown> }>;
+  headers: Array<{ name: string; schema: any }>;
+};
+
+const responseGroups = (endpoint: Endpoint): Map<string, ResponseGroup> => {
+  const groups = new Map<string, ResponseGroup>();
+  for (const response of endpoint.responses) {
+    const key = statusKey(response.status);
+    const group = groups.get(key) ?? {
+      status: structuredClone(response.status),
+      content: [],
+      headers: [],
+    };
+    group.content.push(...response.content.map((content) => ({
+      media_type: content.media_type,
+      schema: canonicalSchema(content.schema),
+      serialization: structuredClone(content.serialization),
+    })));
+    group.headers.push(...(response.headers ?? []).map((header) => ({
+      name: asciiLower(header.name),
+      schema: canonicalSchema(header.schema),
+    })));
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    group.content.sort((left, right) => compareUtf8(left.media_type, right.media_type));
+    group.headers.sort((left, right) => compareUtf8(left.name, right.name));
+  }
+  return groups;
+};
+
+const responseProjection = (group: ResponseGroup): JsonValue => ({
+  status: structuredClone(group.status),
+  content: group.content,
+  ...(group.headers.length === 0 ? {} : { headers: group.headers }),
+}) as unknown as JsonValue;
+
+const securityProjection = (endpoint: Endpoint): JsonValue =>
+  (endpointProjection(endpoint) as Record<string, JsonValue>).security!;
+
+const presenceState = (fact: Parameter | RequestBody): string => fact.presence.state;
+
+const changedMemberCompatibility = (
+  before: Parameter | RequestBody,
+  after: Parameter | RequestBody,
+): CompatibilityLabel => {
+  const beforeState = presenceState(before);
+  const afterState = presenceState(after);
+  const otherwiseEqual = canonicalJson({
+    schema: canonicalSchema(before.schema),
+    serialization: before.serialization,
+  }) === canonicalJson({
+    schema: canonicalSchema(after.schema),
+    serialization: after.serialization,
+  });
+  if (!otherwiseEqual) return "potentially_breaking";
+  if (beforeState === "unknown" || afterState === "unknown") return "unknown";
+  if (beforeState === "optional" && (afterState === "required" || afterState === "conditional")) {
+    return "potentially_breaking";
+  }
+  if ((beforeState === "required" || beforeState === "conditional") && afterState === "optional") {
+    return "non_breaking";
+  }
+  return "potentially_breaking";
+};
+
+const addedMemberCompatibility = (fact: Parameter | RequestBody): CompatibilityLabel => {
+  if (fact.presence.state === "optional") return "non_breaking";
+  if (fact.presence.state === "unknown") return "unknown";
+  return "potentially_breaking";
+};
+
+const factSubject = (
+  serviceId: string,
+  endpointId: string,
+  factKind: "parameter" | "request_body" | "response" | "security",
+  tail: JsonValue[] = [],
+): DifferenceSubject => ({
+  service_id: serviceId,
+  endpoint_id: endpointId,
+  fact_kind: factKind,
+  fact_key: canonicalJson([factKind, endpointId, ...tail]),
+});
+
+const coverageProjection = (coverage: ContractSnapshot["coverage"]): JsonValue => coverage.status === "complete"
+  ? { status: "complete", analyzed_roots: canonicalStrings(coverage.analyzed_roots) }
+  : {
+      status: "incomplete",
+      analyzed_roots: canonicalStrings(coverage.analyzed_roots),
+      unresolved_roots: canonicalStrings(coverage.unresolved_roots),
+      reason: coverage.reason,
+    };
+
+const diagnosticProjection = (diagnostic: ContractSnapshot["diagnostics"][number]): JsonValue => ({
+  code: diagnostic.code,
+  severity: diagnostic.severity,
+  affected_endpoint_ids: canonicalStrings(diagnostic.affected_endpoint_ids),
+});
+
+const diagnosticKey = (diagnostic: ContractSnapshot["diagnostics"][number]): string =>
+  canonicalJson([diagnostic.code, canonicalStrings(diagnostic.affected_endpoint_ids)]);
+
+const addEndpointMemberDrafts = (
+  drafts: DifferenceDraft[],
+  serviceId: string,
+  before: Endpoint,
+  after: Endpoint,
+  targetIncomplete: boolean,
+): void => {
+  const baseParameters = new Map(before.parameters.map((fact) => [parameterKey(fact), fact]));
+  const targetParameters = new Map(after.parameters.map((fact) => [parameterKey(fact), fact]));
+  for (const key of canonicalStrings([...baseParameters.keys(), ...targetParameters.keys()])) {
+    const oldFact = baseParameters.get(key);
+    const newFact = targetParameters.get(key);
+    const fact = oldFact ?? newFact!;
+    const subject = factSubject(serviceId, before.endpoint_id, "parameter", [fact.in, fact.name]);
+    if (oldFact === undefined) drafts.push({ kind: "parameter.added", compatibility: addedMemberCompatibility(newFact!), subject, after: parameterProjection(newFact!) });
+    else if (newFact === undefined) drafts.push({ kind: targetIncomplete ? "fact.absence_unconfirmed" : "parameter.removed", compatibility: targetIncomplete ? "unknown" : "potentially_breaking", subject, before: parameterProjection(oldFact) });
+    else if (canonicalJson(parameterProjection(oldFact)) !== canonicalJson(parameterProjection(newFact))) drafts.push({ kind: "parameter.changed", compatibility: changedMemberCompatibility(oldFact, newFact), subject, before: parameterProjection(oldFact), after: parameterProjection(newFact) });
+  }
+
+  const baseBodies = new Map(before.request_bodies.map((fact) => [fact.media_type, fact]));
+  const targetBodies = new Map(after.request_bodies.map((fact) => [fact.media_type, fact]));
+  for (const key of canonicalStrings([...baseBodies.keys(), ...targetBodies.keys()])) {
+    const oldFact = baseBodies.get(key);
+    const newFact = targetBodies.get(key);
+    const fact = oldFact ?? newFact!;
+    const subject = factSubject(serviceId, before.endpoint_id, "request_body", [fact.media_type]);
+    if (oldFact === undefined) drafts.push({ kind: "request_body.added", compatibility: addedMemberCompatibility(newFact!), subject, after: bodyProjection(newFact!) });
+    else if (newFact === undefined) drafts.push({ kind: targetIncomplete ? "fact.absence_unconfirmed" : "request_body.removed", compatibility: targetIncomplete ? "unknown" : "potentially_breaking", subject, before: bodyProjection(oldFact) });
+    else if (canonicalJson(bodyProjection(oldFact)) !== canonicalJson(bodyProjection(newFact))) drafts.push({ kind: "request_body.changed", compatibility: changedMemberCompatibility(oldFact, newFact), subject, before: bodyProjection(oldFact), after: bodyProjection(newFact) });
+  }
+
+  const baseResponses = responseGroups(before);
+  const targetResponses = responseGroups(after);
+  for (const key of canonicalStrings([...baseResponses.keys(), ...targetResponses.keys()])) {
+    const oldFact = baseResponses.get(key);
+    const newFact = targetResponses.get(key);
+    const subject = factSubject(serviceId, before.endpoint_id, "response", [key]);
+    if (oldFact === undefined) drafts.push({ kind: "response.added", compatibility: "potentially_breaking", subject, after: responseProjection(newFact!) });
+    else if (newFact === undefined) drafts.push({ kind: targetIncomplete ? "fact.absence_unconfirmed" : "response.removed", compatibility: targetIncomplete ? "unknown" : "potentially_breaking", subject, before: responseProjection(oldFact) });
+    else if (canonicalJson(responseProjection(oldFact)) !== canonicalJson(responseProjection(newFact))) drafts.push({ kind: "response.changed", compatibility: "potentially_breaking", subject, before: responseProjection(oldFact), after: responseProjection(newFact) });
+  }
+
+  const oldSecurity = securityProjection(before);
+  const newSecurity = securityProjection(after);
+  if (canonicalJson(oldSecurity) !== canonicalJson(newSecurity)) drafts.push({
+    kind: "security.changed",
+    compatibility: "potentially_breaking",
+    subject: factSubject(serviceId, before.endpoint_id, "security"),
+    before: oldSecurity,
+    after: newSecurity,
+  });
 };
 
 const routeIdentityKey = (endpoint: Endpoint): string => canonicalJson({
@@ -498,6 +687,117 @@ export const compareContractSnapshots = (value: unknown): ContractDifferenceSet 
           after: afterNames,
         });
       }
+      addEndpointMemberDrafts(
+        drafts,
+        base.service.service_id,
+        before,
+        after,
+        target.coverage.status === "incomplete",
+      );
+    }
+  }
+
+  const baseOwnership = buildEndpointOwnershipIndex(base);
+  const targetOwnership = buildEndpointOwnershipIndex(target);
+  const schemaIds = canonicalStrings([...Object.keys(base.schemas), ...Object.keys(target.schemas)]);
+  for (const schemaId of schemaIds) {
+    const before = base.schemas[schemaId];
+    const after = target.schemas[schemaId];
+    const affectedEndpointIds = canonicalStrings([
+      ...(baseOwnership.schemaOwners.get(schemaId) ?? []),
+      ...(targetOwnership.schemaOwners.get(schemaId) ?? []),
+    ]);
+    const subject: DifferenceSubject = {
+      service_id: base.service.service_id,
+      component_id: schemaId,
+      ...(affectedEndpointIds.length === 0 ? {} : { affected_endpoint_ids: affectedEndpointIds }),
+      fact_kind: "schema",
+      fact_key: canonicalJson(["schema", schemaId]),
+    };
+    const beforeProjection = before === undefined ? undefined : {
+      schema_id: schemaId,
+      schema: canonicalSchema(before.schema),
+    } as JsonValue;
+    const afterProjection = after === undefined ? undefined : {
+      schema_id: schemaId,
+      schema: canonicalSchema(after.schema),
+    } as JsonValue;
+    if (before === undefined && afterProjection !== undefined) drafts.push({
+      kind: "schema.added",
+      compatibility: "non_breaking",
+      subject,
+      after: afterProjection,
+    });
+    else if (beforeProjection !== undefined && after === undefined) drafts.push({
+      kind: target.coverage.status === "incomplete" ? "fact.absence_unconfirmed" : "schema.removed",
+      compatibility: target.coverage.status === "incomplete" ? "unknown" : "potentially_breaking",
+      subject,
+      before: beforeProjection,
+    });
+    else if (beforeProjection !== undefined && afterProjection !== undefined
+      && canonicalJson(beforeProjection) !== canonicalJson(afterProjection)) drafts.push({
+      kind: "schema.changed",
+      compatibility: "potentially_breaking",
+      subject,
+      before: beforeProjection,
+      after: afterProjection,
+    });
+  }
+
+  const beforeCoverage = coverageProjection(base.coverage);
+  const afterCoverage = coverageProjection(target.coverage);
+  if (canonicalJson(beforeCoverage) !== canonicalJson(afterCoverage)) drafts.push({
+    kind: "analysis.coverage_changed",
+    compatibility: "unknown",
+    subject: {
+      service_id: base.service.service_id,
+      fact_kind: "coverage",
+      fact_key: canonicalJson(["coverage"]),
+    },
+    before: beforeCoverage,
+    after: afterCoverage,
+  });
+
+  const baseDiagnostics = new Map(base.diagnostics.map((diagnostic) => [diagnosticKey(diagnostic), diagnostic]));
+  const targetDiagnostics = new Map(target.diagnostics.map((diagnostic) => [diagnosticKey(diagnostic), diagnostic]));
+  for (const key of canonicalStrings([...baseDiagnostics.keys(), ...targetDiagnostics.keys()])) {
+    const before = baseDiagnostics.get(key);
+    const after = targetDiagnostics.get(key);
+    const sample = before ?? after!;
+    const affectedEndpointIds = canonicalStrings(sample.affected_endpoint_ids);
+    const subject: DifferenceSubject = {
+      service_id: base.service.service_id,
+      ...(affectedEndpointIds.length === 0 ? {} : { affected_endpoint_ids: affectedEndpointIds }),
+      fact_kind: "diagnostic",
+      fact_key: canonicalJson(["diagnostic", sample.code, affectedEndpointIds]),
+    };
+    const beforeProjection = before === undefined ? undefined : diagnosticProjection(before);
+    const afterProjection = after === undefined ? undefined : diagnosticProjection(after);
+    if (beforeProjection === undefined) drafts.push({
+      kind: "analysis.diagnostic_added",
+      compatibility: "unknown",
+      subject,
+      after: afterProjection!,
+    });
+    else if (afterProjection === undefined) drafts.push({
+      kind: "analysis.diagnostic_resolved",
+      compatibility: "unknown",
+      subject,
+      before: beforeProjection,
+    });
+    else if (canonicalJson(beforeProjection) !== canonicalJson(afterProjection)) {
+      drafts.push({
+        kind: "analysis.diagnostic_added",
+        compatibility: "unknown",
+        subject,
+        after: afterProjection,
+      });
+      drafts.push({
+        kind: "analysis.diagnostic_resolved",
+        compatibility: "unknown",
+        subject,
+        before: beforeProjection,
+      });
     }
   }
 
