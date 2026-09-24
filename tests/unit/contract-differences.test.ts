@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   deriveEndpointIdentity,
   parseContractSnapshot,
+  type Claim,
   type ContractSnapshot,
   type Endpoint,
 } from "../../packages/ir/src/index.js";
@@ -13,6 +14,36 @@ import {
 
 const baseRevision = "a".repeat(40);
 const targetRevision = "b".repeat(40);
+
+type ClaimCondition = NonNullable<Claim["condition"]>;
+
+const condition = (field: string, value: string, paths = [`/${field}`]): ClaimCondition => ({
+  kind: "predicate",
+  operator: "equals",
+  field,
+  value,
+  affected_schema_paths: paths,
+});
+
+const claim = (
+  claim_id: string,
+  value: unknown,
+  claimCondition?: ClaimCondition,
+  verification: Claim["verification"] = "declared",
+  predicate = "request.rule",
+): Claim => ({
+  claim_id,
+  subject: {
+    service_id: "pets",
+    endpoint_id: "endpoint-claims",
+    schema_pointer: "/request/body",
+  },
+  predicate,
+  value: value as Claim["value"],
+  verification,
+  ...(claimCondition === undefined ? {} : { condition: claimCondition }),
+  evidence_ids: ["ev-route"],
+});
 
 const endpoint = (
   endpoint_id: string,
@@ -800,5 +831,245 @@ describe("D07 endpoint contract differences", () => {
     });
     expect(JSON.stringify(thrown)).not.toContain("private-value");
     expect(JSON.stringify(thrown)).not.toContain("filter");
+  });
+
+  test("aggregates condition additions, removals, and changes by owning claim tuple", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    const x = condition("mode", "x", ["/z", "/a"]);
+    const y = condition("mode", "y");
+    base.claims = [
+      claim("base-added", "add"),
+      claim("base-removed", "remove", x, "observed"),
+      claim("base-changed", { z: 1, a: 2 }, x, "inferred"),
+    ];
+    target.claims = [
+      claim("target-changed", { a: 2, z: 1 }, y, "inferred"),
+      claim("target-added", "add", x),
+      claim("target-removed", "remove", undefined, "observed"),
+    ];
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    const conditionDifferences = result.differences.filter(({ kind }) => kind.startsWith("condition."));
+    expect(conditionDifferences.map(({ kind }) => kind)).toEqual([
+      "condition.added",
+      "condition.removed",
+      "condition.changed",
+    ]);
+    expect(conditionDifferences.every(({ subject }) =>
+      subject.fact_kind === "condition_group"
+      && subject.fact_key === '["condition_group","claim","endpoint-claims","/request/body","request.rule"]')).toBe(true);
+    expect(conditionDifferences.map(({ compatibility }) => compatibility)).toEqual([
+      "potentially_breaking",
+      "unknown",
+      "potentially_breaking",
+    ]);
+    expect(conditionDifferences[0]).toMatchObject({
+      before: [],
+      after: [{ value: "add", verification: "declared", condition: { value: "x" } }],
+    });
+    expect(conditionDifferences[1]).toMatchObject({
+      before: [{ value: "remove", verification: "observed", condition: { value: "x" } }],
+      after: [],
+    });
+    expect(conditionDifferences[2]).toMatchObject({
+      before: [{ value: { a: 2, z: 1 }, verification: "inferred", condition: { value: "x" } }],
+      after: [{ value: { a: 2, z: 1 }, verification: "inferred", condition: { value: "y" } }],
+    });
+    expect(new Set(conditionDifferences.map(({ difference_id }) => difference_id)).size).toBe(3);
+    expect(new Set(conditionDifferences.map(({ kind, subject }) => JSON.stringify([kind, subject]))).size).toBe(3);
+    expect(result.differences.some(({ kind }) => kind.startsWith("claim."))).toBe(false);
+    expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
+    expect(JSON.stringify(result)).not.toContain("claim_id");
+    expect(JSON.stringify(result)).not.toContain("evidence_ids");
+  });
+
+  test("preserves value partitions when conditions are reassigned", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const x = condition("mode", "x");
+    const y = condition("mode", "y");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = [claim("base-a", "A", x), claim("base-b", "B", y)];
+    target.claims = [claim("target-a", "A", y), claim("target-b", "B", x)];
+
+    const first = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    const changed = first.differences.find(({ kind }) => kind === "condition.changed");
+    expect(first.differences).toHaveLength(1);
+    expect(changed).toMatchObject({
+      compatibility: "potentially_breaking",
+      before: [
+        { value: "A", verification: "declared", condition: { value: "x" } },
+        { value: "B", verification: "declared", condition: { value: "y" } },
+      ],
+      after: [
+        { value: "B", verification: "declared", condition: { value: "x" } },
+        { value: "A", verification: "declared", condition: { value: "y" } },
+      ],
+    });
+    expect(JSON.stringify((changed as any).before)).not.toBe(JSON.stringify((changed as any).after));
+    expect(new Set((changed as any).before.map((assignment: any) => JSON.stringify(assignment.condition))))
+      .toEqual(new Set((changed as any).after.map((assignment: any) => JSON.stringify(assignment.condition))));
+
+    base.claims.reverse();
+    target.claims.reverse();
+    base.claims[0]!.claim_id = "volatile-base-id";
+    target.claims[0]!.claim_id = "volatile-target-id";
+    const permuted = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    expect(JSON.stringify(permuted)).toBe(JSON.stringify(first));
+  });
+
+  test("emits a new conditioned owner only as a grouped claim addition", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    target.claims = [claim("new-conditioned", "new", condition("mode", "strict"))];
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    expect(result.differences).toEqual([
+      expect.objectContaining({
+        kind: "claim.added",
+        compatibility: "unknown",
+        subject: expect.objectContaining({
+          endpoint_id: "endpoint-claims",
+          fact_kind: "claim",
+          fact_key: '["claim","endpoint-claims","/request/body","request.rule"]',
+        }),
+        after: [{
+          value: "new",
+          verification: "declared",
+          condition: expect.objectContaining({ value: "strict" }),
+        }],
+      }),
+    ]);
+    expect(result.differences.some(({ kind }) => kind === "condition.added")).toBe(false);
+    expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
+  });
+
+  test("does not pair claims across a reused endpoint ID with a new route identity", () => {
+    const beforeRoute = endpoint("endpoint-claims", "GET", "/pets");
+    const afterRoute = endpoint("endpoint-claims", "POST", "/animals");
+    const base = snapshot("snapshot-base", baseRevision, [beforeRoute]);
+    const target = snapshot("snapshot-target", targetRevision, [afterRoute]);
+    base.claims = [claim("old-route-claim", "old")];
+    target.claims = [claim("new-route-claim", "new")];
+
+    const claimDifferences = compareContractSnapshots({ base_snapshot: base, target_snapshot: target })
+      .differences.filter(({ subject }) => subject.fact_kind === "claim");
+    expect(claimDifferences.map(({ kind }) => kind)).toEqual(["claim.added", "claim.removed"]);
+    expect(claimDifferences.some(({ kind }) => kind === "claim.changed")).toBe(false);
+  });
+
+  test("uses unconfirmed absence for a missing claim under incomplete target coverage", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route], "incomplete");
+    base.claims = [claim("removed-claim", "old")];
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    const missing = result.differences.find(({ subject }) => subject.fact_kind === "claim");
+    expect(missing).toMatchObject({
+      kind: "fact.absence_unconfirmed",
+      compatibility: "unknown",
+      subject: {
+        endpoint_id: "endpoint-claims",
+        fact_kind: "claim",
+        fact_key: '["claim","endpoint-claims","/request/body","request.rule"]',
+      },
+    });
+    expect(result.differences.some(({ kind }) => kind === "claim.removed")).toBe(false);
+  });
+
+  test("honors claim multiplicity before collapsing safe grouped projections", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = [claim("duplicate-one", "same"), claim("duplicate-two", "same")];
+    target.claims = [claim("duplicate-target", "same")];
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    expect(result.differences).toEqual([
+      expect.objectContaining({
+        kind: "claim.removed",
+        compatibility: "unknown",
+        before: [{ value: "same", verification: "declared" }],
+      }),
+    ]);
+    expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
+  });
+
+  test("ignores claim IDs, evidence details, reviews, and eligibility records", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = [claim("base-claim", "old")];
+    target.claims = [claim("target-claim", "new")];
+    const first = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+
+    const decoratedBase = structuredClone(base);
+    const decoratedTarget = structuredClone(target);
+    decoratedBase.claims[0]!.claim_id = "decorated-base-claim";
+    decoratedTarget.claims[0]!.claim_id = "decorated-target-claim";
+    decoratedBase.evidence[0]!.location = { path: "src/private-base.ts", line: 10 };
+    decoratedTarget.evidence[0]!.location = { path: "src/private-target.ts", line: 20 };
+    decoratedBase.editorial_reviews = [{
+      review_id: "review-base",
+      claim_id: "decorated-base-claim",
+      state: "rejected",
+      reviewer_id: "reviewer-base",
+      reviewed_at: "2026-09-24T09:00:00.000Z",
+      explanation: "private base explanation",
+    }];
+    decoratedTarget.editorial_reviews = [{
+      review_id: "review-target",
+      claim_id: "decorated-target-claim",
+      state: "accepted",
+      reviewer_id: "reviewer-target",
+      reviewed_at: "2026-09-24T10:00:00.000Z",
+      explanation: "private target explanation",
+    }];
+    decoratedBase.export_eligibility = [{
+      eligibility_id: "eligibility-base",
+      claim_id: "decorated-base-claim",
+      status: "ineligible",
+      scope: { service_id: "pets", snapshot_id: "snapshot-base", endpoint_ids: ["endpoint-claims"] },
+      policy_version: "base-policy",
+      evidence_fingerprint: "base-fingerprint",
+      reason: "private base reason",
+    }];
+    decoratedTarget.export_eligibility = [{
+      eligibility_id: "eligibility-target",
+      claim_id: "decorated-target-claim",
+      status: "ineligible",
+      scope: { service_id: "pets", snapshot_id: "snapshot-target", endpoint_ids: ["endpoint-claims"] },
+      policy_version: "target-policy",
+      evidence_fingerprint: "target-fingerprint",
+      reason: "private target reason",
+    }];
+
+    const decorated = compareContractSnapshots({
+      base_snapshot: decoratedBase,
+      target_snapshot: decoratedTarget,
+    });
+    expect(JSON.stringify(decorated)).toBe(JSON.stringify(first));
+    expect(JSON.stringify(decorated)).not.toContain("private");
+  });
+
+  test("labels only the exact reverse request presence claim transition non-breaking", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const transition = (beforeValue: string, afterValue: string) => {
+      const base = snapshot("snapshot-base", baseRevision, [route]);
+      const target = snapshot("snapshot-target", targetRevision, [route]);
+      base.claims = [claim("before", beforeValue, undefined, "declared", "request.field.presence")];
+      target.claims = [claim("after", afterValue, undefined, "declared", "request.field.presence")];
+      return compareContractSnapshots({ base_snapshot: base, target_snapshot: target }).differences
+        .find(({ kind }) => kind === "claim.changed");
+    };
+
+    expect(transition("optional", "required")).toMatchObject({ compatibility: "potentially_breaking" });
+    expect(transition("required", "optional")).toMatchObject({ compatibility: "non_breaking" });
+    expect(transition("conditional", "optional")).toMatchObject({ compatibility: "non_breaking" });
+    expect(transition("required", "conditional")).toMatchObject({ compatibility: "unknown" });
   });
 });

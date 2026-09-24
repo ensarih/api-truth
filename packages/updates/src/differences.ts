@@ -4,6 +4,7 @@ import {
   issue,
   parseContractSnapshot,
   type ContractSnapshot,
+  type Claim,
   type Endpoint,
   type JsonValue,
   type ValidationIssue,
@@ -12,6 +13,8 @@ import { canonicalJson, canonicalSha256Hex, compareUtf8 } from "./canonical.js";
 import { UpdateError, updateValidationError } from "./errors.js";
 import {
   parseContractDifferenceSet,
+  type ClaimConditionAssignment,
+  type ContractCondition,
   type ContractDifference,
   type ContractDifferenceSet,
   type DifferenceSubject,
@@ -240,8 +243,8 @@ const canonicalSchema = (value: unknown): any => {
   return schema;
 };
 
-const canonicalCondition = (value: any): any => {
-  const condition = structuredClone(value);
+const canonicalCondition = (value: ContractCondition): ContractCondition => {
+  const condition = structuredClone(value) as any;
   condition.affected_schema_paths = canonicalStrings(condition.affected_schema_paths);
   if (Array.isArray(condition.operands)) {
     condition.operands = condition.operands.map(canonicalCondition);
@@ -249,8 +252,11 @@ const canonicalCondition = (value: any): any => {
       condition.operands = uniqueSorted(condition.operands, canonicalJson);
     }
   }
-  return condition;
+  return JSON.parse(canonicalJson(condition)) as ContractCondition;
 };
+
+const canonicalJsonValue = (value: JsonValue): JsonValue =>
+  JSON.parse(canonicalJson(value)) as JsonValue;
 
 const presenceProjection = (presence: Endpoint["parameters"][number]["presence"]): any =>
   presence.state === "conditional"
@@ -439,6 +445,339 @@ const factSubject = (
   fact_kind: factKind,
   fact_key: canonicalJson([factKind, endpointId, ...tail]),
 });
+
+type ClaimMemberProjection = {
+  value: JsonValue;
+  verification: Claim["verification"];
+  condition?: ContractCondition;
+};
+
+type ClaimOwner = {
+  serviceId: string;
+  endpointId: string | null;
+  schemaPointer: string | null;
+  predicate: string;
+};
+
+type ClaimPartition = {
+  value: JsonValue;
+  verification: Claim["verification"];
+  members: Array<ContractCondition | null>;
+};
+
+const claimOwnerKey = (claim: Claim): string => canonicalJson([
+  claim.subject.service_id,
+  claim.subject.endpoint_id ?? null,
+  claim.subject.schema_pointer ?? null,
+  claim.predicate,
+]);
+
+const claimOwner = (claim: Claim): ClaimOwner => ({
+  serviceId: claim.subject.service_id,
+  endpointId: claim.subject.endpoint_id ?? null,
+  schemaPointer: claim.subject.schema_pointer ?? null,
+  predicate: claim.predicate,
+});
+
+const claimPartitionKey = (claim: Claim): string => canonicalJson({
+  value: claim.value,
+  verification: claim.verification,
+});
+
+const claimMemberProjection = (
+  value: JsonValue,
+  verification: Claim["verification"],
+  claimCondition: ContractCondition | null,
+): ClaimMemberProjection => ({
+  value: canonicalJsonValue(value),
+  verification,
+  ...(claimCondition === null ? {} : { condition: canonicalCondition(claimCondition) }),
+});
+
+const canonicalClaimMembers = (members: readonly ClaimMemberProjection[]): ClaimMemberProjection[] =>
+  uniqueSorted(members, canonicalJson);
+
+const canonicalAssignments = (
+  assignments: readonly ClaimConditionAssignment[],
+): ClaimConditionAssignment[] => uniqueSorted(assignments, canonicalJson);
+
+const conditionAssignment = (
+  partition: ClaimPartition,
+  claimCondition: ContractCondition,
+): ClaimConditionAssignment => ({
+  value: canonicalJsonValue(partition.value),
+  verification: partition.verification,
+  condition: canonicalCondition(claimCondition),
+});
+
+const buildClaimPartitions = (claims: readonly Claim[]): Map<string, ClaimPartition> => {
+  const partitions = new Map<string, ClaimPartition>();
+  for (const candidate of claims) {
+    const key = claimPartitionKey(candidate);
+    const partition = partitions.get(key) ?? {
+      value: canonicalJsonValue(candidate.value),
+      verification: candidate.verification,
+      members: [],
+    };
+    partition.members.push(candidate.condition === undefined ? null : canonicalCondition(candidate.condition));
+    partitions.set(key, partition);
+  }
+  for (const partition of partitions.values()) {
+    partition.members.sort((left, right) => compareUtf8(canonicalJson(left), canonicalJson(right)));
+  }
+  return partitions;
+};
+
+const cancelEqualConditions = (
+  before: readonly (ContractCondition | null)[],
+  after: readonly (ContractCondition | null)[],
+): { before: Array<ContractCondition | null>; after: Array<ContractCondition | null> } => {
+  const remainingBefore: Array<ContractCondition | null> = [];
+  const remainingAfter: Array<ContractCondition | null> = [];
+  let beforeIndex = 0;
+  let afterIndex = 0;
+  while (beforeIndex < before.length && afterIndex < after.length) {
+    const beforeKey = canonicalJson(before[beforeIndex]);
+    const afterKey = canonicalJson(after[afterIndex]);
+    const compared = compareUtf8(beforeKey, afterKey);
+    if (compared === 0) {
+      beforeIndex += 1;
+      afterIndex += 1;
+    } else if (compared < 0) {
+      remainingBefore.push(before[beforeIndex]!);
+      beforeIndex += 1;
+    } else {
+      remainingAfter.push(after[afterIndex]!);
+      afterIndex += 1;
+    }
+  }
+  remainingBefore.push(...before.slice(beforeIndex));
+  remainingAfter.push(...after.slice(afterIndex));
+  return { before: remainingBefore, after: remainingAfter };
+};
+
+const claimSubject = (owner: ClaimOwner): DifferenceSubject => ({
+  service_id: owner.serviceId,
+  ...(owner.endpointId === null ? {} : { endpoint_id: owner.endpointId }),
+  fact_kind: "claim",
+  fact_key: canonicalJson(["claim", owner.endpointId, owner.schemaPointer, owner.predicate]),
+});
+
+const conditionSubject = (owner: ClaimOwner): DifferenceSubject => ({
+  service_id: owner.serviceId,
+  ...(owner.endpointId === null ? {} : { endpoint_id: owner.endpointId }),
+  fact_kind: "condition_group",
+  fact_key: canonicalJson([
+    "condition_group",
+    "claim",
+    owner.endpointId,
+    owner.schemaPointer,
+    owner.predicate,
+  ]),
+});
+
+const projectClaimGroup = (claims: readonly Claim[]): ClaimMemberProjection[] =>
+  canonicalClaimMembers(claims.map((candidate) => claimMemberProjection(
+    candidate.value,
+    candidate.verification,
+    candidate.condition === undefined ? null : candidate.condition,
+  )));
+
+const changedClaimCompatibility = (
+  owner: ClaimOwner,
+  before: readonly ClaimMemberProjection[],
+  after: readonly ClaimMemberProjection[],
+): CompatibilityLabel => {
+  if (owner.predicate !== "request.field.presence" || before.length !== 1 || after.length !== 1) {
+    return "unknown";
+  }
+  const oldMember = before[0]!;
+  const newMember = after[0]!;
+  const otherwiseEqual = oldMember.verification === newMember.verification
+    && canonicalJson(oldMember.condition ?? null) === canonicalJson(newMember.condition ?? null);
+  if (!otherwiseEqual || typeof oldMember.value !== "string" || typeof newMember.value !== "string") {
+    return "unknown";
+  }
+  if (oldMember.value === "optional"
+    && (newMember.value === "required" || newMember.value === "conditional")) {
+    return "potentially_breaking";
+  }
+  if ((oldMember.value === "required" || oldMember.value === "conditional")
+    && newMember.value === "optional") {
+    return "non_breaking";
+  }
+  return "unknown";
+};
+
+const addClaimDrafts = (
+  drafts: DifferenceDraft[],
+  base: ContractSnapshot,
+  target: ContractSnapshot,
+): void => {
+  const baseEndpoints = new Map(base.endpoints.map((candidate) => [candidate.endpoint_id, candidate]));
+  const targetEndpoints = new Map(target.endpoints.map((candidate) => [candidate.endpoint_id, candidate]));
+  const discontinuousEndpointIds = new Set<string>();
+  for (const [endpointId, baseEndpoint] of baseEndpoints) {
+    const targetEndpoint = targetEndpoints.get(endpointId);
+    if (targetEndpoint !== undefined && routeIdentityKey(baseEndpoint) !== routeIdentityKey(targetEndpoint)) {
+      discontinuousEndpointIds.add(endpointId);
+    }
+  }
+  const groupClaims = (claims: readonly Claim[], side: "base" | "target"): Map<string, Claim[]> => {
+    const groups = new Map<string, Claim[]>();
+    for (const candidate of claims) {
+      const ownerKey = claimOwnerKey(candidate);
+      const key = candidate.subject.endpoint_id !== undefined
+        && discontinuousEndpointIds.has(candidate.subject.endpoint_id)
+        ? canonicalJson([ownerKey, side])
+        : ownerKey;
+      groups.set(key, [...(groups.get(key) ?? []), candidate]);
+    }
+    return groups;
+  };
+  const baseGroups = groupClaims(base.claims, "base");
+  const targetGroups = groupClaims(target.claims, "target");
+  for (const ownerKey of canonicalStrings([...baseGroups.keys(), ...targetGroups.keys()])) {
+    const oldClaims = baseGroups.get(ownerKey) ?? [];
+    const newClaims = targetGroups.get(ownerKey) ?? [];
+    const sample = oldClaims[0] ?? newClaims[0]!;
+    const owner = claimOwner(sample);
+    const subject = claimSubject(owner);
+    if (oldClaims.length === 0) {
+      drafts.push({
+        kind: "claim.added",
+        compatibility: "unknown",
+        subject,
+        after: projectClaimGroup(newClaims),
+      });
+      continue;
+    }
+    if (newClaims.length === 0) {
+      drafts.push({
+        kind: target.coverage.status === "incomplete" ? "fact.absence_unconfirmed" : "claim.removed",
+        compatibility: "unknown",
+        subject,
+        before: projectClaimGroup(oldClaims),
+      });
+      continue;
+    }
+
+    const basePartitions = buildClaimPartitions(oldClaims);
+    const targetPartitions = buildClaimPartitions(newClaims);
+    const addedAssignments: ClaimConditionAssignment[] = [];
+    const removedAssignments: ClaimConditionAssignment[] = [];
+    const changedBeforeAssignments: ClaimConditionAssignment[] = [];
+    const changedAfterAssignments: ClaimConditionAssignment[] = [];
+    const remainingBefore: ClaimMemberProjection[] = [];
+    const remainingAfter: ClaimMemberProjection[] = [];
+
+    for (const partitionKey of canonicalStrings([...basePartitions.keys(), ...targetPartitions.keys()])) {
+      const basePartition = basePartitions.get(partitionKey);
+      const targetPartition = targetPartitions.get(partitionKey);
+      const partition = basePartition ?? targetPartition!;
+      const cancelled = cancelEqualConditions(
+        basePartition?.members ?? [],
+        targetPartition?.members ?? [],
+      );
+      const baseNulls = cancelled.before.filter((candidate) => candidate === null);
+      const baseConditions = cancelled.before.filter((candidate) => candidate !== null);
+      const targetNulls = cancelled.after.filter((candidate) => candidate === null);
+      const targetConditions = cancelled.after.filter((candidate) => candidate !== null);
+
+      const addedCount = Math.min(baseNulls.length, targetConditions.length);
+      for (let index = 0; index < addedCount; index += 1) {
+        addedAssignments.push(conditionAssignment(partition, targetConditions[index]!));
+      }
+      baseNulls.splice(0, addedCount);
+      targetConditions.splice(0, addedCount);
+
+      const removedCount = Math.min(baseConditions.length, targetNulls.length);
+      for (let index = 0; index < removedCount; index += 1) {
+        removedAssignments.push(conditionAssignment(partition, baseConditions[index]!));
+      }
+      baseConditions.splice(0, removedCount);
+      targetNulls.splice(0, removedCount);
+
+      const changedCount = Math.min(baseConditions.length, targetConditions.length);
+      for (let index = 0; index < changedCount; index += 1) {
+        changedBeforeAssignments.push(conditionAssignment(partition, baseConditions[index]!));
+        changedAfterAssignments.push(conditionAssignment(partition, targetConditions[index]!));
+      }
+      baseConditions.splice(0, changedCount);
+      targetConditions.splice(0, changedCount);
+
+      remainingBefore.push(...baseNulls.map(() => claimMemberProjection(
+        partition.value,
+        partition.verification,
+        null,
+      )));
+      remainingBefore.push(...baseConditions.map((candidate) => claimMemberProjection(
+        partition.value,
+        partition.verification,
+        candidate,
+      )));
+      remainingAfter.push(...targetNulls.map(() => claimMemberProjection(
+        partition.value,
+        partition.verification,
+        null,
+      )));
+      remainingAfter.push(...targetConditions.map((candidate) => claimMemberProjection(
+        partition.value,
+        partition.verification,
+        candidate,
+      )));
+    }
+
+    const groupedAdded = canonicalAssignments(addedAssignments);
+    const groupedRemoved = canonicalAssignments(removedAssignments);
+    const groupedChangedBefore = canonicalAssignments(changedBeforeAssignments);
+    const groupedChangedAfter = canonicalAssignments(changedAfterAssignments);
+    const groupedSubject = conditionSubject(owner);
+    if (groupedAdded.length > 0) drafts.push({
+      kind: "condition.added",
+      compatibility: "potentially_breaking",
+      subject: groupedSubject,
+      before: [],
+      after: groupedAdded,
+    });
+    if (groupedRemoved.length > 0) drafts.push({
+      kind: "condition.removed",
+      compatibility: "unknown",
+      subject: groupedSubject,
+      before: groupedRemoved,
+      after: [],
+    });
+    if (groupedChangedBefore.length > 0) drafts.push({
+      kind: "condition.changed",
+      compatibility: "potentially_breaking",
+      subject: groupedSubject,
+      before: groupedChangedBefore,
+      after: groupedChangedAfter,
+    });
+
+    const oldProjection = canonicalClaimMembers(remainingBefore);
+    const newProjection = canonicalClaimMembers(remainingAfter);
+    if (oldProjection.length === 0 && newProjection.length > 0) drafts.push({
+      kind: "claim.added",
+      compatibility: "unknown",
+      subject,
+      after: newProjection,
+    });
+    else if (oldProjection.length > 0 && newProjection.length === 0) drafts.push({
+      kind: target.coverage.status === "incomplete" ? "fact.absence_unconfirmed" : "claim.removed",
+      compatibility: "unknown",
+      subject,
+      before: oldProjection,
+    });
+    else if (oldProjection.length > 0 && newProjection.length > 0) drafts.push({
+      kind: "claim.changed",
+      compatibility: changedClaimCompatibility(owner, oldProjection, newProjection),
+      subject,
+      before: oldProjection,
+      after: newProjection,
+    });
+  }
+};
 
 const coverageProjection = (coverage: ContractSnapshot["coverage"]): JsonValue => coverage.status === "complete"
   ? { status: "complete", analyzed_roots: canonicalStrings(coverage.analyzed_roots) }
@@ -742,6 +1081,10 @@ export const compareContractSnapshots = (value: unknown): ContractDifferenceSet 
       before: beforeProjection,
       after: afterProjection,
     });
+  }
+
+  if (base.identity_version === target.identity_version) {
+    addClaimDrafts(drafts, base, target);
   }
 
   const beforeCoverage = coverageProjection(base.coverage);
