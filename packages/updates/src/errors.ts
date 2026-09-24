@@ -29,7 +29,8 @@ const safePathSegments = new Set([
   "identity", "identity_version", "immutable_revision", "in", "incomplete_reason_codes", "ir_version",
   "kind", "name", "parameters", "plan", "plan_id", "predicate", "properties", "repository_id",
   "request_bodies", "responses", "schema", "schema_id", "schemas", "security", "service", "service_id",
-  "service_root", "severity", "snapshot_id", "source", "source_digest", "status", "subject", "target",
+  "root", "service_root", "severity", "snapshot_id", "source", "source_digest", "status", "subject", "target",
+  "target_snapshot",
   "target_revision", "target_source_digest", "update_plan_version", "value", "verification",
 ]);
 

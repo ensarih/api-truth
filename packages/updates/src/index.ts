@@ -55,3 +55,4 @@ export {
 } from "./schema.js";
 export { parseUpdatePlanningInput, validateUpdatePlanningInput } from "./input.js";
 export { planUpdate } from "./planner.js";
+export { compareContractSnapshots } from "./differences.js";
