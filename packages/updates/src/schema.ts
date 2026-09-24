@@ -702,31 +702,9 @@ const endpointSetsAreCanonical = (candidate: Record<string, any>): boolean => {
   }
   if (candidate.responses !== undefined) {
     if (!candidate.responses.every(responseSetsAreCanonical)) return false;
-    const responseKeys = candidate.responses.map((response: Record<string, any>) => canonicalJson([
-      responseStatusKey(response.status),
-      (response.content ?? []).map((item: Record<string, unknown>) => item.media_type),
-      (response.headers ?? []).map((item: Record<string, unknown>) => asciiLower(String(item.name))),
-      response,
-    ]));
+    const responseKeys = candidate.responses.map((response: Record<string, any>) =>
+      responseStatusKey(response.status));
     if (!canonicalArrayBy(responseKeys, (key: string) => key)) return false;
-    const contentByStatus = new Map<string, Set<string>>();
-    const headersByStatus = new Map<string, Set<string>>();
-    for (const response of candidate.responses) {
-      const status = responseStatusKey(response.status);
-      const contentKeys = contentByStatus.get(status) ?? new Set<string>();
-      const headerKeys = headersByStatus.get(status) ?? new Set<string>();
-      for (const content of response.content ?? []) {
-        if (contentKeys.has(content.media_type)) return false;
-        contentKeys.add(content.media_type);
-      }
-      for (const header of response.headers ?? []) {
-        const key = asciiLower(header.name);
-        if (headerKeys.has(key)) return false;
-        headerKeys.add(key);
-      }
-      contentByStatus.set(status, contentKeys);
-      headersByStatus.set(status, headerKeys);
-    }
   }
   return candidate.security === undefined || securitySetsAreCanonical(candidate.security);
 };
@@ -1029,6 +1007,15 @@ const validateDifferenceSetSemantics = (set: ContractDifferenceSet): ValidationI
 
   const seenIds = new Set<string>();
   const seenSubjects = new Set<string>();
+  const targetCoverageIncomplete = set.incomplete_reason_codes.includes("target_coverage_incomplete");
+  const confirmedRemovalKinds = new Set<ContractDifference["kind"]>([
+    "endpoint.removed",
+    "parameter.removed",
+    "request_body.removed",
+    "response.removed",
+    "schema.removed",
+    "claim.removed",
+  ]);
   set.differences.forEach((difference, index) => {
     const path = `/differences/${index}`;
     if (seenIds.has(difference.difference_id)) {
@@ -1042,6 +1029,21 @@ const validateDifferenceSetSemantics = (set: ContractDifferenceSet): ValidationI
     seenSubjects.add(subjectKey);
     if (difference.subject.service_id !== set.service_id) {
       issues.push(fixedIssue(`${path}/subject/service_id`, "semantic.scope_mismatch", "difference service does not match its set"));
+    }
+    if ((difference.kind === "endpoint.absence_unconfirmed"
+      || difference.kind === "fact.absence_unconfirmed") && !targetCoverageIncomplete) {
+      issues.push(fixedIssue(
+        `${path}/kind`,
+        "semantic.incomplete_absence",
+        "unconfirmed absence requires incomplete target coverage",
+      ));
+    }
+    if (confirmedRemovalKinds.has(difference.kind) && targetCoverageIncomplete) {
+      issues.push(fixedIssue(
+        `${path}/kind`,
+        "semantic.incomplete_absence",
+        "confirmed removal requires complete target coverage",
+      ));
     }
     const differenceIssues = validateDifferenceSemantics(difference, path);
     issues.push(...differenceIssues);

@@ -195,6 +195,49 @@ describe("D07 endpoint contract differences", () => {
     expect(compare([before], [after]).differences).toEqual([]);
   });
 
+  test("groups same-status response records into one canonical semantic projection", () => {
+    const merged = endpoint("endpoint-response", "GET", "/pets");
+    merged.responses = [{
+      status: { kind: "exact", code: 200 },
+      content: [
+        { media_type: "application/json", schema: { type: "object" }, serialization: { format: "json" } },
+        { media_type: "text/plain", schema: { type: "string" }, serialization: { format: "text" } },
+      ],
+      headers: [
+        { name: "X-Alpha", schema: { type: "string" } },
+        { name: "x-zeta", schema: { type: "integer" } },
+      ],
+    }];
+    const split = structuredClone(merged);
+    split.responses = [
+      {
+        status: { kind: "exact", code: 200 },
+        content: [merged.responses[0]!.content[1]!],
+        headers: [merged.responses[0]!.headers![1]!],
+      },
+      {
+        status: { kind: "exact", code: 200 },
+        content: [merged.responses[0]!.content[0]!],
+        headers: [merged.responses[0]!.headers![0]!],
+      },
+    ];
+
+    const mergedResult = compare([], [merged]);
+    const splitResult = compare([], [split]);
+    expect(splitResult).toEqual(mergedResult);
+    expect(splitResult.differences[0]!.difference_id).toBe(mergedResult.differences[0]!.difference_id);
+    expect(splitResult.difference_set_id).toBe(mergedResult.difference_set_id);
+    expect((splitResult.differences[0]!.after as any).responses).toHaveLength(1);
+
+    const oneEmpty = endpoint("endpoint-empty", "GET", "/empty");
+    const repeatedEmpty = structuredClone(oneEmpty);
+    repeatedEmpty.responses = [
+      structuredClone(oneEmpty.responses[0]!),
+      structuredClone(oneEmpty.responses[0]!),
+    ];
+    expect(compare([], [repeatedEmpty])).toEqual(compare([], [oneEmpty]));
+  });
+
   test("reports all exact coverage reasons in contract order", () => {
     const base = snapshot("snapshot-base", baseRevision, [], "incomplete");
     const target = snapshot("snapshot-target", targetRevision, [], "incomplete");

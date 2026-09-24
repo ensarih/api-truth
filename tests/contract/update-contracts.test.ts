@@ -195,6 +195,103 @@ describe("D07 update contracts", () => {
     expect(parseContractDifferenceSet(validDifferenceSet([second, first])).ok).toBe(false);
   });
 
+  test("ties unconfirmed absence and confirmed removal to target coverage", () => {
+    const metadata = {
+      service_id: "orders",
+      base_snapshot_id: "snapshot-base",
+      target_snapshot_id: "snapshot-base",
+    };
+    const makeDifference = (kind: "endpoint.absence_unconfirmed" | "fact.absence_unconfirmed" | "endpoint.removed") => {
+      const withoutId = kind === "fact.absence_unconfirmed" ? {
+        kind,
+        compatibility: "unknown" as const,
+        subject: {
+          service_id: "orders",
+          endpoint_id: "endpoint-a",
+          fact_kind: "parameter" as const,
+          fact_key: '["parameter","endpoint-a","query","priority"]',
+        },
+        before: { name: "priority", in: "query" },
+      } : {
+        kind,
+        compatibility: kind === "endpoint.removed" ? "potentially_breaking" as const : "unknown" as const,
+        subject: {
+          service_id: "orders",
+          endpoint_id: "endpoint-a",
+          fact_kind: "endpoint" as const,
+          fact_key: '["endpoint","endpoint-a"]',
+        },
+        before: { endpoint_id: "endpoint-a", method: "GET" },
+      };
+      return { difference_id: differenceId(withoutId, metadata), ...withoutId } as ContractDifference;
+    };
+    const rehashIncomplete = (
+      differences: ContractDifference[],
+      reasons: ContractDifferenceSet["incomplete_reason_codes"] = ["target_coverage_incomplete"],
+    ) => {
+      const candidate = validDifferenceSet(differences);
+      candidate.comparison_status = "incomplete";
+      candidate.incomplete_reason_codes = reasons;
+      const { difference_set_id: _id, ...content } = candidate;
+      candidate.difference_set_id = `difference-set-${digest(content)}`;
+      return candidate;
+    };
+
+    for (const kind of ["endpoint.absence_unconfirmed", "fact.absence_unconfirmed"] as const) {
+      const absence = makeDifference(kind);
+      const invalidComplete = parseContractDifferenceSet(validDifferenceSet([absence]));
+      expect(invalidComplete).toMatchObject({
+        ok: false,
+        error: { issues: expect.arrayContaining([expect.objectContaining({ code: "semantic.incomplete_absence" })]) },
+      });
+      expect(parseContractDifferenceSet(rehashIncomplete([absence], ["base_coverage_incomplete"]))).toMatchObject({
+        ok: false,
+        error: { issues: expect.arrayContaining([expect.objectContaining({ code: "semantic.incomplete_absence" })]) },
+      });
+      expect(parseContractDifferenceSet(rehashIncomplete([absence]))).toMatchObject({ ok: true });
+    }
+
+    const removalCases = [
+      makeDifference("endpoint.removed"),
+      ...([
+        ["parameter.removed", {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "parameter",
+          fact_key: '["parameter","endpoint-a","query","priority"]',
+        }],
+        ["request_body.removed", {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "request_body",
+          fact_key: '["request_body","endpoint-a","application/json"]',
+        }],
+        ["response.removed", {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "response",
+          fact_key: '["response","endpoint-a","[\\"exact\\",200]"]',
+        }],
+        ["schema.removed", {
+          service_id: "orders", component_id: "schema-a", affected_endpoint_ids: ["endpoint-a"],
+          fact_kind: "schema", fact_key: '["schema","schema-a"]',
+        }],
+        ["claim.removed", {
+          service_id: "orders", endpoint_id: "endpoint-a", fact_kind: "claim",
+          fact_key: '["claim","endpoint-a",null,"request.field.presence"]',
+        }],
+      ] as const).map(([kind, subject]) => {
+        const withoutId = {
+          kind,
+          compatibility: "potentially_breaking" as const,
+          subject: structuredClone(subject),
+        } as Omit<ContractDifference, "difference_id">;
+        return { difference_id: differenceId(withoutId, metadata), ...withoutId } as ContractDifference;
+      }),
+    ];
+    for (const confirmedRemoval of removalCases) {
+      expect(parseContractDifferenceSet(validDifferenceSet([confirmedRemoval]))).toMatchObject({ ok: true });
+      expect(parseContractDifferenceSet(rehashIncomplete([confirmedRemoval]))).toMatchObject({
+        ok: false,
+        error: { issues: expect.arrayContaining([expect.objectContaining({ code: "semantic.incomplete_absence" })]) },
+      });
+    }
+  });
+
   test("requires each taxonomy kind to use its exact canonical fact tuple and matching subject", () => {
     const base = {
       difference_id: "deliberately-not-a-valid-content-hash",

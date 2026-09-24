@@ -262,33 +262,40 @@ const endpointProjection = (endpoint: Endpoint): JsonValue => {
     schema: canonicalSchema(body.schema),
     serialization: structuredClone(body.serialization),
   })).sort((left, right) => compareUtf8(left.media_type, right.media_type));
-  const responses = endpoint.responses.map((response) => ({
-    status: structuredClone(response.status),
-    content: response.content.map((content) => ({
+  const responsesByStatus = new Map<string, {
+    status: Endpoint["responses"][number]["status"];
+    content: Array<Record<string, unknown>>;
+    headers: Array<Record<string, unknown>>;
+  }>();
+  endpoint.responses.forEach((response) => {
+    const key = statusKey(response.status);
+    const group = responsesByStatus.get(key) ?? {
+      status: structuredClone(response.status),
+      content: [],
+      headers: [],
+    };
+    group.content.push(...response.content.map((content) => ({
       media_type: content.media_type,
       schema: canonicalSchema(content.schema),
       serialization: structuredClone(content.serialization),
-    })).sort((left, right) => compareUtf8(left.media_type, right.media_type)),
-    ...(response.headers === undefined ? {} : {
-      headers: response.headers.map((header) => ({
-        name: asciiLower(header.name),
-        schema: canonicalSchema(header.schema),
-      })).sort((left, right) => compareUtf8(left.name, right.name)),
-    }),
-  })).sort((left, right) => compareUtf8(
-    canonicalJson([
-      statusKey(left.status),
-      left.content.map((content) => content.media_type),
-      (left.headers ?? []).map((header) => header.name),
-      left,
-    ]),
-    canonicalJson([
-      statusKey(right.status),
-      right.content.map((content) => content.media_type),
-      (right.headers ?? []).map((header) => header.name),
-      right,
-    ]),
-  ));
+    })));
+    group.headers.push(...(response.headers ?? []).map((header) => ({
+      name: asciiLower(header.name),
+      schema: canonicalSchema(header.schema),
+    })));
+    responsesByStatus.set(key, group);
+  });
+  const responses = [...responsesByStatus.entries()]
+    .sort(([left], [right]) => compareUtf8(left, right))
+    .map(([, group]) => ({
+      status: group.status,
+      content: group.content.sort((left, right) =>
+        compareUtf8(String(left.media_type), String(right.media_type))),
+      ...(group.headers.length === 0 ? {} : {
+        headers: group.headers.sort((left, right) =>
+          compareUtf8(String(left.name), String(right.name))),
+      }),
+    }));
   const alternatives = uniqueSorted(endpoint.security.alternatives.map((alternative) => {
     const scopesByScheme = new Map<string, string[]>();
     alternative.requirements.forEach((requirement) => {
