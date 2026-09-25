@@ -639,6 +639,34 @@ describe("D07 update contracts", () => {
     expect(privateResult.ok).toBe(false);
     expect(JSON.stringify(privateResult)).not.toContain("secret/provider/source.ts");
 
+    const privateCoverageContent = {
+      kind: "analysis.coverage_changed" as const,
+      compatibility: "unknown" as const,
+      subject: {
+        service_id: "orders",
+        fact_kind: "coverage" as const,
+        fact_key: '["coverage"]',
+      },
+      before: { status: "complete", analyzed_roots: ["secret/base/source-root"] },
+      after: {
+        status: "incomplete",
+        reason: "analysis incomplete",
+        analyzed_roots: ["secret/target/source-root"],
+        unresolved_roots: ["secret/target/unresolved-root"],
+      },
+    };
+    const privateCoverage = {
+      difference_id: differenceId(privateCoverageContent, metadata),
+      ...privateCoverageContent,
+    };
+    const privateCoverageOutput = {
+      ...validOutput(),
+      differences: validDifferenceSet([privateCoverage as unknown as ContractDifference]),
+    };
+    const privateCoverageResult = parseContractChangesOutput(privateCoverageOutput);
+    expect(privateCoverageResult.ok).toBe(false);
+    expect(JSON.stringify(privateCoverageResult)).not.toContain("secret/");
+
     const { difference_id: _shapeOnlyId, ...safeSchema } = schema;
     const safeDifference = {
       difference_id: differenceId(safeSchema, metadata),
@@ -774,11 +802,6 @@ describe("D07 update contracts", () => {
         },
         after: { code: "code", severity: "warning", affected_endpoint_ids: ["alpha", "zeta"] },
       }, (value) => value.after.affected_endpoint_ids.reverse(), (value) => { value.after.affected_endpoint_ids[1] = "alpha"; }],
-      ["coverage roots", {
-        kind: "analysis.coverage_changed", compatibility: "unknown",
-        subject: { service_id: "orders", fact_kind: "coverage", fact_key: '["coverage"]' },
-        after: { status: "incomplete", analyzed_roots: ["alpha", "zeta"], unresolved_roots: ["alpha", "zeta"], reason: "partial" },
-      }, (value) => value.after.analyzed_roots.reverse(), (value) => { value.after.analyzed_roots[1] = "alpha"; }],
       ["schema required", {
         kind: "schema.added", compatibility: "non_breaking",
         subject: { service_id: "orders", component_id: "schema-a", fact_kind: "schema", fact_key: '["schema","schema-a"]' },

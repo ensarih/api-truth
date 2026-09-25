@@ -794,11 +794,9 @@ const addClaimDrafts = (
 };
 
 const coverageProjection = (coverage: ContractSnapshot["coverage"]): JsonValue => coverage.status === "complete"
-  ? { status: "complete", analyzed_roots: canonicalStrings(coverage.analyzed_roots) }
+  ? { status: "complete" }
   : {
       status: "incomplete",
-      analyzed_roots: canonicalStrings(coverage.analyzed_roots),
-      unresolved_roots: canonicalStrings(coverage.unresolved_roots),
       reason: coverage.reason,
     };
 

@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -102,6 +102,7 @@ describe("contract changes CLI", () => {
       "service", "service_root", "changed_paths", "source_digest", "base_source_digest",
       "target_source_digest", "config_fingerprint", "evidence", "evidence_ids", "dependencies",
       "location", "access_label", "analyzer_result", "diagnostics", "reproducibility_fingerprint",
+      "analyzed_roots", "unresolved_roots",
     ]);
     const forbiddenValues = [
       resolve(baseSource), resolve(changedSource), baseSource, changedSource,
@@ -164,6 +165,57 @@ describe("contract changes CLI", () => {
     expect(rejected.stdout).toBe("");
     expect(rejected.stderr).toBe("api-truth changes error [INVALID_UPDATE_INPUT]: Update input is invalid\n");
     expect(rejected.stderr).not.toContain(temporaryRoot);
+  });
+
+  test("keeps complete-to-incomplete coverage differences path-free", async () => {
+    const temporaryRoot = await mkdtemp(join(tmpdir(), "api-truth-coverage-"));
+    temporaryRoots.push(temporaryRoot);
+    const baseline = join(temporaryRoot, "complete-base");
+    const changed = join(temporaryRoot, "incomplete-target");
+    const baseSourceText = [
+      'import express from "express";',
+      "const app = express();",
+      'app.get("/health", (_request, response) => response.status(200).type("application/json").json({ ok: true }));',
+      "export default app;",
+      "",
+    ].join("\n");
+    const changedSourceText = [
+      baseSourceText,
+      'const suffix = "dynamic";',
+      'app.get("/dynamic/" + suffix, (_request, response) => response.status(200).type("application/json").json({ ok: true }));',
+      "",
+    ].join("\n");
+    await Promise.all([
+      mkdir(baseline, { recursive: true }),
+      mkdir(changed, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(baseline, "app.ts"), baseSourceText, "utf8"),
+      writeFile(join(changed, "app.ts"), changedSourceText, "utf8"),
+    ]);
+
+    const result = run([
+      "--base-source", baseline,
+      "--changed-source", changed,
+      "--service", "coverage-service",
+      "--base-revision", baseRevision,
+      "--changed-revision", changedRevision,
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const output = parsedOutput(result.stdout);
+    const coverage = output.differences.differences.find((difference) =>
+      difference.kind === "analysis.coverage_changed");
+    expect(coverage).toMatchObject({
+      before: { status: "complete" },
+      after: { status: "incomplete", reason: "Unsupported or unresolved analysis constructs" },
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("analyzed_roots");
+    expect(serialized).not.toContain("unresolved_roots");
+    expect(serialized).not.toContain(temporaryRoot);
+    expect(serialized).not.toContain("complete-base");
+    expect(serialized).not.toContain("incomplete-target");
   });
 
   test("the CLI source has no database, provider, network, log, model, or build integration", async () => {

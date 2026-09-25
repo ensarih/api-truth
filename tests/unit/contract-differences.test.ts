@@ -405,6 +405,13 @@ describe("D07 endpoint contract differences", () => {
       '["coverage"]',
       '["diagnostic","fixture.incomplete",[]]',
     ]);
+    expect(first.differences[0]).toMatchObject({
+      before: { status: "complete" },
+      after: { status: "incomplete", reason: "fixture incomplete" },
+    });
+    expect(first.differences[0]).not.toHaveProperty("before.analyzed_roots");
+    expect(first.differences[0]).not.toHaveProperty("after.analyzed_roots");
+    expect(first.differences[0]).not.toHaveProperty("after.unresolved_roots");
     expect(JSON.stringify(first)).not.toContain("diagnostic_id");
     expect(JSON.stringify(first)).not.toContain("wording");
   });

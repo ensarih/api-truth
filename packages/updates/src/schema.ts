@@ -335,12 +335,9 @@ const DiagnosticProjectionSchema = Type.Object({
 const CoverageProjectionSchema = Type.Union([
   Type.Object({
     status: Type.Literal("complete"),
-    analyzed_roots: Type.Array(NonEmptyString(), { minItems: 1, uniqueItems: true }),
   }, { additionalProperties: false }),
   Type.Object({
     status: Type.Literal("incomplete"),
-    analyzed_roots: Type.Array(NonEmptyString(), { minItems: 1, uniqueItems: true }),
-    unresolved_roots: Type.Array(NonEmptyString(), { minItems: 1, uniqueItems: true }),
     reason: NonEmptyString(),
   }, { additionalProperties: false }),
 ]);
@@ -931,12 +928,7 @@ const projectionSetsAreCanonical = (
       });
     case "diagnostic": return !Array.isArray(value)
       && isCanonicalStringSet((value as Record<string, any>).affected_endpoint_ids);
-    case "coverage": {
-      if (Array.isArray(value)) return false;
-      const record = value as Record<string, any>;
-      return isCanonicalStringSet(record.analyzed_roots)
-        && (record.unresolved_roots === undefined || isCanonicalStringSet(record.unresolved_roots));
-    }
+    case "coverage": return !Array.isArray(value);
     case "identity": return !Array.isArray(value) && identitySetsAreCanonical(value as Record<string, any>);
     case "condition_group": return true;
   }
