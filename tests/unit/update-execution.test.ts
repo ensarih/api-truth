@@ -6,7 +6,12 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { ANALYZER, createAnalyzer } from "../../analyzers/typescript/src/index.js";
 import { contractSnapshotFromAnalyzerResult } from "../../packages/catalog/src/index.js";
-import type { AnalyzerRequest, AnalyzerResult, ContractSnapshot } from "../../packages/ir/src/index.js";
+import {
+  parseAnalyzerResult,
+  type AnalyzerRequest,
+  type AnalyzerResult,
+  type ContractSnapshot,
+} from "../../packages/ir/src/index.js";
 import {
   executeUpdate,
   parseContractDifferenceSet,
@@ -203,6 +208,33 @@ describe("D07 safe update execution", () => {
       subject: expect.objectContaining({ endpoint_id: expect.any(String) }),
     }));
     expect(successRequest).toEqual(callerRequestBefore);
+  });
+
+  test("detaches the public analyzer result from the adapter-owned result graph", async () => {
+    const adapterOwned = structuredClone(successResult);
+    const output = await executeUpdate({
+      plan: successPlan,
+      request: successRequest,
+      base_snapshot: baseSnapshot,
+      config_fingerprint: configFingerprint,
+    }, { analyze: async () => adapterOwned });
+    const publicResult = output.analyzer_result!;
+    const before = JSON.stringify(publicResult);
+
+    expect(publicResult).not.toBe(adapterOwned);
+    expect(publicResult.source).not.toBe(adapterOwned.source);
+    expect(publicResult.evidence).not.toBe(adapterOwned.evidence);
+    expect(publicResult.evidence[0]).not.toBe(adapterOwned.evidence[0]);
+
+    adapterOwned.request_id = "mutated-after-return";
+    adapterOwned.source.access_label = "private-mutated-label";
+    adapterOwned.evidence[0]!.location.path = "private/after-return.ts";
+    adapterOwned.endpoints.splice(0);
+
+    expect(JSON.stringify(publicResult)).toBe(before);
+    expect(parseAnalyzerResult(publicResult)).toMatchObject({ ok: true });
+    expect(output.target_snapshot.endpoints).toHaveLength(1);
+    expect(output.differences.target.immutable_revision).toBe(targetRevision);
   });
 
   test("rejects a matching result after the adapter mutates its detached request", async () => {

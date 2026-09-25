@@ -314,7 +314,7 @@ const parsedAnalyzerResult = (value: unknown): AnalyzerResult => {
       retryable: true,
     });
   }
-  return parsed.value;
+  return detachedJson(parsed.value);
 };
 
 const parsedTargetSnapshot = (value: unknown): ContractSnapshot => {
