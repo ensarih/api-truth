@@ -47,6 +47,20 @@ type ParsedExecutionInput = {
   configFingerprint: string;
 };
 
+type ExecutionExpectation = {
+  requestId: string;
+  source: AnalyzerRequest["source"];
+  analyzer: AnalyzerRequest["analyzer"];
+  exchangeVersion: string;
+  irVersion: string;
+  identityVersion: string;
+  configVersion: string;
+  configFingerprint: string;
+};
+
+const detachedJson = <Value>(value: Value): Value =>
+  JSON.parse(canonicalJson(value)) as Value;
+
 const exactKeys = (descriptors: PropertyDescriptorMap, expected: readonly string[]): boolean => {
   const keys = Object.keys(descriptors).sort();
   const wanted = [...expected].sort();
@@ -104,9 +118,9 @@ const parseExecutionInput = (value: unknown): ParsedExecutionInput => {
     return invalidInput("/config_fingerprint", "shape.minLength");
   }
   return {
-    plan: parsedPlan.value,
-    request: parsedRequest.value,
-    baseSnapshot: parsedBase.value,
+    plan: detachedJson(parsedPlan.value),
+    request: detachedJson(parsedRequest.value),
+    baseSnapshot: detachedJson(parsedBase.value),
     configFingerprint: fingerprint,
   };
 };
@@ -231,25 +245,42 @@ const executionFailure = (path: string, code: string): never => {
 
 const validateResultAgreement = (
   result: AnalyzerResult,
-  request: AnalyzerRequest,
-  plan: UpdatePlan,
+  expected: ExecutionExpectation,
 ): void => {
   if (result.status === "failed") {
     executionFailure("/analyzer_result/status", "semantic.ineligible_evidence");
   }
-  if (result.request_id !== request.request_id) {
+  if (result.request_id !== expected.requestId) {
     executionFailure("/analyzer_result/request_id", "semantic.analysis_mismatch");
   }
-  if (!agrees(result.analyzer, request.analyzer)
-    || result.exchange_version !== request.exchange_version
-    || result.ir_version !== request.ir_version
-    || result.identity_version !== plan.analysis.target.identity_version) {
+  if (!agrees(result.analyzer, expected.analyzer)
+    || result.exchange_version !== expected.exchangeVersion
+    || result.ir_version !== expected.irVersion
+    || result.identity_version !== expected.identityVersion) {
     executionFailure("/analyzer_result", "semantic.analysis_mismatch");
   }
-  if (!agrees(result.source, request.source)) {
+  if (!agrees(result.source, expected.source)) {
     executionFailure("/analyzer_result/source", "semantic.scope_mismatch");
   }
 };
+
+const executionExpectation = (input: ParsedExecutionInput): ExecutionExpectation => detachedJson({
+  requestId: input.request.request_id,
+  source: {
+    repository_id: input.plan.service.repository_id,
+    service_id: input.plan.service.service_id,
+    service_root: input.plan.service.service_root,
+    immutable_revision: input.plan.service.target_revision,
+    source_digest: input.plan.service.target_source_digest,
+    access_label: input.request.source.access_label,
+  },
+  analyzer: input.plan.analysis.target.analyzer,
+  exchangeVersion: input.plan.analysis.target.analyzer_exchange_version,
+  irVersion: input.plan.analysis.target.ir_version,
+  identityVersion: input.plan.analysis.target.identity_version,
+  configVersion: input.plan.analysis.target.config_version,
+  configFingerprint: input.plan.analysis.target.config_fingerprint,
+});
 
 const emptyDifferenceSet = (snapshot: ContractSnapshot): ContractDifferenceSet => {
   const content = {
@@ -267,7 +298,7 @@ const emptyDifferenceSet = (snapshot: ContractSnapshot): ContractDifferenceSet =
   };
   const parsed = parseContractDifferenceSet(candidate);
   if (!parsed.ok) return executionFailure("/differences", "semantic.identity_mismatch");
-  return parsed.value;
+  return detachedJson(parsed.value);
 };
 
 const parsedAnalyzerResult = (value: unknown): AnalyzerResult => {
@@ -317,19 +348,20 @@ export const executeUpdate = async (
     };
   }
 
-  const request: AnalyzerRequest = {
+  const request: AnalyzerRequest = detachedJson({
     ...input.request,
     changed_paths: [...input.plan.changed_paths],
     extraction_mode: "fallback_full_service",
-  };
+  });
+  const expected = executionExpectation(input);
   let rawResult: unknown;
   try {
-    rawResult = await analyzer.analyze(request);
+    rawResult = await analyzer.analyze(detachedJson(request));
   } catch (error) {
     throw updateExecutionError(error);
   }
   const result = parsedAnalyzerResult(rawResult);
-  validateResultAgreement(result, request, input.plan);
+  validateResultAgreement(result, expected);
 
   let targetSnapshot: ContractSnapshot;
   try {
@@ -340,8 +372,16 @@ export const executeUpdate = async (
     if (error instanceof UpdateError) throw error;
     throw updateExecutionError(error);
   }
-  if (targetSnapshot.config.config_version !== input.plan.analysis.target.config_version
-    || targetSnapshot.config.config_fingerprint !== input.plan.analysis.target.config_fingerprint) {
+  if (!agrees(targetSnapshot.analyzer, expected.analyzer)
+    || targetSnapshot.ir_version !== expected.irVersion
+    || targetSnapshot.identity_version !== expected.identityVersion
+    || targetSnapshot.service.repository_id !== expected.source.repository_id
+    || targetSnapshot.service.service_id !== expected.source.service_id
+    || targetSnapshot.service.root !== expected.source.service_root
+    || targetSnapshot.source.immutable_revision !== expected.source.immutable_revision
+    || targetSnapshot.source.source_digest !== expected.source.source_digest
+    || targetSnapshot.config.config_version !== expected.configVersion
+    || targetSnapshot.config.config_fingerprint !== expected.configFingerprint) {
     return executionFailure("/target_snapshot/config", "semantic.analysis_mismatch");
   }
 

@@ -168,7 +168,8 @@ describe("D07 safe update execution", () => {
     }, { analyze });
 
     expect(analyze).not.toHaveBeenCalled();
-    expect(first.target_snapshot).toBe(baseSnapshot);
+    expect(first.target_snapshot).toEqual(baseSnapshot);
+    expect(first.target_snapshot).not.toBe(baseSnapshot);
     expect(first.analyzer_result).toBeUndefined();
     expect(first.differences.differences).toEqual([]);
     expect(first.differences).toEqual(second.differences);
@@ -178,6 +179,7 @@ describe("D07 safe update execution", () => {
   test("runs the real analyzer once in full-service fallback and does not merge base facts", async () => {
     const real = createAnalyzer({ projectRoot: successRoot });
     const analyze = vi.fn((candidate: AnalyzerRequest) => real.analyze(candidate));
+    const callerRequestBefore = structuredClone(successRequest);
 
     const output = await executeUpdate({
       plan: successPlan,
@@ -200,6 +202,96 @@ describe("D07 safe update execution", () => {
       kind: "endpoint.removed",
       subject: expect.objectContaining({ endpoint_id: expect.any(String) }),
     }));
+    expect(successRequest).toEqual(callerRequestBefore);
+  });
+
+  test("rejects a matching result after the adapter mutates its detached request", async () => {
+    const callerInput = {
+      plan: structuredClone(successPlan),
+      request: structuredClone(successRequest),
+      base_snapshot: structuredClone(baseSnapshot),
+      config_fingerprint: configFingerprint,
+    };
+    const callerBefore = structuredClone(callerInput);
+    const changedRevision = "c".repeat(40);
+    const changedDigest = `sha256:${"9".repeat(64)}`;
+    const analyze = vi.fn(async (invoked: AnalyzerRequest) => {
+      invoked.request_id = "adapter-mutated-request";
+      invoked.analyzer.analyzer_id = "adapter-mutated-analyzer";
+      invoked.analyzer.analyzer_version = "9.0.0";
+      invoked.source.immutable_revision = changedRevision;
+      invoked.source.source_digest = changedDigest;
+      const result = structuredClone(successResult);
+      result.request_id = invoked.request_id;
+      result.analyzer = structuredClone(invoked.analyzer);
+      result.source.immutable_revision = changedRevision;
+      result.source.source_digest = changedDigest;
+      result.evidence = result.evidence.map((item) => ({
+        ...item,
+        source_version: changedRevision,
+        scope: { ...item.scope, revision: changedRevision },
+      }));
+      return result;
+    });
+
+    await expect(executeUpdate(callerInput, { analyze })).rejects.toMatchObject({
+      code: "UPDATE_EXECUTION_FAILED",
+      message: "Update execution failed",
+    });
+    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(callerInput).toEqual(callerBefore);
+  });
+
+  test.each(["exchange_version", "ir_version"] as const)(
+    "rejects adapter mutation of %s even when its returned result matches",
+    async (field) => {
+      const analyze = vi.fn(async (invoked: AnalyzerRequest) => {
+        (invoked as Record<string, unknown>)[field] = "9.0.0";
+        const result = structuredClone(successResult);
+        (result as unknown as Record<string, unknown>)[field] = "9.0.0";
+        return result;
+      });
+      await expect(executeUpdate({
+        plan: successPlan,
+        request: successRequest,
+        base_snapshot: baseSnapshot,
+        config_fingerprint: configFingerprint,
+      }, { analyze })).rejects.toMatchObject({ code: "UPDATE_EXECUTION_FAILED" });
+      expect(analyze).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test("uses immutable expectations when an adapter closure mutates caller-owned plan and base data", async () => {
+    const callerInput = {
+      plan: structuredClone(successPlan),
+      request: structuredClone(successRequest),
+      base_snapshot: structuredClone(baseSnapshot),
+      config_fingerprint: configFingerprint,
+    };
+    const changedRevision = "c".repeat(40);
+    const changedDigest = `sha256:${"8".repeat(64)}`;
+    const analyze = vi.fn(async () => {
+      callerInput.plan.service.target_revision = changedRevision;
+      callerInput.plan.service.target_source_digest = changedDigest;
+      callerInput.plan.analysis.target.analyzer.analyzer_version = "9.0.0";
+      callerInput.base_snapshot.source.immutable_revision = changedRevision;
+      callerInput.base_snapshot.analyzer.analyzer_version = "9.0.0";
+      const result = structuredClone(successResult);
+      result.analyzer.analyzer_version = "9.0.0";
+      result.source.immutable_revision = changedRevision;
+      result.source.source_digest = changedDigest;
+      result.evidence = result.evidence.map((item) => ({
+        ...item,
+        source_version: changedRevision,
+        scope: { ...item.scope, revision: changedRevision },
+      }));
+      return result;
+    });
+
+    await expect(executeUpdate(callerInput, { analyze })).rejects.toMatchObject({
+      code: "UPDATE_EXECUTION_FAILED",
+    });
+    expect(analyze).toHaveBeenCalledTimes(1);
   });
 
   test("keeps a real full-service partial result visibly partial without proving deletions", async () => {
