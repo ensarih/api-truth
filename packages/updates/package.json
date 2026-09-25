@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@api-truth/catalog": "0.0.0",
     "@api-truth/ir": "0.0.0",
     "@sinclair/typebox": "0.34.41",
     "ajv": "8.17.1",

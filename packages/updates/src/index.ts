@@ -56,3 +56,9 @@ export {
 export { parseUpdatePlanningInput, validateUpdatePlanningInput } from "./input.js";
 export { planUpdate } from "./planner.js";
 export { compareContractSnapshots } from "./differences.js";
+export {
+  executeUpdate,
+  type Analyzer,
+  type ExecuteUpdateInput,
+  type UpdateExecutionResult,
+} from "./execute.js";

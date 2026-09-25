@@ -17,7 +17,7 @@ type UpdateErrorOptions = {
 };
 
 const safePathSegments = new Set([
-  "action", "affected_endpoint_ids", "after", "analysis", "analysis_key", "analyzed_roots",
+  "action", "affected_endpoint_ids", "after", "analysis", "analysis_key", "analyzed_roots", "analyzer_result",
   "analyzer", "analyzer_exchange_version", "analyzer_id", "analyzer_version", "application_path",
   "base", "base_analysis_key", "base_revision", "base_snapshot", "base_snapshot_id",
   "base_source_digest", "before", "changed_paths", "changed_paths_complete", "claims", "code",
@@ -25,10 +25,10 @@ const safePathSegments = new Set([
   "content", "contract_changes_output_version", "contract_difference_version", "coverage",
   "coverage_status", "created_at", "dependencies", "dependency_coverage", "diagnostics", "difference_id",
   "difference_set_id", "differences", "editorial_reviews", "endpoint_id", "endpoints", "evidence",
-  "export_eligibility", "extraction_mode", "fact_key", "fact_kind", "fallback_reasons", "headers",
+  "exchange_version", "execution_policy", "export_eligibility", "extraction_mode", "fact_key", "fact_kind", "fallback_reasons", "headers",
   "identity", "identity_version", "immutable_revision", "in", "incomplete_reason_codes", "ir_version",
-  "kind", "name", "parameters", "plan", "plan_id", "predicate", "properties", "repository_id",
-  "request_bodies", "responses", "schema", "schema_id", "schemas", "security", "service", "service_id",
+  "kind", "limits", "name", "parameters", "plan", "plan_id", "predicate", "prior_dependencies", "properties", "repository_id",
+  "request", "request_bodies", "request_id", "resolution_inputs", "responses", "schema", "schema_id", "schemas", "security", "service", "service_id",
   "root", "service_root", "severity", "snapshot_id", "source", "source_digest", "status", "subject", "target",
   "target_snapshot",
   "target_revision", "target_source_digest", "update_plan_version", "value", "verification",
