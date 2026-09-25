@@ -12,6 +12,7 @@ const messages: Record<CatalogErrorCode, string> = {
   BRANCH_TARGET_INELIGIBLE: "Branch target is not eligible",
   BRANCH_POINTER_STALE: "Branch pointer update is stale",
   BRANCH_POINTER_CONFLICT: "Branch pointer update conflicts with current state",
+  CATALOG_BRANCH_LOCK_REQUIRED: "Catalog branch lock must be acquired before mutation",
   CATALOG_NOT_FOUND_OR_DENIED: "Catalog resource was not found or access was denied",
   CATALOG_STORAGE_ERROR: "Catalog storage operation failed",
 };

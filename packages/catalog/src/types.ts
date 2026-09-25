@@ -21,6 +21,8 @@ export type BranchKey = {
   branch: string;
 };
 
+export type SnapshotKey = Omit<BranchKey, "branch"> & { snapshotId: string };
+
 export type ExpectedPointer =
   | { state: "absent" }
   | { state: "present"; pointerVersion: string };
@@ -69,6 +71,8 @@ export type BranchResolution = {
   stored: StoredSnapshot;
 };
 
+export type AbsentBranch = { state: "absent" };
+
 export type CatalogErrorCode =
   | "INVALID_CATALOG_INPUT"
   | "INVALID_SNAPSHOT"
@@ -78,6 +82,7 @@ export type CatalogErrorCode =
   | "BRANCH_TARGET_INELIGIBLE"
   | "BRANCH_POINTER_STALE"
   | "BRANCH_POINTER_CONFLICT"
+  | "CATALOG_BRANCH_LOCK_REQUIRED"
   | "CATALOG_NOT_FOUND_OR_DENIED"
   | "CATALOG_STORAGE_ERROR";
 
@@ -86,6 +91,16 @@ export interface CatalogStore {
   getSnapshot(context: PrincipalContext, snapshotId: string): Promise<StoredSnapshot>;
   promoteBranch(input: PromoteBranchInput): Promise<BranchPromotionResult>;
   resolveBranch(context: PrincipalContext, key: Omit<BranchKey, "tenantId">): Promise<BranchResolution>;
+}
+
+export interface CatalogTransactionStore {
+  ingestAnalyzerResult(input: IngestAnalyzerResultInput): Promise<SnapshotWriteResult>;
+  promoteBranch(input: PromoteBranchInput): Promise<BranchPromotionResult>;
+}
+
+export interface CatalogOrchestrationReader {
+  readStoredSnapshot(key: SnapshotKey): Promise<StoredSnapshot>;
+  readBranch(key: BranchKey): Promise<BranchResolution | AbsentBranch>;
 }
 
 export interface AccessPolicyStore {

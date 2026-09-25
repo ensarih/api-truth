@@ -570,7 +570,7 @@ describe("D07 fallback boundaries and changed-path certainty", () => {
     ]);
   });
 
-  test("reuses only exact source and analysis inputs with a complete empty path list", () => {
+  test("reuses content at a different target revision while preserving base provenance", () => {
     const candidate = planningInput(baseSnapshot(false), []);
     candidate.target.source_digest = baseDigest;
 
@@ -589,6 +589,9 @@ describe("D07 fallback boundaries and changed-path certainty", () => {
       },
     });
     expect(plan).not.toHaveProperty("extraction_mode");
+    expect(candidate.base_snapshot.source.immutable_revision).toBe(baseRevision);
+    expect(candidate.target.immutable_revision).toBe(targetRevision);
+    expect(baseRevision).not.toBe(targetRevision);
     expect(parseUpdatePlan(plan)).toEqual({ ok: true, value: plan });
   });
 

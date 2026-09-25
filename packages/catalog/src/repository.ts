@@ -7,7 +7,7 @@ import {
   snapshotContentSha256,
   snapshotIdentitySha256,
 } from "./canonical.js";
-import { quoteSchemaIdentifier, withCatalogTransaction } from "./database.js";
+import { quoteSchemaIdentifier, setCatalogSearchPath, withCatalogTransaction } from "./database.js";
 import { CatalogError, catalogStorageError } from "./errors.js";
 import { invalidCatalogInput, nonEmptyString, withCatalogInputBoundary } from "./input.js";
 import { contractSnapshotFromAnalyzerResult } from "./snapshot.js";
@@ -16,7 +16,9 @@ import type {
   BranchPointer,
   BranchPromotionResult,
   BranchResolution,
+  CatalogOrchestrationReader,
   CatalogStore,
+  CatalogTransactionStore,
   ExpectedPointer,
   IngestAnalyzerResultInput,
   PrincipalContext,
@@ -24,6 +26,7 @@ import type {
   ProviderOrder,
   ProviderReference,
   SnapshotWriteResult,
+  SnapshotKey,
   StoredSnapshot,
 } from "./types.js";
 
@@ -260,62 +263,58 @@ const readStoredRow = async (
   return selected.rows[0] ?? invalidStoredRow();
 };
 
-const ingestAnalyzerResult = async (
-  pool: Pool,
-  schema: string,
-  rawInput: IngestAnalyzerResultInput,
+const ingestAnalyzerResultWithClient = async (
+  client: PoolClient,
+  input: ReturnType<typeof ingestInput>,
 ): Promise<SnapshotWriteResult> => {
-  const input = ingestInput(rawInput);
   const converted = contractSnapshotFromAnalyzerResult(input.result, input.configFingerprint);
   const { snapshot, analyzerStatus, requiredScopeIds } = converted;
   const identitySha256 = snapshotIdentitySha256(snapshot);
   const contentSha256 = snapshotContentSha256(snapshot);
 
-  return withCatalogTransaction(pool, { schema }, async (client) => {
-    await lockRequiredScopes(client, input.tenantId, requiredScopeIds);
-    const inserted = await client.query(
-      `INSERT INTO catalog_snapshots (
-         tenant_id, snapshot_id, repository_id, service_id, immutable_revision,
-         analyzer_status, ir_version, identity_version, config_fingerprint,
-         identity_sha256, content_sha256, required_scope_ids, document
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
-       ON CONFLICT (tenant_id, snapshot_id) DO NOTHING`,
-      [
-        input.tenantId,
-        snapshot.snapshot_id,
-        snapshot.service.repository_id,
-        snapshot.service.service_id,
-        snapshot.source.immutable_revision,
-        analyzerStatus,
-        snapshot.ir_version,
-        snapshot.identity_version,
-        snapshot.config.config_fingerprint,
-        identitySha256,
-        contentSha256,
-        requiredScopeIds,
-        JSON.stringify(snapshot),
-      ],
-    );
-
-    const storedRow = await readStoredRow(client, input.tenantId, snapshot.snapshot_id);
-    verifyStoredSnapshotRow(storedRow);
-    if (
-      storedRow.identity_sha256 !== identitySha256
-      || storedRow.content_sha256 !== contentSha256
-      || storedRow.analyzer_status !== analyzerStatus
-      || !Array.isArray(storedRow.required_scope_ids)
-      || !equalStrings(storedRow.required_scope_ids, requiredScopeIds)
-    ) {
-      throw new CatalogError("SNAPSHOT_IDENTITY_CONFLICT");
-    }
-
-    return {
-      outcome: inserted.rowCount === 1 ? "inserted" : "existing",
-      snapshotId: snapshot.snapshot_id,
+  await lockRequiredScopes(client, input.tenantId, requiredScopeIds);
+  const inserted = await client.query(
+    `INSERT INTO catalog_snapshots (
+       tenant_id, snapshot_id, repository_id, service_id, immutable_revision,
+       analyzer_status, ir_version, identity_version, config_fingerprint,
+       identity_sha256, content_sha256, required_scope_ids, document
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+     ON CONFLICT (tenant_id, snapshot_id) DO NOTHING`,
+    [
+      input.tenantId,
+      snapshot.snapshot_id,
+      snapshot.service.repository_id,
+      snapshot.service.service_id,
+      snapshot.source.immutable_revision,
+      analyzerStatus,
+      snapshot.ir_version,
+      snapshot.identity_version,
+      snapshot.config.config_fingerprint,
+      identitySha256,
       contentSha256,
-      requiredScopeIds: [...requiredScopeIds],
-    };
-  });
+      requiredScopeIds,
+      JSON.stringify(snapshot),
+    ],
+  );
+
+  const storedRow = await readStoredRow(client, input.tenantId, snapshot.snapshot_id);
+  verifyStoredSnapshotRow(storedRow);
+  if (
+    storedRow.identity_sha256 !== identitySha256
+    || storedRow.content_sha256 !== contentSha256
+    || storedRow.analyzer_status !== analyzerStatus
+    || !Array.isArray(storedRow.required_scope_ids)
+    || !equalStrings(storedRow.required_scope_ids, requiredScopeIds)
+  ) {
+    throw new CatalogError("SNAPSHOT_IDENTITY_CONFLICT");
+  }
+
+  return {
+    outcome: inserted.rowCount === 1 ? "inserted" : "existing",
+    snapshotId: snapshot.snapshot_id,
+    contentSha256,
+    requiredScopeIds: [...requiredScopeIds],
+  };
 };
 
 const getSnapshot = async (
@@ -418,12 +417,55 @@ const resolveInput = (
   branch: nonEmptyString(key.branch),
 }));
 
-const branchLockKey = (input: BranchKey): string => [
-  input.tenantId,
-  input.repositoryId,
-  input.serviceId,
-  input.branch,
-].map((value) => `${Buffer.byteLength(value, "utf8")}:${value}`).join("");
+export const catalogBranchAdvisoryKey = (rawInput: BranchKey): string => withCatalogInputBoundary(() => {
+  const input = {
+    tenantId: nonEmptyString(rawInput.tenantId),
+    repositoryId: nonEmptyString(rawInput.repositoryId),
+    serviceId: nonEmptyString(rawInput.serviceId),
+    branch: nonEmptyString(rawInput.branch),
+  };
+  return [
+    input.tenantId,
+    input.repositoryId,
+    input.serviceId,
+    input.branch,
+  ].map((value) => `${Buffer.byteLength(value, "utf8")}:${value}`).join("");
+});
+
+export const acquireCatalogBranchAdvisoryLock = async (
+  client: PoolClient,
+  input: BranchKey,
+): Promise<void> => {
+  const key = catalogBranchAdvisoryKey(input);
+  try {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
+  } catch (error) {
+    if (error instanceof CatalogError) throw error;
+    throw catalogStorageError(error);
+  }
+};
+
+const assertCatalogBranchAdvisoryLockHeld = async (
+  client: PoolClient,
+  input: BranchKey,
+): Promise<void> => {
+  const key = catalogBranchAdvisoryKey(input);
+  const result = await client.query<{ held: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM pg_locks
+       WHERE locktype = 'advisory'
+         AND pid = pg_backend_pid()
+         AND granted
+         AND classid = (((hashtextextended($1, 0) >> 32) & 4294967295)::oid)
+         AND objid = ((hashtextextended($1, 0) & 4294967295)::oid)
+         AND objsubid = 1
+     ) AS held`,
+    [key],
+  );
+  if (result.rows[0]?.held !== true) {
+    throw new CatalogError("CATALOG_BRANCH_LOCK_REQUIRED", { retryable: false });
+  }
+};
 
 const pointerSelectColumns = `
   tenant_id, repository_id, service_id, branch, snapshot_id,
@@ -494,86 +536,87 @@ const assertPromotionOrder = (
   if (order !== "newer") throw new CatalogError("BRANCH_POINTER_CONFLICT", { retryable: false });
 };
 
-const promoteBranch = async (
-  pool: Pool,
-  schema: string,
-  rawInput: PromoteBranchInput,
+const promoteBranchWithClient = async (
+  client: PoolClient,
+  input: PromoteBranchInput,
 ): Promise<BranchPromotionResult> => {
-  const input = promoteInput(rawInput);
-  return withCatalogTransaction(pool, { schema }, async (client) => {
+  const currentRow = await selectPointerForUpdate(client, input);
+  const current = currentRow === undefined ? undefined : pointerFromRow(currentRow);
+
+  const target = await client.query<{ snapshot_id: string }>(
+    `SELECT snapshot_id
+     FROM catalog_snapshots
+     WHERE tenant_id = $1
+       AND repository_id = $2
+       AND service_id = $3
+       AND snapshot_id = $4
+       AND analyzer_status IN ('success', 'partial')`,
+    [input.tenantId, input.repositoryId, input.serviceId, input.snapshotId],
+  );
+  if (target.rows[0] === undefined) {
+    throw new CatalogError("BRANCH_TARGET_INELIGIBLE", { retryable: false });
+  }
+
+  if (current !== undefined && exactProviderReplay(current, input)) {
+    return { outcome: "existing", pointer: current };
+  }
+  assertPromotionOrder(current, input);
+
+  if (current === undefined) {
     await client.query(
-      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-      [branchLockKey(input)],
+      `INSERT INTO catalog_branch_pointers (
+         tenant_id, repository_id, service_id, branch, snapshot_id,
+         provider, provider_reference, order_kind, order_value
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        input.tenantId,
+        input.repositoryId,
+        input.serviceId,
+        input.branch,
+        input.snapshotId,
+        input.provider.provider,
+        input.provider.provider_reference,
+        input.provider.order?.kind ?? null,
+        input.provider.order?.value ?? null,
+      ],
     );
-    const currentRow = await selectPointerForUpdate(client, input);
-    const current = currentRow === undefined ? undefined : pointerFromRow(currentRow);
-
-    const target = await client.query<{ snapshot_id: string }>(
-      `SELECT snapshot_id
-       FROM catalog_snapshots
-       WHERE tenant_id = $1
-         AND repository_id = $2
-         AND service_id = $3
-         AND snapshot_id = $4
-         AND analyzer_status IN ('success', 'partial')`,
-      [input.tenantId, input.repositoryId, input.serviceId, input.snapshotId],
+  } else {
+    await client.query(
+      `UPDATE catalog_branch_pointers
+       SET snapshot_id = $5,
+           provider = $6,
+           provider_reference = $7,
+           order_kind = $8,
+           order_value = $9,
+           pointer_version = pointer_version + 1,
+           promoted_at = clock_timestamp()
+       WHERE tenant_id = $1 AND repository_id = $2 AND service_id = $3 AND branch = $4`,
+      [
+        input.tenantId,
+        input.repositoryId,
+        input.serviceId,
+        input.branch,
+        input.snapshotId,
+        input.provider.provider,
+        input.provider.provider_reference,
+        input.provider.order?.kind ?? null,
+        input.provider.order?.value ?? null,
+      ],
     );
-    if (target.rows[0] === undefined) {
-      throw new CatalogError("BRANCH_TARGET_INELIGIBLE", { retryable: false });
-    }
+  }
 
-    if (current !== undefined && exactProviderReplay(current, input)) {
-      return { outcome: "existing", pointer: current };
-    }
-    assertPromotionOrder(current, input);
+  const promotedRow = await selectPointerForUpdate(client, input);
+  if (promotedRow === undefined) return invalidStoredRow();
+  return { outcome: "promoted", pointer: pointerFromRow(promotedRow) };
+};
 
-    if (current === undefined) {
-      await client.query(
-        `INSERT INTO catalog_branch_pointers (
-           tenant_id, repository_id, service_id, branch, snapshot_id,
-           provider, provider_reference, order_kind, order_value
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [
-          input.tenantId,
-          input.repositoryId,
-          input.serviceId,
-          input.branch,
-          input.snapshotId,
-          input.provider.provider,
-          input.provider.provider_reference,
-          input.provider.order?.kind ?? null,
-          input.provider.order?.value ?? null,
-        ],
-      );
-    } else {
-      await client.query(
-        `UPDATE catalog_branch_pointers
-         SET snapshot_id = $5,
-             provider = $6,
-             provider_reference = $7,
-             order_kind = $8,
-             order_value = $9,
-             pointer_version = pointer_version + 1,
-             promoted_at = clock_timestamp()
-         WHERE tenant_id = $1 AND repository_id = $2 AND service_id = $3 AND branch = $4`,
-        [
-          input.tenantId,
-          input.repositoryId,
-          input.serviceId,
-          input.branch,
-          input.snapshotId,
-          input.provider.provider,
-          input.provider.provider_reference,
-          input.provider.order?.kind ?? null,
-          input.provider.order?.value ?? null,
-        ],
-      );
-    }
-
-    const promotedRow = await selectPointerForUpdate(client, input);
-    if (promotedRow === undefined) return invalidStoredRow();
-    return { outcome: "promoted", pointer: pointerFromRow(promotedRow) };
-  });
+const withCatalogClientBoundary = async <Value>(operation: () => Promise<Value>): Promise<Value> => {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof CatalogError) throw error;
+    throw catalogStorageError(error);
+  }
 };
 
 const resolveBranch = async (
@@ -653,6 +696,119 @@ const resolveBranch = async (
   });
 };
 
+const snapshotKeyInput = (rawKey: SnapshotKey): SnapshotKey => withCatalogInputBoundary(() => ({
+  tenantId: nonEmptyString(rawKey.tenantId),
+  repositoryId: nonEmptyString(rawKey.repositoryId),
+  serviceId: nonEmptyString(rawKey.serviceId),
+  snapshotId: nonEmptyString(rawKey.snapshotId),
+}));
+
+const branchKeyInput = (rawKey: BranchKey): BranchKey => withCatalogInputBoundary(() => ({
+  tenantId: nonEmptyString(rawKey.tenantId),
+  repositoryId: nonEmptyString(rawKey.repositoryId),
+  serviceId: nonEmptyString(rawKey.serviceId),
+  branch: nonEmptyString(rawKey.branch),
+}));
+
+const readOrchestrationSnapshotWithClient = async (
+  client: PoolClient,
+  input: SnapshotKey,
+): Promise<StoredSnapshot> => {
+  const selected = await client.query<SnapshotRow>(
+    `SELECT ${snapshotColumns}
+     FROM catalog_snapshots
+     WHERE tenant_id = $1 AND repository_id = $2 AND service_id = $3 AND snapshot_id = $4`,
+    [input.tenantId, input.repositoryId, input.serviceId, input.snapshotId],
+  );
+  const row = selected.rows[0];
+  if (row === undefined) {
+    throw new CatalogError("CATALOG_NOT_FOUND_OR_DENIED", { retryable: false });
+  }
+  return verifyStoredSnapshotRow(row);
+};
+
+const readOrchestrationBranchWithClient = async (
+  client: PoolClient,
+  input: BranchKey,
+): Promise<BranchResolution | { state: "absent" }> => {
+  const selected = await client.query<PointerRow>(
+    `SELECT ${pointerSelectColumns}
+     FROM catalog_branch_pointers
+     WHERE tenant_id = $1 AND repository_id = $2 AND service_id = $3 AND branch = $4`,
+    [input.tenantId, input.repositoryId, input.serviceId, input.branch],
+  );
+  const row = selected.rows[0];
+  if (row === undefined) return { state: "absent" };
+  const pointer = pointerFromRow(row);
+  const stored = await readOrchestrationSnapshotWithClient(client, {
+    tenantId: input.tenantId,
+    repositoryId: input.repositoryId,
+    serviceId: input.serviceId,
+    snapshotId: pointer.snapshotId,
+  }).catch((error: unknown) => {
+    if (error instanceof CatalogError && error.code === "CATALOG_NOT_FOUND_OR_DENIED") {
+      return invalidStoredRow(error);
+    }
+    throw error;
+  });
+  if (
+    pointer.tenantId !== stored.tenantId
+    || pointer.snapshotId !== stored.snapshotId
+    || pointer.repositoryId !== stored.snapshot.service.repository_id
+    || pointer.serviceId !== stored.snapshot.service.service_id
+  ) return invalidStoredRow();
+  return { pointer, stored };
+};
+
+export const createCatalogTransactionStore = (
+  client: PoolClient,
+  options: { schema: string },
+): CatalogTransactionStore => {
+  const schema = withCatalogInputBoundary(() => {
+    quoteSchemaIdentifier(options.schema);
+    return options.schema;
+  });
+  return {
+    ingestAnalyzerResult: (rawInput) => {
+      const input = ingestInput(rawInput);
+      return withCatalogClientBoundary(async () => {
+        await setCatalogSearchPath(client, schema);
+        return ingestAnalyzerResultWithClient(client, input);
+      });
+    },
+    promoteBranch: (rawInput) => {
+      const input = promoteInput(rawInput);
+      return withCatalogClientBoundary(async () => {
+        await setCatalogSearchPath(client, schema);
+        await assertCatalogBranchAdvisoryLockHeld(client, input);
+        return promoteBranchWithClient(client, input);
+      });
+    },
+  };
+};
+
+export const createCatalogOrchestrationReader = (
+  pool: Pool,
+  options: { schema: string },
+): CatalogOrchestrationReader => {
+  const schema = withCatalogInputBoundary(() => {
+    quoteSchemaIdentifier(options.schema);
+    return options.schema;
+  });
+  return {
+    readStoredSnapshot: (rawKey) => {
+      const key = snapshotKeyInput(rawKey);
+      return withCatalogTransaction(pool, { schema }, (client) =>
+        readOrchestrationSnapshotWithClient(client, key));
+    },
+    readBranch: (rawKey) => {
+      const key = branchKeyInput(rawKey);
+      return withCatalogTransaction(pool, { schema }, (client) =>
+        readOrchestrationBranchWithClient(client, key));
+    },
+  };
+};
+
 export const createCatalogStore = (
   pool: Pool,
   options: { schema: string },
@@ -662,9 +818,19 @@ export const createCatalogStore = (
     return options.schema;
   });
   return {
-    ingestAnalyzerResult: (input) => ingestAnalyzerResult(pool, schema, input),
+    ingestAnalyzerResult: (rawInput) => {
+      const input = ingestInput(rawInput);
+      return withCatalogTransaction(pool, { schema }, (client) =>
+        createCatalogTransactionStore(client, { schema }).ingestAnalyzerResult(input));
+    },
     getSnapshot: (context, snapshotId) => getSnapshot(pool, schema, context, snapshotId),
-    promoteBranch: (input) => promoteBranch(pool, schema, input),
+    promoteBranch: (rawInput) => {
+      const input = promoteInput(rawInput);
+      return withCatalogTransaction(pool, { schema }, async (client) => {
+        await acquireCatalogBranchAdvisoryLock(client, input);
+        return createCatalogTransactionStore(client, { schema }).promoteBranch(input);
+      });
+    },
     resolveBranch: (context, key) => resolveBranch(pool, schema, context, key),
   };
 };
