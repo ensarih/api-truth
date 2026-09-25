@@ -92,8 +92,16 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
   };
   const diagnostic = (code: string, node?: ts.Node, endpoint?: Endpoint) => {
     const ids = node ? [evidence(node)] : [];
-    const id = `diag-${hash(`${code}:${ids}:${endpoint?.endpoint_id ?? ""}`).slice(0, 24)}`;
-    if (!result.diagnostics.some(d => d.diagnostic_id === id)) result.diagnostics.push({ diagnostic_id: id, code, severity: "warning", message: code.replaceAll("_", " "), affected_endpoint_ids: endpoint ? [endpoint.endpoint_id] : [], evidence_ids: ids });
+    const affectedEndpointIds = endpoint ? [endpoint.endpoint_id] : [];
+    const existing = result.diagnostics.find(d =>
+      d.code === code
+      && JSON.stringify(d.affected_endpoint_ids) === JSON.stringify(affectedEndpointIds));
+    if (existing) {
+      existing.evidence_ids = [...new Set([...existing.evidence_ids, ...ids])].sort();
+      return;
+    }
+    const id = `diag-${hash(`${code}:${affectedEndpointIds}`).slice(0, 24)}`;
+    result.diagnostics.push({ diagnostic_id: id, code, severity: "warning", message: code.replaceAll("_", " "), affected_endpoint_ids: affectedEndpointIds, evidence_ids: ids });
   };
   const dependency = (endpoint: Endpoint, node: ts.Node) => {
     const id = evidence(node);
