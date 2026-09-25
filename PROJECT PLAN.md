@@ -1,7 +1,7 @@
 # API Truth — Implementation Plan
 
-**Status:** development; executable IR, baseline TypeScript analysis, and the PostgreSQL catalog core are implemented.
-**Updated:** 2026-09-22
+**Status:** development; executable IR, baseline TypeScript analysis, PostgreSQL catalog core, and dependency-aware update/difference core are implemented.
+**Updated:** 2026-09-25
 **Working name:** API Truth (`api-truth`), pending public naming checks.  
 **License:** Apache-2.0 proposed, pending selection before publication.
 
@@ -83,7 +83,7 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 | D04 | **Complete:** offline workspace/test harness, Java process boundary, and isolated test database | Reproducible build, pinned dependencies, focused/watch checks, isolated test DB setup, red/green harness verification |
 | D05 | **Complete:** baseline read-only TypeScript/Express extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
 | D06 | **Complete:** immutable catalog snapshots, current access scopes/grants, and atomic selected-branch pointers | Real PostgreSQL round-trip; unauthorized and revoked reads denied; provider ordering/CAS verified |
-| D07 | Add dependency-aware updates and structured differences | Shared changes reach every affected API; fallback demonstrated |
+| D07 | **Complete:** add dependency-aware updates and structured differences | Shared changes reach every affected API; safe full-service fallback and deterministic differences demonstrated |
 | D08 | Add events, durable jobs, deduplication, and reconciliation | Duplicate, stale, missed-event cases pass |
 | D09 | Add deployment/configuration and environment resolution | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
 | D10 | Build OpenAPI compiler and publication manifests | Valid exports, faithful route-variant aggregation/scoping, strict rejection of representation gaps, recovery |
@@ -97,12 +97,17 @@ D06 stores and resolves only explicitly supplied branch keys. The executable
 v0.1 service `intended_branches` array is the exact scan allowlist for later D08
 orchestration: unlisted branches are ignored, and an empty list means scan none.
 D06 does not enumerate repository branches or implement scan orchestration.
+D07 likewise accepts one already-selected service and immutable revision and
+never enumerates branches. Branch patterns are deferred to a future
+configuration-version extension. D08 must enforce the exact allowlist before
+scheduling D07 and owns events, durable jobs, retry, reconciliation,
+supersession, and branch-pointer promotion.
 
 ## 7. Proposed repository structure
 
-The repository now implements the IR, test harness, baseline TypeScript analyzer,
-and catalog portions of this layout. Remaining entries describe intended later
-phases.
+The repository now implements the IR, test harness, baseline TypeScript
+analyzer, catalog, and dependency-aware update/difference portions of this
+layout. Remaining entries describe intended later phases.
 
 ```text
 api-truth/

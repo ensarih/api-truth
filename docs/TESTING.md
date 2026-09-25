@@ -1,7 +1,7 @@
 # Testing and Local Validation
 
-**Status:** offline TypeScript and isolated PostgreSQL catalog suites implemented; Java implementation and later end-to-end surfaces pending.
-**Date:** 2026-09-22
+**Status:** offline TypeScript, D07 update/difference, and isolated PostgreSQL catalog suites implemented; Java implementation and later end-to-end surfaces pending.
+**Date:** 2026-09-25
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
 ## 1. Purpose
@@ -76,7 +76,9 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:watch` | **Available:** rerun relevant offline tests during development |
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
+| `npm run test:updates` | **Available:** run the D07 planner, difference, execution, contract, and local CLI suites without Docker or provider credentials |
 | `npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | **Available:** emit a validated fixture `AnalyzerResult` as stdout JSON and diagnostics on stderr |
+| `npm run --silent changes -- --base-source fixtures/typescript/orders/baseline/src --changed-source fixtures/typescript/orders/changed/src --service orders --base-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --changed-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb` | **Available:** compare two source trees and emit one safe validated `ContractChangesOutput` document |
 | `npm run --silent catalog:roundtrip -- --input <file> --tenant <id> --principal <id> --branch <configured-branch>` | **Available:** use only the fixed local test database, create/migrate/drop one random schema, seed synthetic policy, ingest/promote/read, and emit a safe JSON-only summary |
 | `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
@@ -107,6 +109,30 @@ reads, reparses the returned D03 snapshot, and drops the schema in `finally`.
 Its complete stdout contains only snapshot ID, branch, pointer version, and
 `round_trip_valid`. Npm's silent mode suppresses the lifecycle banner and keeps
 the input path, tenant, and principal out of stdout.
+
+### D07 source-revision comparison
+
+Use a disposable file when inspecting the complete D02 comparison:
+
+```sh
+changes_file="$(mktemp -t api-truth-contract-changes).json"
+npm run --silent changes -- \
+  --base-source fixtures/typescript/orders/baseline/src \
+  --changed-source fixtures/typescript/orders/changed/src \
+  --service orders \
+  --base-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --changed-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  > "$changes_file"
+node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); console.log(JSON.stringify({plan:value.plan,difference_count:value.differences.differences.length},null,2))' "$changes_file"
+rm "$changes_file"
+```
+
+The command reads both source trees through the D05 boundary, computes the
+changed-path union from names and bytes, and runs only local deterministic
+analysis. Successful stdout has no banner and excludes source roots, changed
+paths, digests, fingerprints, evidence, source values/locations, and raw
+analyzer results. D07 does not require PostgreSQL, API keys, provider
+credentials, network access, logs, models, or source execution.
 
 ## 7. Semantic provider contract tests
 
@@ -145,4 +171,4 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The D04a offline scaffold, D04b PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, and D06 catalog are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and D07–D11 application behavior remain pending their phases. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, and catalog APIs and invariants are documented in `packages/catalog/README.md`.
+The D04a offline scaffold, D04b PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, and D07 dependency-aware update/difference core are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and D08–D11 application behavior remain pending their phases. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, and update contracts and limitations in `packages/updates/README.md`.

@@ -1,10 +1,10 @@
 # API Truth — Architecture and Interface Design
 
-**Status:** D03 IR, D05 TypeScript analyzer, and D06 catalog persistence implemented; later application layers remain design, 2026-09-22.
+**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog persistence, and the D07 update/difference core implemented; D08–D11 application layers remain design, 2026-09-25.
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 
-Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). Event/job orchestration, environment resolution, publication, and query transports remain Phase 1 deliverables.
+Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). Event/job orchestration, environment resolution, publication, and query transports remain Phase 1 deliverables.
 
 ## 1. Components
 
@@ -145,6 +145,12 @@ Availability is derived from scoped facts, not stored as a universal boolean. Co
 
 Plugins must not fetch logs, call models, start applications, publish catalog state, or access the network implicitly. Preparing external dependencies is an explicit runner responsibility with provenance and execution policy. Runtime introspection is a separate optional adapter.
 
+The current TypeScript adapter accepts changed paths but does not expose a
+bounded target-extraction contract. D07 therefore uses dependency edges and
+ordinary evidence/schema ownership to plan impact while executing each
+source-changing update as a complete selected-service scan in
+`fallback_full_service` mode.
+
 Use a versioned JSON exchange format across TypeScript and the Java analyzer process. Test the IR against a small second-framework fixture before promising plugin stability.
 
 ## 4. Configuration and event contracts
@@ -207,6 +213,23 @@ Arrival time is not deployment order. Deduplicate by producer/event ID; advance 
 Deployment adapters must distinguish attempt notifications from authoritative active-revision observations. Record the observation source, effective version/order, active artifact set, and observation completeness. An attempt failure triggers reconciliation; it does not restore a previous binding. If the active set cannot be established, mark it unknown and retain the last observation as stale. Clear a mixed or unknown state only when authoritative evidence establishes the effective serving set.
 
 ## 5. Incremental analysis and publication
+
+The implemented D07 boundary covers step 3 and the extract/compare portion of
+step 5 for one already-selected service and immutable revision. It computes
+reverse-dependency impact, may reuse an identical complete base snapshot, and
+otherwise runs the complete service through D05 before comparing full
+snapshots. It never merges a targeted or partial result into the prior
+snapshot. Incomplete target coverage cannot prove endpoint, schema, claim,
+parameter, request-body, or response deletion.
+
+D08 remains responsible for steps 1–2 and job orchestration: event ingestion,
+deduplication, scheduling, retry, supersession, reconciliation, and D06 branch
+pointer promotion. Before it schedules D07, D08 must select only exact branch
+names from `InstallationConfig.repositories[].services[].intended_branches`.
+An empty allowlist schedules no branches; D07 itself accepts one selected
+service/revision and never enumerates branches. Branch patterns require a future
+configuration version. D09–D11 environment resolution, publication/OpenAPI,
+query, portal, and MCP behavior remain unimplemented.
 
 1. Validate, persist, and deduplicate the event; create a durable job.
 2. Resolve the immutable source/artifact/configuration scope.
