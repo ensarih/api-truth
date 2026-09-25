@@ -1126,4 +1126,91 @@ describe("D07 endpoint contract differences", () => {
     expect((changed as any).before).toHaveLength(2);
     expect((changed as any).after).toHaveLength(2);
   });
+
+  test("does not infer tightening when optional and restrictive members coexist unchanged", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = [
+      claim("base-optional", "optional", condition("mode", "base-optional"), "declared", "request.field.presence"),
+      claim("base-required", "required", condition("mode", "base-required"), "declared", "request.field.presence"),
+    ];
+    target.claims = [
+      claim("target-optional", "optional", condition("mode", "target-optional"), "observed", "request.field.presence"),
+      claim("target-required", "required", condition("mode", "target-required"), "observed", "request.field.presence"),
+    ];
+
+    const changed = compareContractSnapshots({ base_snapshot: base, target_snapshot: target })
+      .differences.find(({ kind }) => kind === "claim.changed");
+    expect(changed).toMatchObject({ compatibility: "unknown" });
+  });
+
+  test("detects net tightening while restrictive members already coexist", () => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = [
+      claim("base-optional-one", "optional", undefined, "declared", "request.field.presence"),
+      claim("base-optional-two", "optional", undefined, "declared", "request.field.presence"),
+      claim("base-required", "required", undefined, "declared", "request.field.presence"),
+    ];
+    target.claims = [
+      claim("target-optional", "optional", undefined, "declared", "request.field.presence"),
+      claim("target-required-one", "required", undefined, "declared", "request.field.presence"),
+      claim("target-required-two", "required", undefined, "declared", "request.field.presence"),
+    ];
+
+    const changed = compareContractSnapshots({ base_snapshot: base, target_snapshot: target })
+      .differences.find(({ kind }) => kind === "claim.changed");
+    expect(changed).toMatchObject({ compatibility: "potentially_breaking" });
+  });
+
+  test.each([
+    {
+      label: "optional count decreases without a restrictive count increase",
+      baseValues: [
+        ["optional", "declared"],
+        ["optional", "declared"],
+        ["required", "declared"],
+      ],
+      targetValues: [
+        ["optional", "declared"],
+        ["required", "observed"],
+      ],
+    },
+    {
+      label: "restrictive count increases without an optional count decrease",
+      baseValues: [
+        ["optional", "declared"],
+        ["required", "declared"],
+      ],
+      targetValues: [
+        ["optional", "observed"],
+        ["required", "declared"],
+        ["required", "declared"],
+      ],
+    },
+  ] as const)("keeps $label unknown", ({ baseValues, targetValues }) => {
+    const route = endpoint("endpoint-claims", "POST", "/pets");
+    const base = snapshot("snapshot-base", baseRevision, [route]);
+    const target = snapshot("snapshot-target", targetRevision, [route]);
+    base.claims = baseValues.map(([value, verification], index) => claim(
+      `base-partial-${index}`,
+      value,
+      undefined,
+      verification,
+      "request.field.presence",
+    ));
+    target.claims = targetValues.map(([value, verification], index) => claim(
+      `target-partial-${index}`,
+      value,
+      undefined,
+      verification,
+      "request.field.presence",
+    ));
+
+    const changed = compareContractSnapshots({ base_snapshot: base, target_snapshot: target })
+      .differences.find(({ kind }) => kind === "claim.changed");
+    expect(changed).toMatchObject({ compatibility: "unknown" });
+  });
 });

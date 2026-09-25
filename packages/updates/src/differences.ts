@@ -591,8 +591,18 @@ const changedClaimCompatibility = (
   if (owner.predicate !== "request.field.presence") {
     return "unknown";
   }
-  const hasTightening = before.some((member) => member.value === "optional")
-    && after.some((member) => member.value === "required" || member.value === "conditional");
+  const presenceCounts = (members: readonly ClaimMemberProjection[]) => members.reduce(
+    (counts, member) => ({
+      optional: counts.optional + (member.value === "optional" ? 1 : 0),
+      restrictive: counts.restrictive
+        + (member.value === "required" || member.value === "conditional" ? 1 : 0),
+    }),
+    { optional: 0, restrictive: 0 },
+  );
+  const beforeCounts = presenceCounts(before);
+  const afterCounts = presenceCounts(after);
+  const hasTightening = afterCounts.optional < beforeCounts.optional
+    && afterCounts.restrictive > beforeCounts.restrictive;
   if (hasTightening) return "potentially_breaking";
   if (before.length !== 1 || after.length !== 1) return "unknown";
   const oldMember = before[0]!;
@@ -775,7 +785,7 @@ const addClaimDrafts = (
     });
     else if (oldProjection.length > 0 && newProjection.length > 0) drafts.push({
       kind: "claim.changed",
-      compatibility: changedClaimCompatibility(owner, oldProjection, newProjection),
+      compatibility: changedClaimCompatibility(owner, remainingBefore, remainingAfter),
       subject,
       before: oldProjection,
       after: newProjection,
