@@ -57,8 +57,8 @@ const setup = async (configInput = config) => {
     schemaSql: quoteCatalogTestSchema(database.schema) };
 };
 
-test("concurrent claims respect service capacity and a matching live lease can be heartbeated", async () => {
-  const { database, repository, worker } = await setup();
+test("concurrent claims respect capacity and emit one leased state record", async () => {
+  const { database, repository, worker, schemaSql } = await setup();
   try {
     await repository.ingestEvent(eventContext, event("branch-1", "1"));
     const [first, second] = await Promise.all([
@@ -67,6 +67,18 @@ test("concurrent claims respect service capacity and a matching live lease can b
     ]);
     expect(first.length + second.length).toBe(1);
     const claim = [...first, ...second][0]!;
+    const leasedOutbox = await database.pool.query<{ count: string; distinct_count: string }>(
+      `SELECT count(*)::text AS count,count(DISTINCT dedupe_key)::text AS distinct_count
+       FROM ${schemaSql}.orchestration_outbox WHERE tenant_id='tenant-a' AND job_id=$1
+         AND message_kind='job.state_changed' AND payload->>'state'='leased'`, [claim.jobId],
+    );
+    expect(leasedOutbox.rows[0]).toEqual({ count: "1", distinct_count: "1" });
+    expect(await worker.claimJobs(jobWorker("replay"), { limit: 1 })).toEqual([]);
+    const replayCount = await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_outbox
+       WHERE tenant_id='tenant-a' AND job_id=$1 AND payload->>'state'='leased'`, [claim.jobId],
+    );
+    expect(replayCount.rows[0]?.count).toBe("1");
     const owner = first.length ? jobWorker("worker-a") : jobWorker("worker-b");
     const heartbeat = await worker.heartbeatJob(owner, claim.lease);
     expect(heartbeat.leaseToken).toBe(claim.lease.leaseToken);
@@ -232,7 +244,7 @@ test("scheduler touches old and new jobs by canonical ID when replacement IDs re
   } finally { await database.cleanup(); }
 });
 
-test("scheduler writes a terminal prerequisite's descendant checkpoint before any job mutation", async () => {
+test("ingestion writes terminal descendant checkpoints before event and job rows", async () => {
   const { database, repository, schemaSql } = await setup();
   try {
     await repository.ingestEvent(eventContext, event("ordered-branch-1", "1"));
@@ -254,12 +266,21 @@ test("scheduler writes a terminal prerequisite's descendant checkpoint before an
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     const traced = createOrchestrationRepository(recordingPool(database.pool, statements), { schema: database.schema });
     await traced.ingestEvent(eventContext, event("ordered-branch-2", "3"));
-    const mutations = statements.filter(({ sql }) => /^\s*(?:UPDATE|INSERT INTO) orchestration_(?:branch_checkpoints|pr_checkpoints|jobs|job_dependencies|outbox)\b/.test(sql));
+    const mutations = statements.filter(({ sql }) => /^\s*(?:UPDATE|INSERT INTO) orchestration_(?:branch_checkpoints|pr_checkpoints|events|event_deliveries|event_targets|jobs|job_dependencies|outbox)\b/.test(sql));
     const lastCheckpoint = mutations.findLastIndex(({ sql }) => /orchestration_(?:branch|pr)_checkpoints/.test(sql));
+    const firstEvent = mutations.findIndex(({ sql }) => /orchestration_events/.test(sql));
     const firstJob = mutations.findIndex(({ sql }) => /orchestration_jobs/.test(sql));
     expect(mutations.some(({ sql, values }) => /UPDATE orchestration_pr_checkpoints/.test(sql)
       && values[1] === child.rows[0]!.job_id)).toBe(true);
-    expect(lastCheckpoint).toBeLessThan(firstJob);
+    expect(lastCheckpoint).toBeLessThan(firstEvent);
+    expect(firstEvent).toBeLessThan(firstJob);
+    const rank = (sql: string): number => {
+      const table = sql.match(/orchestration_(branch_checkpoints|pr_checkpoints|events|event_deliveries|event_targets|jobs|job_dependencies|outbox)/)?.[1];
+      return ({ branch_checkpoints: 4, pr_checkpoints: 5, events: 8, event_deliveries: 9,
+        event_targets: 10, jobs: 11, job_dependencies: 12, outbox: 15 } as Record<string, number>)[table!]!;
+    };
+    const ranks = mutations.map(({ sql }) => rank(sql));
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
     const jobIds = mutations.filter(({ sql }) => /orchestration_jobs/.test(sql)).map(({ values }) => String(values[1]));
     expect(jobIds).toEqual([...jobIds].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))));
     const firstOutbox = mutations.findIndex(({ sql }) => /orchestration_outbox/.test(sql));
@@ -271,6 +292,53 @@ test("scheduler writes a terminal prerequisite's descendant checkpoint before an
       [child.rows[0]!.job_id],
     );
     expect(result.rows[0]).toEqual({ state: "failed", latest_outcome: "failed" });
+  } finally { await database.cleanup(); }
+});
+
+test("PR replacement orders dependent branch, PR, and analysis checkpoints before the event", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    const prEvent = (id: string, sequence: string, base: string, head: string) => ({
+      ...event(id, sequence), event_type: "pull_request.updated",
+      payload: { pull_request_id: "42", state: "open", base_branch: "main", base_revision: base.repeat(40),
+        head_branch: "feature/test", head_revision: head.repeat(40) },
+    });
+    const prContext = { ...eventContext, allowedEventTypes: ["pull_request.updated"] };
+    await repository.ingestEvent(prContext, prEvent("ordered-pr-root", "1", "a", "b"));
+    await repository.ingestEvent(eventContext, event("ordered-branch-child", "2"));
+    const root = await database.pool.query<{ job_id: string }>(
+      `SELECT job_id FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND kind='pr_preview_analysis'`,
+    );
+    const child = await database.pool.query<{ job_id: string }>(
+      `SELECT job_id FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND kind='branch_analysis'`,
+    );
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_job_dependencies (tenant_id,job_id,prerequisite_job_id)
+       VALUES ('tenant-a',$1,$2)`, [child.rows[0]!.job_id, root.rows[0]!.job_id],
+    );
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const traced = createOrchestrationRepository(recordingPool(database.pool, statements), { schema: database.schema });
+    await traced.ingestEvent(prContext, prEvent("ordered-pr-next", "3", "c", "d"));
+    const ranks = statements.flatMap(({ sql }) => {
+      if (!/^\s*(?:UPDATE|INSERT INTO) orchestration_/.test(sql)) return [];
+      const table = sql.match(/orchestration_(branch_checkpoints|pr_checkpoints|reconciliation_checkpoints|analysis_checkpoints|events|event_deliveries|event_targets|jobs|job_dependencies|outbox)/)?.[1];
+      const rank = ({ branch_checkpoints: 4, pr_checkpoints: 5, reconciliation_checkpoints: 6,
+        analysis_checkpoints: 7, events: 8, event_deliveries: 9, event_targets: 10,
+        jobs: 11, job_dependencies: 12, outbox: 15 } as Record<string, number>)[table!];
+      return rank === undefined ? [] : [rank];
+    });
+    expect(ranks).toContain(4);
+    expect(ranks).toContain(5);
+    expect(ranks).toContain(7);
+    expect(ranks).toContain(8);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+    const dependent = await database.pool.query<{ state: string; latest_outcome: string }>(
+      `SELECT job.state,checkpoint.latest_outcome FROM ${schemaSql}.orchestration_jobs job
+       JOIN ${schemaSql}.orchestration_branch_checkpoints checkpoint ON checkpoint.tenant_id=job.tenant_id
+         AND checkpoint.current_job_id=job.job_id WHERE job.tenant_id='tenant-a' AND job.job_id=$1`,
+      [child.rows[0]!.job_id],
+    );
+    expect(dependent.rows[0]).toEqual({ state: "failed", latest_outcome: "failed" });
   } finally { await database.cleanup(); }
 });
 
@@ -655,6 +723,19 @@ test("explicit failure retries with a fresh token then exhausts at the configure
     );
     const [second] = await worker.claimJobs(jobWorker("worker-b"), { limit: 1 });
     expect(second?.lease.leaseToken).not.toBe(first!.lease.leaseToken);
+    expect(second?.attemptCount).toBe("2");
+    const leasedOutbox = await database.pool.query<{ count: string; distinct_count: string }>(
+      `SELECT count(*)::text AS count,count(DISTINCT dedupe_key)::text AS distinct_count
+       FROM ${schemaSql}.orchestration_outbox WHERE tenant_id='tenant-a' AND job_id=$1
+         AND message_kind='job.state_changed' AND payload->>'state'='leased'`, [first!.jobId],
+    );
+    expect(leasedOutbox.rows[0]).toEqual({ count: "2", distinct_count: "2" });
+    expect(await worker.claimJobs(jobWorker("replay"), { limit: 1 })).toEqual([]);
+    const replayCount = await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_outbox
+       WHERE tenant_id='tenant-a' AND job_id=$1 AND payload->>'state'='leased'`, [first!.jobId],
+    );
+    expect(replayCount.rows[0]?.count).toBe("2");
     await expect(worker.failJob(jobWorker("worker-a"), first!.lease, "stale"))
       .rejects.toMatchObject({ code: "JOB_LEASE_CONFLICT" });
     expect(await worker.failJob(jobWorker("worker-b"), second!.lease, "private failure")).toMatchObject({

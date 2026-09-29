@@ -350,12 +350,13 @@ export const writePlannedJobChange = async (client: PoolClient, change: PlannedJ
     [job.tenant_id, job.job_id, change.worker.workerId, change.worker.instanceId,
       change.token, LEASE_DURATION_MS],
   );
+  const attempt = (BigInt(job.attempt_count) + 1n).toString();
   return { claimed: detachedFrozen({
     tenantId: job.tenant_id, jobId: job.job_id, kind: job.kind,
-    attemptCount: (BigInt(job.attempt_count) + 1n).toString(), maxAttempts: job.max_attempts,
+    attemptCount: attempt, maxAttempts: job.max_attempts,
     leaseExpiresAt: updated.rows[0]!.lease_expires_at.toISOString(),
     lease: { tenantId: job.tenant_id, jobId: job.job_id, leaseToken: change.token },
-  }) };
+  }), notification: { job, state: "leased", reason: `attempt:${attempt}` } };
 };
 
 export const writePlannedNotifications = flushNotifications;

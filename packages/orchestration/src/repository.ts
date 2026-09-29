@@ -35,6 +35,7 @@ import {
   persistScheduledJobs,
   scheduleConfigurationTransition,
   scheduleEventTargets,
+  stageScheduledJobCheckpoints,
   type SchedulingPlan,
 } from "./scheduler.js";
 import {
@@ -693,6 +694,8 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         Buffer.from(`${left.repositoryId}\u0000${left.serviceId}\u0000${left.scopeKey}`, "utf8"),
         Buffer.from(`${right.repositoryId}\u0000${right.serviceId}\u0000${right.scopeKey}`, "utf8"),
       ));
+      const stagedJobs = schedulingPlan === undefined ? undefined
+        : await stageScheduledJobCheckpoints(client, context.tenantId, schedulingPlan);
       const inserted = await client.query(
         `INSERT INTO orchestration_events
            (tenant_id, producer_id, event_id, event_sha256, event_type, repository_id, service_ids, document,
@@ -727,7 +730,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
             outcome.jobId ?? null, outcome.reconciliationId ?? null, outcome.safeReason ?? null],
         );
       }
-      if (schedulingPlan !== undefined) await persistScheduledJobs(client, context.tenantId, schedulingPlan);
+      if (schedulingPlan !== undefined) await persistScheduledJobs(client, context.tenantId, schedulingPlan, stagedJobs);
       for (const outcome of outcomes) {
         await insertOutbox(client, context.tenantId,
           { kind: "event.disposition", producerId: authorized.event.producer.producer_id,

@@ -7,7 +7,8 @@ import {
 } from "@api-truth/ir";
 import type { PoolClient } from "pg";
 import { discoverTransitionClosure, stageTerminalDependents, writePlannedCheckpoints,
-  writePlannedJobChange, writePlannedNotifications, type PlannedJobChange } from "./worker.js";
+  writePlannedJobChange, writePlannedNotifications, type PlannedJobChange,
+  type StagedCheckpointWrite } from "./worker.js";
 
 import { isConfiguredBranch, selectPullRequestScope, selectReconciliationBranches } from "./branch-selection.js";
 import { canonicalOrchestrationHash, canonicalOrchestrationJson } from "./canonical.js";
@@ -66,6 +67,7 @@ type SchedulerState = {
   jobs: Map<string, PreparedJob>;
   transitions: PreparedTransition[];
   dependencies: Array<Readonly<{ jobId: string; prerequisiteJobId: string }>>;
+  checkpointWrites: StagedCheckpointWrite[];
 };
 
 export type SchedulingPlan = Readonly<{
@@ -73,7 +75,20 @@ export type SchedulingPlan = Readonly<{
   jobs: readonly PreparedJob[];
   transitions: readonly PreparedTransition[];
   dependencies: readonly Readonly<{ jobId: string; prerequisiteJobId: string }>[];
+  checkpointWrites?: readonly StagedCheckpointWrite[];
 }>;
+
+const stageCheckpointQuery = (state: SchedulerState, rank: number, key: string, client: PoolClient,
+  sql: string, values: unknown[]): void => {
+  state.checkpointWrites.push({ rank, key, apply: async () => { await client.query(sql, values); } });
+};
+
+const checkpointKey = (...parts: (string | undefined)[]): string => {
+  if (parts.some((part) => part === undefined)) {
+    throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+  }
+  return parts.join("\u0000");
+};
 
 type ConfigurationTransitionDiscovery = Readonly<{
   locks: readonly AdvisoryLockKey[];
@@ -360,11 +375,11 @@ const scheduleBaseline = async (
   checkpoint: DeferredAnalysisCheckpoint;
 }> => {
   const key = analysisIdentity(configuration, target, revision);
-  const sortKey = canonicalOrchestrationJson([
-    key.repositoryId, key.serviceId, key.serviceRoot, key.immutableRevision, key.analyzerAdapterId,
+  const sortKey = checkpointKey(
+    tenantId, key.repositoryId, key.serviceId, key.serviceRoot, key.immutableRevision, key.analyzerAdapterId,
     key.analyzerAdapterVersion, key.exchangeVersion, key.irVersion, key.identityVersion,
     key.configVersion, key.configFingerprint,
-  ]);
+  );
   const selected = await client.query<AnalysisCheckpointRow>(
     `SELECT attempt_generation::text, current_job_id, last_terminal_outcome
      FROM orchestration_analysis_checkpoints
@@ -466,7 +481,8 @@ const scheduleBranch = async (
     && (desiredState === "absent" || current.desired_revision === payload.new_revision)
     && (desiredState === "absent" || current.current_job_config_fingerprint === configuration.fingerprint);
   if (sameSemanticTarget) {
-    await client.query(
+    stageCheckpointQuery(state, 4, checkpointKey(tenantId, target.repository.repository_id,
+      target.service.service_id, payload.branch), client,
       `UPDATE orchestration_branch_checkpoints SET provider=$5,provider_reference=$6,order_kind=$7,order_value=$8,
          checkpoint_version=$9,updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND branch=$4`,
@@ -482,7 +498,8 @@ const scheduleBranch = async (
   }
   if (desiredState === "absent") {
     stageCancel(state, current?.current_job_id);
-    await client.query(
+    stageCheckpointQuery(state, 4, checkpointKey(tenantId, target.repository.repository_id,
+      target.service.service_id, payload.branch), client,
       `INSERT INTO orchestration_branch_checkpoints
          (tenant_id,repository_id,service_id,branch,desired_state,desired_revision,provider,provider_reference,
           order_kind,order_value,checkpoint_version,analysis_generation,current_job_id,latest_outcome)
@@ -502,7 +519,8 @@ const scheduleBranch = async (
     kind: "branch_analysis", target, branch: payload.branch, targetRevision: payload.new_revision, generation,
   });
   stageSupersede(state, current?.current_job_id, jobId);
-  await client.query(
+  stageCheckpointQuery(state, 4, checkpointKey(tenantId, target.repository.repository_id,
+    target.service.service_id, payload.branch), client,
     `INSERT INTO orchestration_branch_checkpoints
        (tenant_id,repository_id,service_id,branch,desired_state,desired_revision,provider,provider_reference,
         order_kind,order_value,checkpoint_version,analysis_generation,current_job_id,latest_outcome)
@@ -550,7 +568,8 @@ const scheduleBranchReconciliation = async (
     kind: "branch_reconciliation", target, branch, generation,
   });
   stageSupersede(state, current?.current_job_id, jobId);
-  await client.query(
+  stageCheckpointQuery(state, 6, checkpointKey(tenantId, target.repository.repository_id,
+    target.service.service_id, branch), client,
     `INSERT INTO orchestration_reconciliation_checkpoints
        (tenant_id,repository_id,service_id,branch,requested_provider_snapshot_reference,generation,current_job_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -627,7 +646,8 @@ const schedulePullRequest = async (
     });
     stageSupersede(schedulerState, current?.current_job_id, reconciliationId);
     if (current === undefined) {
-      await client.query(
+      stageCheckpointQuery(schedulerState, 5, checkpointKey(tenantId, target.repository.repository_id,
+        target.service.service_id, payload.pull_request_id), client,
         `INSERT INTO orchestration_pr_checkpoints
            (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
             provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,
@@ -637,7 +657,8 @@ const schedulePullRequest = async (
           generation, reconciliationId, nextCheckpoint],
       );
     } else {
-      await client.query(
+      stageCheckpointQuery(schedulerState, 5, checkpointKey(tenantId, target.repository.repository_id,
+        target.service.service_id, payload.pull_request_id), client,
         `UPDATE orchestration_pr_checkpoints
          SET reconciliation_generation=$5,current_job_id=$6,reconciliation_request=$7,
              latest_outcome='queued',updated_at=clock_timestamp()
@@ -661,7 +682,8 @@ const schedulePullRequest = async (
     });
     deferredBaselineRequests.push({ target, revision: payload.base_revision, dependentJobId: jobId });
     stageSupersede(schedulerState, current?.current_job_id, jobId);
-    await client.query(
+    stageCheckpointQuery(schedulerState, 5, checkpointKey(tenantId, target.repository.repository_id,
+      target.service.service_id, payload.pull_request_id), client,
       `INSERT INTO orchestration_pr_checkpoints
          (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
           provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id,latest_outcome)
@@ -681,7 +703,8 @@ const schedulePullRequest = async (
     );
     return { ...base, disposition: "scheduled", jobId };
   }
-  await client.query(
+  stageCheckpointQuery(schedulerState, 5, checkpointKey(tenantId, target.repository.repository_id,
+    target.service.service_id, payload.pull_request_id), client,
     `INSERT INTO orchestration_pr_checkpoints
        (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
         provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id,latest_outcome)
@@ -709,7 +732,7 @@ export const scheduleEventTargets = async (
   configuration: SchedulingConfiguration,
 ): Promise<SchedulingPlan> => {
   const results: ScheduledTarget[] = [];
-  const schedulerState: SchedulerState = { jobs: new Map(), transitions: [], dependencies: [] };
+  const schedulerState: SchedulerState = { jobs: new Map(), transitions: [], dependencies: [], checkpointWrites: [] };
   const deferredAnalysisCheckpoints: DeferredAnalysisCheckpoint[] = [];
   const deferredBaselineRequests: DeferredBaselineRequest[] = [];
   const deferredBranchReconciliations: DeferredBranchReconciliation[] = [];
@@ -778,10 +801,8 @@ export const scheduleEventTargets = async (
     deferredAnalysisCheckpoints.push(prerequisite.checkpoint);
     schedulerState.dependencies.push({ jobId: request.dependentJobId, prerequisiteJobId: prerequisite.jobId });
   }
-  for (const checkpoint of deferredAnalysisCheckpoints.sort((left, right) => Buffer.compare(
-    Buffer.from(left.sortKey, "utf8"), Buffer.from(right.sortKey, "utf8"),
-  ))) {
-    await checkpoint.persist();
+  for (const checkpoint of deferredAnalysisCheckpoints) {
+    schedulerState.checkpointWrites.push({ rank: 7, key: checkpoint.sortKey, apply: checkpoint.persist });
   }
   return Object.freeze({
     targets: Object.freeze(results.sort(byTarget)),
@@ -790,18 +811,45 @@ export const scheduleEventTargets = async (
     ))),
     transitions: Object.freeze([...schedulerState.transitions]),
     dependencies: Object.freeze([...schedulerState.dependencies]),
+    checkpointWrites: Object.freeze([...schedulerState.checkpointWrites]),
   });
+};
+
+type StagedScheduledJobs = Readonly<{
+  closure: Awaited<ReturnType<typeof discoverTransitionClosure>>;
+  dependents: readonly PlannedJobChange[];
+}>;
+
+/** Stage every propagated checkpoint while table ranks 4–7 are still writable. */
+export const stageScheduledJobCheckpoints = async (
+  client: PoolClient,
+  tenantId: string,
+  plan: SchedulingPlan,
+): Promise<StagedScheduledJobs> => {
+  const closure = await discoverTransitionClosure(client,
+    plan.transitions.map((transition) => ({ tenant_id: tenantId, job_id: transition.oldJobId })));
+  const transitionsById = new Map<string, typeof plan.transitions[number][]>();
+  for (const transition of plan.transitions) transitionsById.set(transition.oldJobId,
+    [...(transitionsById.get(transition.oldJobId) ?? []), transition]);
+  const roots = closure.filter((job) => (transitionsById.get(job.job_id) ?? []).some((transition) =>
+    job.state === "queued" || job.state === "retry_wait"
+      || transition.kind === "cancel" && job.state === "cancelled"
+      || transition.kind === "supersede" && job.state === "superseded"))
+    .map((job) => job.job_id);
+  const dependents = await stageTerminalDependents(client, tenantId, roots, closure);
+  await writePlannedCheckpoints(client, dependents, plan.checkpointWrites ?? []);
+  return { closure, dependents };
 };
 
 export const persistScheduledJobs = async (
   client: PoolClient,
   tenantId: string,
   plan: SchedulingPlan,
+  staged?: StagedScheduledJobs,
 ): Promise<void> => {
   const inserted: PreparedJob[] = [];
   const transitioned: Array<Readonly<{ jobId: string; state: "cancelled" | "superseded"; identity: unknown }>> = [];
-  const closure = await discoverTransitionClosure(client,
-    plan.transitions.map((transition) => ({ tenant_id: tenantId, job_id: transition.oldJobId })));
+  const { closure, dependents } = staged ?? await stageScheduledJobCheckpoints(client, tenantId, plan);
   const jobsById = new Map(plan.jobs.map((job) => [job.jobId, job]));
   const transitionsById = new Map<string, typeof plan.transitions[number][]>();
   for (const transition of plan.transitions) transitionsById.set(transition.oldJobId,
@@ -811,20 +859,11 @@ export const persistScheduledJobs = async (
   // existing and new job in one PK sequence so an insertion cannot jump ahead of an old row lock.
   const allIds = [...new Set([...jobsById.keys(), ...existingIds, ...transitionsById.keys()])]
     .sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
-  const lockedJobs = [];
   for (const jobId of allIds) {
-    const locked = await client.query<Parameters<typeof stageTerminalDependents>[3][number]>(
+    await client.query(
       `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2 FOR UPDATE`, [tenantId, jobId],
     );
-    lockedJobs.push(...locked.rows);
   }
-  const transitionRoots = lockedJobs.filter((job) => (transitionsById.get(job.job_id) ?? []).some((transition) =>
-    job.state === "queued" || job.state === "retry_wait"
-      || transition.kind === "cancel" && job.state === "cancelled"
-      || transition.kind === "supersede" && job.state === "superseded"))
-    .map((job) => job.job_id);
-  const dependents = await stageTerminalDependents(client, tenantId, transitionRoots, lockedJobs);
-  await writePlannedCheckpoints(client, dependents);
   const dependentsById = new Map<string, PlannedJobChange>(dependents.map((change) => [change.job.job_id, change]));
   const dependentNotifications = [];
   for (const jobId of allIds) {
@@ -953,10 +992,10 @@ export const scheduleConfigurationTransition = async (
   evidence: EventEnvelope["provider_evidence"],
   event?: EventEnvelope,
 ): Promise<SchedulingPlan> => {
-  const schedulerState: SchedulerState = { jobs: new Map(), transitions: [], dependencies: [] };
+  const schedulerState: SchedulerState = { jobs: new Map(), transitions: [], dependencies: [], checkpointWrites: [] };
   const newTargets = serviceTargets(next.document);
   if (affectedServiceIds.length === 0) {
-    return { targets: [], jobs: [], transitions: [], dependencies: [] };
+    return { targets: [], jobs: [], transitions: [], dependencies: [], checkpointWrites: [] };
   }
   const branchRows = await client.query<{ repository_id: string; service_id: string; branch: string; current_job_id: unknown }>(
     `SELECT repository_id,service_id,branch,current_job_id FROM orchestration_branch_checkpoints
@@ -981,7 +1020,8 @@ export const scheduleConfigurationTransition = async (
   );
   for (const row of branchRows.rows) {
     stageCancel(schedulerState, row.current_job_id);
-    await client.query(
+    stageCheckpointQuery(schedulerState, 4, checkpointKey(tenantId, row.repository_id,
+      row.service_id, row.branch), client,
       `UPDATE orchestration_branch_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND branch=$4`,
       [tenantId, row.repository_id, row.service_id, row.branch],
@@ -989,7 +1029,8 @@ export const scheduleConfigurationTransition = async (
   }
   for (const row of prRows.rows) {
     stageCancel(schedulerState, row.current_job_id);
-    await client.query(
+    stageCheckpointQuery(schedulerState, 5, checkpointKey(tenantId, row.repository_id,
+      row.service_id, row.pull_request_id), client,
       `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND pull_request_id=$4`,
       [tenantId, row.repository_id, row.service_id, row.pull_request_id],
@@ -1019,7 +1060,8 @@ export const scheduleConfigurationTransition = async (
         kind: "branch_reconciliation", target: desired.target, branch: desired.branch, generation,
       }, evidence);
       stageSupersede(schedulerState, prior?.current_job_id, jobId);
-      await client.query(
+      stageCheckpointQuery(schedulerState, 6, checkpointKey(tenantId, desired.target.repository.repository_id,
+        desired.serviceId, desired.branch), client,
         `INSERT INTO orchestration_reconciliation_checkpoints
            (tenant_id,repository_id,service_id,branch,requested_provider_snapshot_reference,generation,current_job_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -1033,7 +1075,8 @@ export const scheduleConfigurationTransition = async (
       continue;
     }
     stageCancel(schedulerState, prior!.current_job_id);
-    await client.query(
+    stageCheckpointQuery(schedulerState, 6, checkpointKey(tenantId, prior!.repository_id,
+      prior!.service_id, prior!.branch), client,
       `UPDATE orchestration_reconciliation_checkpoints SET current_job_id=NULL,last_outcome='obsolete',updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND branch=$4`,
       [tenantId, prior!.repository_id, prior!.service_id, prior!.branch],
@@ -1058,7 +1101,9 @@ export const scheduleConfigurationTransition = async (
   for (const row of analysisRows.rows) {
     if (row.current_job_state !== "queued" && row.current_job_state !== "retry_wait" && row.current_job_state !== "leased") continue;
     stageCancel(schedulerState, row.current_job_id);
-    await client.query(
+    stageCheckpointQuery(schedulerState, 7, checkpointKey(tenantId, row.repository_id, row.service_id,
+      row.service_root, row.immutable_revision, row.analyzer_adapter_id, row.analyzer_adapter_version,
+      row.exchange_version, row.ir_version, row.identity_version, row.config_version, row.config_fingerprint), client,
       `UPDATE orchestration_analysis_checkpoints
        SET current_job_id=NULL,last_terminal_outcome='cancelled',updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND service_root=$4 AND immutable_revision=$5
@@ -1074,5 +1119,6 @@ export const scheduleConfigurationTransition = async (
     jobs: Object.freeze([...schedulerState.jobs.values()].sort((left, right) => Buffer.compare(Buffer.from(left.jobId), Buffer.from(right.jobId)))),
     transitions: Object.freeze([...schedulerState.transitions]),
     dependencies: Object.freeze([]),
+    checkpointWrites: Object.freeze([...schedulerState.checkpointWrites]),
   });
 };
