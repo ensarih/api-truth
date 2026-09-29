@@ -6,6 +6,7 @@ import { requireControlCapability, requireWorkerCapability } from "./authorizati
 import { canonicalOrchestrationHash, canonicalOrchestrationJson, detachedFrozen } from "./canonical.js";
 import { withOrchestrationTransaction, withRestartingOrchestrationTransaction } from "./database.js";
 import { OrchestrationError } from "./errors.js";
+import { executeLeasedAnalysisJob, type WorkerPorts } from "./execution.js";
 import { semanticOrchestrationId } from "./hashing.js";
 import {
   acquireAdvisoryLocks, analysisCheckpointLock, branchLock, capacityGlobalLock, capacityRepositoryLock,
@@ -47,7 +48,7 @@ export type LeasedJob = Readonly<{
   leaseExpiresAt: string; lease: JobLease;
 }>;
 export type JobOutcome = Readonly<{
-  tenantId: string; jobId: string; state: "retry_wait" | "failed" | "cancelled" | "superseded";
+  tenantId: string; jobId: string; state: "succeeded" | "retry_wait" | "failed" | "cancelled" | "superseded";
   attemptCount: string; safeErrorCode?: string;
 }>;
 export type OutboxLease = Readonly<{ tenantId: string; outboxId: string; leaseToken: string }>;
@@ -65,6 +66,8 @@ export type ConcurrencyPolicySummary = Readonly<{
 export type OrchestrationWorker = Readonly<{
   claimJobs(worker: unknown, options?: unknown): Promise<LeasedJob[]>;
   heartbeatJob(worker: unknown, lease: unknown): Promise<JobLease>;
+  /** On an execution error, the caller reports the same live lease to failJob for durable retry or terminal failure. */
+  runJob(worker: unknown, lease: unknown, ports: WorkerPorts): Promise<JobOutcome>;
   failJob(worker: unknown, lease: unknown, failure: unknown): Promise<JobOutcome>;
   claimOutbox(worker: unknown, options?: unknown): Promise<LeasedOutboxRecord[]>;
   acknowledgeOutbox(worker: unknown, lease: unknown): Promise<void>;
@@ -769,6 +772,11 @@ const outboxPayload = (input: unknown): Readonly<Record<string, string>> => {
 };
 
 export const createOrchestrationWorker = (pool: Pool, options: { schema: string }): OrchestrationWorker => ({
+  async runJob(workerInput, leaseInput, ports) {
+    const worker = requireWorkerCapability(workerInput, "jobs.execute");
+    const lease = parseJobLease(leaseInput);
+    return executeLeasedAnalysisJob(pool, options, worker, lease, ports);
+  },
   async claimJobs(workerInput, optionsInput) {
     const worker = requireWorkerCapability(workerInput, "jobs.execute");
     const limit = parseClaimLimit(optionsInput);
