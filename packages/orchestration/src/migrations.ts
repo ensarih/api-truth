@@ -180,6 +180,7 @@ export const applyOrchestrationMigrationManifest = async (
 const orchestrationMigrationManifest = async (): Promise<OrchestrationMigration[]> => Promise.all([
   "0001_orchestration_core",
   "0002_ordered_scheduling",
+  "0003_durable_workers",
 ].map(async (version) => ({
   version,
   sql: await readFile(new URL(`../migrations/${version}.sql`, import.meta.url), "utf8"),

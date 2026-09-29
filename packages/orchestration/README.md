@@ -16,8 +16,11 @@ written before immutable events and targets, jobs and dependencies follow,
 and outbox records are last. Branch selection is exact and case-sensitive.
 Incomparable evidence preserves the current desired state and requests
 exact-scope reconciliation; stale evidence is retained without changing a
-checkpoint. Worker leasing, execution, and reconciliation result application
-are implemented by later D08 slices.
+checkpoint. Workers can now claim and heartbeat durable jobs, recover expired
+leases, apply bounded retries and concurrency limits, propagate dependency
+failure, and deliver the transactional outbox with independent permissions.
+Analyzer execution and reconciliation result application follow in later D08
+slices.
 
 PR checkpoints keep authoritative state and evidence separate from a pending
 opaque reconciliation request. A first opaque PR observation creates an

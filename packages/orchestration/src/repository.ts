@@ -10,6 +10,10 @@ import { OrchestrationError, orchestrationValidationError } from "./errors.js";
 import { eventSha256, semanticOrchestrationId } from "./hashing.js";
 import { classifyProviderUpdate } from "./ordering.js";
 import {
+  discoverActiveTransitionJobs, discoverTransitionClosure, lockTransitionCheckpoints, lockTransitionJobs,
+  propagateAndNotifyTerminalDependencies, transitionAdvisoryLocks,
+} from "./worker.js";
+import {
   acquireAdvisoryLocks,
   analysisCheckpointLock,
   branchLock,
@@ -450,7 +454,9 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       const discoveredTransition = await discoverConfigurationTransitionLocks(
         client, context.tenantId, discoveredCurrentConfiguration, candidateConfiguration, discoveredAffectedServiceIds,
       );
-      const acquired = await acquireAdvisoryLocks(client, [...carriedLocks, ...discoveredTransition.locks]);
+      const transitionJobs = await discoverActiveTransitionJobs(client, context.tenantId, discoveredAffectedServiceIds);
+      const acquired = await acquireAdvisoryLocks(client, [...carriedLocks, ...discoveredTransition.locks,
+        ...transitionAdvisoryLocks(transitionJobs)]);
       const current = await readActive(client, context.tenantId, true);
       if (current.checkpoint_version !== activation.expectedCheckpointVersion) throw new OrchestrationError("CONFIGURATION_CONFLICT");
       const currentConfiguration = schedulingConfiguration(current);
@@ -462,6 +468,9 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         client, context.tenantId, currentConfiguration, candidateConfiguration, affectedServiceIds,
       );
       requireDiscoveredLocks(acquired, requiredTransition.locks);
+      const currentTransitionJobs = await discoverActiveTransitionJobs(client, context.tenantId, affectedServiceIds);
+      requireDiscoveredLocks(acquired, transitionAdvisoryLocks(currentTransitionJobs));
+      await lockTransitionCheckpoints(client, currentTransitionJobs);
       const result = await activate(client, context.tenantId, candidate, current, activation.providerEvidence!);
       if (result.outcome === "activated") {
         const plan = await scheduleConfigurationTransition(
@@ -544,6 +553,9 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         ...discoverSchedulingLocks(context.tenantId, detachedEvent, discoveredConfiguration),
         ...discoveredTransitionLocks,
       ];
+      const transitionJobs = await discoverActiveTransitionJobs(client, context.tenantId,
+        detachedEvent.subjects.service_ids);
+      discoveredLocks.push(...transitionAdvisoryLocks(transitionJobs));
       const acquired = await acquireAdvisoryLocks(client, [...carriedLocks, ...discoveredLocks]);
       const existing = await client.query<{ event_sha256: unknown; active_config_fingerprint: unknown }>(
         `SELECT event_sha256, active_config_fingerprint
@@ -605,6 +617,10 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         }
         throw new OrchestrationLockRestart(currentLocks);
       }
+      const currentTransitionJobs = await discoverActiveTransitionJobs(client, context.tenantId,
+        detachedEvent.subjects.service_ids);
+      requireDiscoveredLocks(acquired, transitionAdvisoryLocks(currentTransitionJobs));
+      await lockTransitionCheckpoints(client, currentTransitionJobs);
       const activeDocument = configurationFromRow(active);
       const candidate = discoveredCandidate;
       const authorized = authorizeNormalizedEvent(context, detachedEvent, activeDocument,
@@ -734,7 +750,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     if (typeof jobIdInput !== "string" || jobIdInput.length === 0) {
       throw new OrchestrationError("JOB_NOT_FOUND_OR_DENIED");
     }
-    return withOrchestrationTransaction(pool, options, async (client) => {
+    return withRestartingOrchestrationTransaction(pool, options, [], async (client, carriedLocks) => {
       const discovered = await client.query<{
         kind: string; repository_id: string; service_id: string; branch: string | null; pull_request_id: string | null;
         semantic_identity: unknown;
@@ -745,6 +761,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       );
       const job = discovered.rows[0];
       if (job === undefined) throw new OrchestrationError("JOB_NOT_FOUND_OR_DENIED");
+      const discoveredClosure = await discoverTransitionClosure(client, [{ tenant_id: context.tenantId, job_id: jobIdInput }]);
       const locks: AdvisoryLockKey[] = [
         configurationLock(context.tenantId),
         capacityGlobalLock(context.tenantId),
@@ -769,8 +786,13 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         locks.push(analysisCheckpointLock(context.tenantId, job.repository_id, job.service_id,
           canonicalOrchestrationHash(analysis)));
       }
-      await acquireAdvisoryLocks(client, locks);
+      locks.push(...transitionAdvisoryLocks(discoveredClosure));
+      const acquired = await acquireAdvisoryLocks(client, [...carriedLocks, ...locks]);
       await readActive(client, context.tenantId, true);
+      const closure = await discoverTransitionClosure(client, [{ tenant_id: context.tenantId, job_id: jobIdInput }]);
+      requireDiscoveredLocks(acquired, transitionAdvisoryLocks(closure));
+      await lockTransitionCheckpoints(client, closure);
+      await lockTransitionJobs(client, closure);
       await client.query(
         `SELECT 1 FROM orchestration_branch_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
         [context.tenantId, jobIdInput],
@@ -804,7 +826,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
          WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
       );
       await client.query(
-        `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,updated_at=clock_timestamp()
+        `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
          WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
       );
       await client.query(
@@ -826,6 +848,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       );
       const nextState = currentState === "leased" ? "leased" : "cancelled";
       if (nextState === "cancelled") {
+        await propagateAndNotifyTerminalDependencies(client, context.tenantId, [jobIdInput]);
         await insertOutbox(client, context.tenantId, { kind: "job.state_changed", jobId: jobIdInput, state: nextState },
           "job.state_changed", { jobId: jobIdInput, state: nextState }, undefined, undefined, jobIdInput);
       }

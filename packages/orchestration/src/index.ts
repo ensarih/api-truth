@@ -25,6 +25,11 @@ export {
 } from "./migrations.js";
 export type { OrchestrationMigration } from "./migrations.js";
 export { createOrchestrationRepository } from "./repository.js";
+export { createOrchestrationWorker } from "./worker.js";
+export type {
+  JobLease, LeasedJob, OutboxLease, LeasedOutboxRecord, JobOutcome, OutboxOutcome,
+  OrchestrationWorker, ConcurrencyPolicySummary,
+} from "./worker.js";
 export type {
   ConfigurationActivation,
   ConfigurationRegistration,

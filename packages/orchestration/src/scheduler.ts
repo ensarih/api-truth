@@ -6,6 +6,7 @@ import {
   type InstallationConfig,
 } from "@api-truth/ir";
 import type { PoolClient } from "pg";
+import { discoverTransitionClosure, lockTransitionJobs, propagateAndNotifyTerminalDependencies } from "./worker.js";
 
 import { isConfiguredBranch, selectPullRequestScope, selectReconciliationBranches } from "./branch-selection.js";
 import { canonicalOrchestrationHash, canonicalOrchestrationJson } from "./canonical.js";
@@ -629,15 +630,16 @@ const schedulePullRequest = async (
         `INSERT INTO orchestration_pr_checkpoints
            (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
             provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,
-            reconciliation_generation,current_job_id,reconciliation_request)
-         VALUES ($1,$2,$3,$4,'pending',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,0,$5,$6,$7)`,
+            reconciliation_generation,current_job_id,reconciliation_request,latest_outcome)
+         VALUES ($1,$2,$3,$4,'pending',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,0,$5,$6,$7,'queued')`,
         [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id,
           generation, reconciliationId, nextCheckpoint],
       );
     } else {
       await client.query(
         `UPDATE orchestration_pr_checkpoints
-         SET reconciliation_generation=$5,current_job_id=$6,reconciliation_request=$7,updated_at=clock_timestamp()
+         SET reconciliation_generation=$5,current_job_id=$6,reconciliation_request=$7,
+             latest_outcome='queued',updated_at=clock_timestamp()
          WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND pull_request_id=$4`,
         [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id,
           generation, reconciliationId, nextCheckpoint],
@@ -661,13 +663,14 @@ const schedulePullRequest = async (
     await client.query(
       `INSERT INTO orchestration_pr_checkpoints
          (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
-          provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id,latest_outcome)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'queued')
        ON CONFLICT (tenant_id,repository_id,service_id,pull_request_id) DO UPDATE SET state=EXCLUDED.state,
          base_branch=EXCLUDED.base_branch,base_revision=EXCLUDED.base_revision,head_branch=EXCLUDED.head_branch,
          head_revision=EXCLUDED.head_revision,provider=EXCLUDED.provider,provider_reference=EXCLUDED.provider_reference,
          order_kind=EXCLUDED.order_kind,order_value=EXCLUDED.order_value,checkpoint_version=EXCLUDED.checkpoint_version,
          analysis_generation=EXCLUDED.analysis_generation,current_job_id=EXCLUDED.current_job_id,
+         latest_outcome='queued',
          reconciliation_request=NULL,updated_at=clock_timestamp()`,
       [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
         payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
@@ -680,13 +683,14 @@ const schedulePullRequest = async (
   await client.query(
     `INSERT INTO orchestration_pr_checkpoints
        (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
-        provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id,latest_outcome)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'cancelled')
      ON CONFLICT (tenant_id,repository_id,service_id,pull_request_id) DO UPDATE SET state=EXCLUDED.state,
        base_branch=EXCLUDED.base_branch,base_revision=EXCLUDED.base_revision,head_branch=EXCLUDED.head_branch,
        head_revision=EXCLUDED.head_revision,provider=EXCLUDED.provider,provider_reference=EXCLUDED.provider_reference,
        order_kind=EXCLUDED.order_kind,order_value=EXCLUDED.order_value,checkpoint_version=EXCLUDED.checkpoint_version,
        analysis_generation=EXCLUDED.analysis_generation,current_job_id=EXCLUDED.current_job_id,
+       latest_outcome='cancelled',
        reconciliation_request=NULL,updated_at=clock_timestamp()`,
     [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
       payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
@@ -795,6 +799,9 @@ export const persistScheduledJobs = async (
 ): Promise<void> => {
   const inserted: PreparedJob[] = [];
   const transitioned: Array<Readonly<{ jobId: string; state: "cancelled" | "superseded"; identity: unknown }>> = [];
+  const closure = await discoverTransitionClosure(client,
+    plan.transitions.map((transition) => ({ tenant_id: tenantId, job_id: transition.oldJobId })));
+  await lockTransitionJobs(client, closure);
   for (const job of plan.jobs) {
     if (await persistJob(client, tenantId, job)) inserted.push(job);
   }
@@ -819,6 +826,8 @@ export const persistScheduledJobs = async (
       [tenantId, dependency.jobId, dependency.prerequisiteJobId],
     );
   }
+  await propagateAndNotifyTerminalDependencies(client, tenantId,
+    transitioned.map((transition) => transition.jobId));
   for (const job of inserted) {
     await insertJobStateOutbox(client, tenantId, job.jobId, "queued", job.identity);
   }
@@ -956,7 +965,7 @@ export const scheduleConfigurationTransition = async (
   for (const row of prRows.rows) {
     stageCancel(schedulerState, row.current_job_id);
     await client.query(
-      `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,updated_at=clock_timestamp()
+      `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND pull_request_id=$4`,
       [tenantId, row.repository_id, row.service_id, row.pull_request_id],
     );

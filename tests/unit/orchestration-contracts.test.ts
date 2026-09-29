@@ -107,6 +107,7 @@ describe("D08 orchestration contracts", () => {
       "classifyProviderUpdate",
       "computeRetryDelayMs",
       "createOrchestrationRepository",
+      "createOrchestrationWorker",
       "eventSha256",
       "isConfiguredBranch",
       "isMonotoneProviderConfirmation",
