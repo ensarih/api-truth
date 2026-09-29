@@ -40,8 +40,8 @@ export const classifyProviderUpdate = (
   const next = parseCheckpoint(nextInput);
   const current = currentInput === undefined ? undefined : parseCheckpoint(currentInput);
   if (current === undefined) {
-    return next.evidence.order?.kind === "sequence" && !canonicalDecimal.test(next.evidence.order.value)
-      ? "incomparable" : "first";
+    return next.evidence.order?.kind === "sequence" && canonicalDecimal.test(next.evidence.order.value)
+      ? "first" : "incomparable";
   }
   if (current.evidence.provider !== next.evidence.provider) return "incomparable";
   const oldOrder = current.evidence.order;

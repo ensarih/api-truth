@@ -7,12 +7,14 @@ import {
   classifyProviderUpdate,
   computeRetryDelayMs,
   eventSha256,
+  isConfiguredBranch,
   parseAuthenticatedEventContext,
   parseJobStatus,
   reduceOutboxState,
   requireControlCapability,
   requireWorkerCapability,
   reduceJobState,
+  selectBranchlessBaseline,
   selectPullRequestScope,
   selectReconciliationBranches,
 } from "../../packages/orchestration/src/index.js";
@@ -126,10 +128,64 @@ describe("D08 orchestration contracts", () => {
     expect(() => authorizeNormalizedEvent(
       { ...admin, capabilities: ["event.ingest"] }, event, config(),
     )).toThrowError(expect.objectContaining({ code: "EVENT_UNAUTHORIZED" }));
+    expect(() => authorizeNormalizedEvent(admin, event, config())).toThrowError(
+      expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }),
+    );
+    expect(() => authorizeNormalizedEvent(admin, event, config(), {
+      activeConfiguration: { fingerprint: "active", document: config() },
+    })).toThrowError(expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }));
+    expect(() => authorizeNormalizedEvent(admin, event, config(), {
+      candidateConfiguration: { fingerprint: "candidate", document: config() },
+    })).toThrowError(expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }));
     expect(authorizeNormalizedEvent(admin, event, config(), {
       activeConfiguration: { fingerprint: "active", document: config() },
       candidateConfiguration: { fingerprint: "candidate", document: config() },
     })).toMatchObject({ targets: [{ serviceId: "orders" }] });
+    expect(() => authorizeNormalizedEvent(admin, event, config(), {
+      activeConfiguration: { fingerprint: "candidate", document: config() },
+      candidateConfiguration: { fingerprint: "candidate", document: config() },
+    })).toThrowError(expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }));
+    expect(() => authorizeNormalizedEvent(admin, event, config(), {
+      activeConfiguration: { fingerprint: "active", document: config() },
+      candidateConfiguration: { fingerprint: "different", document: config() },
+    })).toThrowError(expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }));
+    const wrongRegisteredActive = config();
+    wrongRegisteredActive.repositories[0]!.services[0]!.root = "different/orders";
+    expect(() => authorizeNormalizedEvent(admin, event, config(), {
+      activeConfiguration: { fingerprint: "active", document: wrongRegisteredActive },
+      candidateConfiguration: { fingerprint: "candidate", document: config() },
+    })).toThrowError(expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }));
+
+    const multiService = config();
+    multiService.repositories[0]!.services.push({
+      ...structuredClone(multiService.repositories[0]!.services[0]!),
+      service_id: "payments",
+      root: "services/payments",
+    });
+    event.subjects = { repository_id: "commerce", service_ids: ["orders", "payments"] };
+    event.payload = {
+      config_version: "1.0.0",
+      config_fingerprint: "candidate",
+      affected_service_ids: ["orders", "payments"],
+      affected_scope: "installation",
+    };
+    expect(authorizeNormalizedEvent({
+      ...admin,
+      allowedServices: ["orders", "payments"],
+    }, event, multiService, {
+      activeConfiguration: { fingerprint: "active", document: multiService },
+      candidateConfiguration: { fingerprint: "candidate", document: multiService },
+    })).toMatchObject({
+      targets: [{ serviceId: "orders" }, { serviceId: "payments" }],
+    });
+
+    event.subjects = { repository_id: "commerce", service_ids: ["orders"] };
+    event.payload = {
+      config_version: "1.0.0",
+      config_fingerprint: "candidate",
+      affected_service_ids: ["orders"],
+      affected_scope: "installation",
+    };
     (event.payload as { affected_service_ids: string[] }).affected_service_ids = ["unrelated"];
     expect(() => authorizeNormalizedEvent(admin, event, config(), {
       activeConfiguration: { fingerprint: "active", document: config() },
@@ -217,6 +273,15 @@ describe("D08 orchestration contracts", () => {
       ...(value === undefined ? {} : { order: { kind: "sequence" as const, value } }),
     });
     expect(classifyProviderUpdate(undefined, { evidence: evidence("1"), relevantPayload: { revision: "a" } })).toBe("first");
+    expect(classifyProviderUpdate(undefined, { evidence: evidence(), relevantPayload: { revision: "a" } })).toBe("incomparable");
+    expect(classifyProviderUpdate(undefined, {
+      evidence: { provider: "github", provider_reference: "ref", order: { kind: "cursor", value: "opaque" } },
+      relevantPayload: { revision: "a" },
+    })).toBe("incomparable");
+    expect(classifyProviderUpdate(undefined, {
+      evidence: { provider: "github", provider_reference: "ref", order: { kind: "effective_version", value: "opaque" } },
+      relevantPayload: { revision: "a" },
+    })).toBe("incomparable");
     const current = { evidence: evidence("9"), relevantPayload: { revision: "a" } };
     expect(classifyProviderUpdate(current, { evidence: evidence("9"), relevantPayload: { revision: "a" } })).toBe("exact_replay");
     expect(classifyProviderUpdate(current, { evidence: evidence("10"), relevantPayload: { revision: "b" } })).toBe("newer");
@@ -276,11 +341,20 @@ describe("D08 orchestration contracts", () => {
   test("contains hostile pure-policy inputs behind constant errors", () => {
     const marker = "secret://orchestration-policy";
     const hostile = new Proxy({}, { ownKeys: () => { throw new Error(marker); } });
+    const service = config().repositories[0]!.services[0]!;
     for (const operation of [
       () => classifyProviderUpdate(undefined, hostile),
       () => selectPullRequestScope(hostile, "main", "feature"),
+      () => isConfiguredBranch(service, hostile),
+      () => selectPullRequestScope(service, hostile, "feature"),
+      () => selectPullRequestScope(service, "main", hostile),
+      () => selectBranchlessBaseline(service, hostile),
       () => reduceJobState(hostile, { kind: "lease" }),
       () => computeRetryDelayMs(hostile),
+      () => selectReconciliationBranches(service, new Proxy(["uat"], {
+        ownKeys: () => { throw new Error(marker); },
+        get: () => { throw new Error(marker); },
+      })),
     ]) {
       let caught: unknown;
       try { operation(); } catch (error) { caught = error; }

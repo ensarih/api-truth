@@ -30,9 +30,22 @@ const validatedService = (input: unknown): ServiceConfiguration => {
   return parsed.value.repositories[0]!.services[0]!;
 };
 
+const detachedInput = (input: unknown): unknown => {
+  try { return JSON.parse(canonicalOrchestrationJson(input)); } catch { throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT"); }
+};
+
 const nonempty = (input: unknown): string => {
-  if (typeof input !== "string" || input.length === 0) throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
-  return input;
+  const candidate = detachedInput(input);
+  if (typeof candidate !== "string" || candidate.length === 0) throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
+  return candidate;
+};
+
+const environmentNames = (input: unknown): string[] => {
+  const candidate = detachedInput(input);
+  if (!Array.isArray(candidate) || candidate.some((value) => typeof value !== "string" || value.length === 0)) {
+    throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
+  }
+  return candidate;
 };
 
 export const isConfiguredBranch = (serviceInput: unknown, branchInput: unknown): boolean => {
@@ -58,10 +71,7 @@ export const selectReconciliationBranches = (
   environmentsInput: unknown,
 ): string[] => {
   const service = validatedService(serviceInput);
-  if (!Array.isArray(environmentsInput) || environmentsInput.some((value) => typeof value !== "string" || value.length === 0)) {
-    throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
-  }
-  const environments = environmentsInput as string[];
+  const environments = environmentNames(environmentsInput);
   if (service.intended_branches.length === 0) return [];
   if (environments.length === 0) return canonicalStringSet(service.intended_branches);
   const selected: string[] = [];

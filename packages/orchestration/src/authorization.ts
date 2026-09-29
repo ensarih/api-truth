@@ -127,12 +127,18 @@ export const authorizeNormalizedEvent = (
   const options = authorizationOptions(optionsInput);
 
   const document = configuration(activeConfigurationInput);
-  if (options.activeConfiguration !== undefined
-    && canonicalOrchestrationJson(document) !== canonicalOrchestrationJson(configuration(options.activeConfiguration.document))) {
+  if (event.event_type === "configuration.changed"
+    && (options.activeConfiguration === undefined || options.candidateConfiguration === undefined)) {
     throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
   }
-  const candidateDocument = event.event_type === "configuration.changed" && options.candidateConfiguration !== undefined
-    ? configuration(options.candidateConfiguration.document) : undefined;
+  const registeredActiveDocument = options.activeConfiguration === undefined
+    ? undefined : configuration(options.activeConfiguration.document);
+  if (registeredActiveDocument !== undefined
+    && canonicalOrchestrationJson(document) !== canonicalOrchestrationJson(registeredActiveDocument)) {
+    throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
+  }
+  const candidateDocument = event.event_type === "configuration.changed"
+    ? configuration(options.candidateConfiguration!.document) : undefined;
   const targets = resolveTargets(event, document, candidateDocument);
   if (targets.some((target) => !context.allowedRepositories.includes(target.repositoryId)
     || !context.allowedServices.includes(target.serviceId))) throw new OrchestrationError("EVENT_UNAUTHORIZED");
@@ -157,14 +163,12 @@ export const authorizeNormalizedEvent = (
   }
   if (event.event_type === "configuration.changed") {
     const payload = event.payload as { affected_service_ids: string[]; config_version: string; config_fingerprint: string };
-    if (!equalSets(event.subjects.service_ids, payload.affected_service_ids)) throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
-    if (options.activeConfiguration !== undefined && options.candidateConfiguration !== undefined) {
-      const impact = calculateConfigurationImpact(options.activeConfiguration, options.candidateConfiguration);
-      if (!equalSets(impact, event.subjects.service_ids)
-        || payload.config_version !== candidateDocument?.config_version
-        || payload.config_fingerprint !== options.candidateConfiguration.fingerprint) {
-        throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
-      }
+    const impact = calculateConfigurationImpact(options.activeConfiguration!, options.candidateConfiguration!);
+    if (!equalSets(event.subjects.service_ids, payload.affected_service_ids)
+      || !equalSets(impact, event.subjects.service_ids)
+      || payload.config_version !== candidateDocument!.config_version
+      || payload.config_fingerprint !== options.candidateConfiguration!.fingerprint) {
+      throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
     }
   }
   if (event.event_type === "deployment.changed") authorizeDeployment(context, event, document, targets);
