@@ -731,6 +731,18 @@ test("exact branch reconciliation repairs a missed revision and records absence 
       `SELECT snapshot_id FROM ${schema}.catalog_branch_pointers WHERE tenant_id=$1 AND branch='main'`, [tenantId],
     );
     expect(pointer.rows[0]?.snapshot_id).toBe(result.snapshot_id);
+    await repository.ingestEvent(context, reconciliationEvent("scan-stale-provider"));
+    const [stale] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    await expect(worker.runJob(workerIdentity, stale!.lease, {
+      exactBranchReconciler: { observe: async ({ branch }: { branch: string }) => ({
+        repositoryId: "commerce", branch, state: "present", immutableRevision: revision,
+        providerEvidence: { provider: "github", provider_reference: "provider-stale",
+          order: { kind: "sequence", value: "4" } },
+      }) },
+    } as never)).rejects.toMatchObject({ code: "RECONCILIATION_FAILED" });
+    await database.pool.query(`UPDATE ${schema}.orchestration_jobs SET max_attempts=1
+      WHERE tenant_id=$1 AND job_id=$2`, [tenantId, stale!.jobId]);
+    await worker.failJob(workerIdentity, stale!.lease, { code: "RECONCILIATION_FAILED" });
     await repository.ingestEvent(context, reconciliationEvent("scan-unchanged"));
     const [unchanged] = await worker.claimJobs(workerIdentity, { limit: 1 });
     expect(unchanged?.kind).toBe("branch_reconciliation");
@@ -837,5 +849,166 @@ test("an older branch reconciliation cannot apply after a newer request supersed
        FROM ${schema}.orchestration_reconciliation_checkpoints WHERE tenant_id=$1`, [tenantId],
     );
     expect(state.rows).toEqual([{ desired: "0", requested_provider_snapshot_reference: "scan-new" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("exact PR reconciliation keeps a closed PR closed until a newer observation proves reopening", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const baseRevision = "a".repeat(40);
+    const headRevision = "b".repeat(40);
+    const { result, request } = await preparedAnalysis(baseRevision);
+    result.status = "success";
+    result.coverage = { status: "complete", analyzed_roots: ["."], diagnostic_ids: [] };
+    const { repository, worker } = await activate(database, result);
+    const direct = (id: string, order: { kind: "sequence" | "cursor"; value: string }) => ({
+      ...pullRequestEvent(baseRevision, headRevision), event_id: id,
+      provider_evidence: { provider: "github", provider_reference: id, order },
+    });
+    await repository.ingestEvent(context, direct("pr-opaque-first", { kind: "cursor", value: "cursor-1" }));
+    const [first] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(first?.kind).toBe("pr_reconciliation");
+    const observation = (state: "open" | "closed", order: { kind: "sequence" | "cursor"; value: string }) => ({
+      repositoryId: "commerce", serviceId: "orders", pullRequestId: "42", state,
+      baseBranch: "main", baseRevision, headBranch: "feature/orders", headRevision,
+      providerEvidence: { provider: "github", provider_reference: `observed-${state}-${order.value}`, order },
+    });
+    await expect(worker.runJob(workerIdentity, first!.lease, {
+      exactPullRequestReconciler: { observe: async () => ({
+        ...observation("closed", { kind: "sequence", value: "10" }), pullRequestId: "other",
+      }) },
+    } as never)).rejects.toMatchObject({ code: "RECONCILIATION_FAILED", retryable: true });
+    expect(await worker.runJob(workerIdentity, first!.lease, {
+      exactPullRequestReconciler: { observe: async ({ pullRequestId, configuredBaseBranch }: {
+        pullRequestId: string; configuredBaseBranch: string;
+      }) => {
+        expect({ pullRequestId, configuredBaseBranch }).toEqual({ pullRequestId: "42", configuredBaseBranch: "main" });
+        return observation("closed", { kind: "sequence", value: "10" });
+      } },
+    } as never)).toMatchObject({ state: "succeeded" });
+    const schema = quoteCatalogTestSchema(database.schema);
+    const closed = await database.pool.query<{ state: string; current_job_id: string | null }>(
+      `SELECT state,current_job_id FROM ${schema}.orchestration_pr_checkpoints
+       WHERE tenant_id=$1 AND pull_request_id='42'`, [tenantId],
+    );
+    expect(closed.rows).toEqual([{ state: "closed", current_job_id: null }]);
+
+    await repository.ingestEvent(context, direct("pr-stale-open", { kind: "sequence", value: "9" }));
+    await repository.ingestEvent(context, direct("pr-opaque-open", { kind: "cursor", value: "cursor-2" }));
+    const [second] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(second?.kind).toBe("pr_reconciliation");
+    await expect(worker.runJob(workerIdentity, second!.lease, {
+      exactPullRequestReconciler: { observe: async () => observation("open", { kind: "cursor", value: "cursor-3" }) },
+    } as never)).rejects.toMatchObject({ code: "RECONCILIATION_FAILED", retryable: true });
+    const stillClosed = await database.pool.query<{ state: string }>(
+      `SELECT state FROM ${schema}.orchestration_pr_checkpoints WHERE tenant_id=$1 AND pull_request_id='42'`, [tenantId],
+    );
+    expect(stillClosed.rows[0]?.state).toBe("closed");
+    expect(await worker.runJob(workerIdentity, second!.lease, {
+      exactPullRequestReconciler: { observe: async () => observation("open", { kind: "sequence", value: "11" }) },
+    } as never)).toMatchObject({ state: "succeeded" });
+    const reopened = await database.pool.query<{ state: string; kind: string }>(
+      `SELECT checkpoint.state,job.kind FROM ${schema}.orchestration_pr_checkpoints checkpoint
+       JOIN ${schema}.orchestration_jobs job ON job.tenant_id=checkpoint.tenant_id
+         AND job.job_id=checkpoint.current_job_id
+       WHERE checkpoint.tenant_id=$1 AND checkpoint.pull_request_id='42'`, [tenantId],
+    );
+    expect(reopened.rows).toEqual([{ state: "open", kind: "pr_preview_analysis" }]);
+    const [baseline] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(baseline?.kind).toBe("baseline_analysis");
+    expect(await worker.runJob(workerIdentity, baseline!.lease, {
+      resolver: { resolve: async () => ({ request, changedPaths: [], changedPathsComplete: false }) },
+      analyzer: { analyze: async () => result },
+    })).toMatchObject({ state: "succeeded" });
+    const [preview] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(preview?.kind).toBe("pr_preview_analysis");
+    expect(await worker.runJob(workerIdentity, preview!.lease, {
+      resolver: { resolve: async ({ baseRevision: selectedBase }) => {
+        expect(selectedBase).toBe(baseRevision);
+        return { request: { ...request, request_id: `execution-${headRevision}`,
+          source: { ...request.source, immutable_revision: headRevision } },
+        changedPaths: [], changedPathsComplete: true };
+      } },
+      analyzer: { analyze: async () => { throw new Error("reuse should skip analyzer"); } },
+    })).toMatchObject({ state: "succeeded" });
+    const isolated = await database.pool.query<{ scope_kind: string; base_selected_revision: string;
+      pointers: string }>(
+      `SELECT scope_kind,base_selected_revision,
+         (SELECT count(*)::text FROM ${schema}.catalog_branch_pointers WHERE tenant_id=$1) AS pointers
+       FROM ${schema}.orchestration_job_results WHERE tenant_id=$1 AND job_id=$2`,
+      [tenantId, preview!.jobId],
+    );
+    expect(isolated.rows).toEqual([{ scope_kind: "pr_preview", base_selected_revision: baseRevision, pointers: "0" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("CAS configuration activation runs its eventless exact-branch reconciliation", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const { result } = await preparedAnalysis("a".repeat(40));
+    const { repository, worker } = await activate(database, result);
+    await repository.registerConfiguration(admin, { fingerprint: "exec-config-b", document: configuration.document });
+    await repository.activateConfigurationByCas(admin, { fingerprint: "exec-config-b",
+      expectedCheckpointVersion: "1",
+      providerEvidence: { provider: "control-plane", provider_reference: "approval-1" } });
+    const [claim] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(claim?.kind).toBe("branch_reconciliation");
+    expect(await worker.runJob(workerIdentity, claim!.lease, {
+      exactBranchReconciler: { observe: async ({ branch }: { branch: string }) => ({
+        repositoryId: "commerce", branch, state: "absent",
+        providerEvidence: { provider: "github", provider_reference: "confirmed-absent",
+          order: { kind: "sequence", value: "1" } },
+      }) },
+    } as never)).toMatchObject({ state: "succeeded" });
+    const schema = quoteCatalogTestSchema(database.schema);
+    const state = await database.pool.query<{ config_fingerprint: string; last_outcome: string }>(
+      `SELECT job.config_fingerprint,checkpoint.last_outcome
+       FROM ${schema}.orchestration_jobs job
+       JOIN ${schema}.orchestration_reconciliation_checkpoints checkpoint
+         ON checkpoint.tenant_id=job.tenant_id AND checkpoint.current_job_id=job.job_id
+       WHERE job.tenant_id=$1 AND job.job_id=$2`, [tenantId, claim!.jobId],
+    );
+    expect(state.rows).toEqual([{ config_fingerprint: "exec-config-b", last_outcome: "absent" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("an older exact-PR observation cannot replace a newer reconciliation generation", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const baseRevision = "a".repeat(40);
+    const headRevision = "b".repeat(40);
+    const { result } = await preparedAnalysis(baseRevision);
+    const { repository, worker } = await activate(database, result);
+    const opaque = (id: string) => ({ ...pullRequestEvent(baseRevision, headRevision), event_id: id,
+      provider_evidence: { provider: "github", provider_reference: id,
+        order: { kind: "cursor", value: id } } });
+    await repository.ingestEvent(context, opaque("pr-opaque-old"));
+    const [old] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(old?.kind).toBe("pr_reconciliation");
+    let release!: () => void;
+    const hold = new Promise<void>((resolveHold) => { release = resolveHold; });
+    let entered!: () => void;
+    const started = new Promise<void>((resolveStarted) => { entered = resolveStarted; });
+    const running = worker.runJob(workerIdentity, old!.lease, {
+      exactPullRequestReconciler: { observe: async () => {
+        entered();
+        await hold;
+        return { repositoryId: "commerce", serviceId: "orders", pullRequestId: "42", state: "open",
+          baseBranch: "main", baseRevision, headBranch: "feature/orders", headRevision,
+          providerEvidence: { provider: "github", provider_reference: "old-provider-result",
+            order: { kind: "sequence", value: "1" } } };
+      } },
+    } as never);
+    await started;
+    await repository.ingestEvent(context, opaque("pr-opaque-new"));
+    release();
+    await expect(running).rejects.toMatchObject({ code: "JOB_SUPERSEDED" });
+    const schema = quoteCatalogTestSchema(database.schema);
+    const state = await database.pool.query<{ state: string; base_revision: string | null;
+      generation: string }>(
+      `SELECT state,base_revision,reconciliation_generation::text AS generation
+       FROM ${schema}.orchestration_pr_checkpoints WHERE tenant_id=$1 AND pull_request_id='42'`, [tenantId],
+    );
+    expect(state.rows).toEqual([{ state: "pending", base_revision: null, generation: "2" }]);
   } finally { await database.cleanup(); }
 });

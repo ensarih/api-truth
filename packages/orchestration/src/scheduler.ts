@@ -455,17 +455,18 @@ const scheduleBranch = async (
   client: PoolClient,
   state: SchedulerState,
   tenantId: string,
-  event: EventEnvelope,
+  event: EventEnvelope | undefined,
   configuration: SchedulingConfiguration,
   target: TargetConfig,
   authoritative?: { branch: string; revision?: string; evidence: EventEnvelope["provider_evidence"];
     forceRepair: boolean },
 ): Promise<Readonly<{ target: ScheduledTarget; reconciliation?: Omit<DeferredBranchReconciliation, "resultIndex"> }>> => {
+  if (authoritative === undefined && event === undefined) throw new OrchestrationError("RECONCILIATION_FAILED");
   const payload = authoritative === undefined
-    ? event.payload as { branch: string; new_revision: string; reference_state: string }
+    ? event!.payload as { branch: string; new_revision: string; reference_state: string }
     : { branch: authoritative.branch, new_revision: authoritative.revision ?? "",
       reference_state: authoritative.revision === undefined ? "deleted" : "fast_forward" };
-  const evidence = authoritative?.evidence ?? event.provider_evidence;
+  const evidence = authoritative?.evidence ?? event!.provider_evidence;
   const base = { repositoryId: target.repository.repository_id, serviceId: target.service.service_id, scopeKey: `branch:${payload.branch}` };
   if (!isConfiguredBranch(target.service, payload.branch)) {
     return { target: { ...base, disposition: "ignored_unconfigured_branch", safeReason: "unconfigured_branch" } };
@@ -494,7 +495,7 @@ const scheduleBranch = async (
   if (classification === "incomparable") {
     return {
       target: { ...base, disposition: "reconciliation_required", safeReason: "reconciliation_required" },
-      reconciliation: { target, branch: payload.branch, reference: event.provider_evidence.provider_reference },
+      reconciliation: { target, branch: payload.branch, reference: evidence.provider_reference },
     };
   }
   const checkpointVersion = current === undefined ? "1" : (BigInt(current.checkpoint_version) + 1n).toString();
@@ -562,7 +563,7 @@ const scheduleBranch = async (
 export const scheduleAuthoritativeBranch = async (
   client: PoolClient,
   tenantId: string,
-  event: EventEnvelope,
+  event: EventEnvelope | undefined,
   configuration: SchedulingConfiguration,
   input: { repositoryId: string; serviceId: string; branch: string; revision?: string;
     evidence: EventEnvelope["provider_evidence"]; forceRepair: boolean },
@@ -641,8 +642,13 @@ const schedulePullRequest = async (
   configuration: SchedulingConfiguration,
   target: TargetConfig,
   deferredBaselineRequests: DeferredBaselineRequest[],
+  authoritative?: { payload: { pull_request_id: string; state: string; base_branch: string;
+    base_revision: string; head_branch: string; head_revision: string };
+    evidence: EventEnvelope["provider_evidence"]; reconciliationJobId: string },
 ): Promise<ScheduledTarget> => {
-  const payload = event.payload as { pull_request_id: string; state: string; base_branch: string; base_revision: string; head_branch: string; head_revision: string };
+  const payload = authoritative?.payload ?? event.payload as { pull_request_id: string; state: string;
+    base_branch: string; base_revision: string; head_branch: string; head_revision: string };
+  const evidence = authoritative?.evidence ?? event.provider_evidence;
   const base = { repositoryId: target.repository.repository_id, serviceId: target.service.service_id, scopeKey: `pr:${payload.pull_request_id}` };
   if (selectPullRequestScope(target.service, payload.base_branch, payload.head_branch) === undefined) {
     return { ...base, disposition: "ignored_unconfigured_branch", safeReason: "unconfigured_branch" };
@@ -662,10 +668,11 @@ const schedulePullRequest = async (
   const current = selected.rows[0];
   const relevantPayload = { state: payload.state, base_branch: payload.base_branch, base_revision: payload.base_revision,
     head_branch: payload.head_branch, head_revision: payload.head_revision };
-  const nextCheckpoint = { evidence: event.provider_evidence, relevantPayload };
-  const repeatedRequest = current?.reconciliation_request === null || current?.reconciliation_request === undefined
+  const nextCheckpoint = { evidence, relevantPayload };
+  const repeatedRequest = authoritative !== undefined || current?.reconciliation_request === null
+    || current?.reconciliation_request === undefined
     ? undefined : classifyProviderUpdate(current.reconciliation_request, nextCheckpoint);
-  let classification = current === undefined || current.state === "pending"
+  let classification = authoritative !== undefined ? "newer" : current === undefined || current.state === "pending"
     ? classifyProviderUpdate(undefined, nextCheckpoint)
     : classifyProviderUpdate(checkpointEvidence(current), nextCheckpoint);
   if (repeatedRequest === "exact_replay") classification = "exact_replay";
@@ -718,14 +725,18 @@ const schedulePullRequest = async (
   const generation = current === undefined ? "1" : (BigInt(current.analysis_generation) + 1n).toString();
   let jobId: string | undefined;
   if (terminal) {
-    stageCancel(schedulerState, current?.current_job_id);
+    if (current?.current_job_id !== authoritative?.reconciliationJobId) {
+      stageCancel(schedulerState, current?.current_job_id);
+    }
   } else {
     jobId = stageJob(schedulerState, tenantId, event, configuration, {
       kind: "pr_preview_analysis", target, pullRequestId: payload.pull_request_id,
       baseRevision: payload.base_revision, targetRevision: payload.head_revision, generation,
-    });
+    }, evidence);
     deferredBaselineRequests.push({ target, revision: payload.base_revision, dependentJobId: jobId });
-    stageSupersede(schedulerState, current?.current_job_id, jobId);
+    if (current?.current_job_id !== authoritative?.reconciliationJobId) {
+      stageSupersede(schedulerState, current?.current_job_id, jobId);
+    }
     stageCheckpointQuery(schedulerState, 5, checkpointKey(tenantId, target.repository.repository_id,
       target.service.service_id, payload.pull_request_id), client,
       `INSERT INTO orchestration_pr_checkpoints
@@ -741,8 +752,8 @@ const schedulePullRequest = async (
          reconciliation_request=NULL,updated_at=clock_timestamp()`,
       [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
         payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
-        event.provider_evidence.provider, event.provider_evidence.provider_reference, event.provider_evidence.order?.kind ?? null,
-        event.provider_evidence.order?.value ?? null, checkpointVersion, generation,
+        evidence.provider, evidence.provider_reference, evidence.order?.kind ?? null,
+        evidence.order?.value ?? null, checkpointVersion, generation,
         current?.reconciliation_generation ?? "0", jobId],
     );
     return { ...base, disposition: "scheduled", jobId };
@@ -762,11 +773,45 @@ const schedulePullRequest = async (
        reconciliation_request=NULL,updated_at=clock_timestamp()`,
     [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
       payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
-      event.provider_evidence.provider, event.provider_evidence.provider_reference, event.provider_evidence.order?.kind ?? null,
-      event.provider_evidence.order?.value ?? null, checkpointVersion, generation,
+      evidence.provider, evidence.provider_reference, evidence.order?.kind ?? null,
+      evidence.order?.value ?? null, checkpointVersion, generation,
       current?.reconciliation_generation ?? "0", jobId ?? null],
   );
   return { ...base, disposition: terminal ? "scheduled" : "scheduled", ...(jobId === undefined ? {} : { jobId }) };
+};
+
+export const scheduleAuthoritativePullRequest = async (
+  client: PoolClient,
+  tenantId: string,
+  event: EventEnvelope,
+  configuration: SchedulingConfiguration,
+  input: { repositoryId: string; serviceId: string; pullRequestId: string;
+    state: "open" | "closed" | "merged"; baseBranch: string; baseRevision: string;
+    headBranch: string; headRevision: string; evidence: EventEnvelope["provider_evidence"];
+    reconciliationJobId: string },
+): Promise<SchedulingPlan> => {
+  const target = targetConfig(configuration.document, input.serviceId);
+  if (target.repository.repository_id !== input.repositoryId
+    || selectPullRequestScope(target.service, input.baseBranch, input.headBranch) === undefined) {
+    throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
+  }
+  const state: SchedulerState = { jobs: new Map(), transitions: [], dependencies: [], checkpointWrites: [] };
+  const deferred: DeferredBaselineRequest[] = [];
+  const scheduled = await schedulePullRequest(client, state, tenantId, event, configuration, target, deferred, {
+    payload: { pull_request_id: input.pullRequestId, state: input.state, base_branch: input.baseBranch,
+      base_revision: input.baseRevision, head_branch: input.headBranch, head_revision: input.headRevision },
+    evidence: input.evidence, reconciliationJobId: input.reconciliationJobId,
+  });
+  for (const request of deferred) {
+    const prerequisite = await scheduleBaseline(client, state, tenantId, event, configuration,
+      request.target, request.revision);
+    state.checkpointWrites.push({ rank: 7, key: prerequisite.checkpoint.sortKey,
+      apply: prerequisite.checkpoint.persist });
+    state.dependencies.push({ jobId: request.dependentJobId, prerequisiteJobId: prerequisite.jobId });
+  }
+  return Object.freeze({ targets: Object.freeze([scheduled]), jobs: Object.freeze([...state.jobs.values()]),
+    transitions: Object.freeze(state.transitions), dependencies: Object.freeze(state.dependencies),
+    checkpointWrites: Object.freeze(state.checkpointWrites) });
 };
 
 export const scheduleEventTargets = async (
