@@ -1,0 +1,292 @@
+import { describe, expect, test, vi } from "vitest";
+import {
+  OrchestrationError,
+  authorizeNormalizedEvent,
+  calculateConfigurationImpact,
+  canonicalOrchestrationHash,
+  classifyProviderUpdate,
+  computeRetryDelayMs,
+  eventSha256,
+  parseAuthenticatedEventContext,
+  parseJobStatus,
+  reduceOutboxState,
+  requireControlCapability,
+  requireWorkerCapability,
+  reduceJobState,
+  selectPullRequestScope,
+  selectReconciliationBranches,
+} from "../../packages/orchestration/src/index.js";
+
+const config = () => ({
+  config_version: "1.0.0",
+  access_scopes: [{ access_scope_id: "engineering", label: "Engineering" }],
+  repositories: [{
+    repository_id: "commerce",
+    provider: "github",
+    locator: "acme/commerce",
+    access_scope_id: "engineering",
+    services: [{
+      service_id: "orders",
+      root: "services/orders",
+      analyzer: { adapter_id: "typescript", adapter_version: "1" },
+      intended_branches: ["main", "release/*"],
+      environments: [{
+        name: "uat",
+        intended_branch: "main",
+        deployment_authority: { adapter_id: "deploy", access_scope_id: "engineering" },
+      }],
+    }],
+  }],
+  inference: { enabled: false },
+  logs: { enabled: false },
+});
+
+const context = () => ({
+  tenantId: "tenant-1",
+  principalId: "principal-1",
+  producerId: "connector-1",
+  allowedEventTypes: ["branch.updated"],
+  allowedRepositories: ["commerce"],
+  allowedServices: ["orders"],
+  deploymentAuthorityGrants: [],
+  capabilities: ["event.ingest"],
+});
+
+const branchEvent = () => ({
+  event_version: "1.0.0",
+  event_id: "event-1",
+  event_type: "branch.updated",
+  producer: { producer_id: "connector-1", adapter_version: "1" },
+  occurred_at: "2026-01-01T00:00:00.000Z",
+  received_at: "2026-01-01T00:00:01.000Z",
+  subjects: { repository_id: "commerce", service_ids: ["orders"] },
+  provider_evidence: {
+    provider: "github",
+    provider_reference: "delivery-1",
+    order: { kind: "sequence", value: "123" },
+  },
+  payload: {
+    branch: "main",
+    prior_revision: null,
+    new_revision: "a".repeat(40),
+    reference_state: "created",
+  },
+});
+
+describe("D08 orchestration contracts", () => {
+  test("parses and detaches canonical authenticated contexts", () => {
+    const input = context();
+    const parsed = parseAuthenticatedEventContext(input);
+    expect(parsed).toMatchObject({ ok: true });
+    if (!parsed.ok) return;
+    input.allowedServices[0] = "changed";
+    expect(parsed.value.allowedServices).toEqual(["orders"]);
+    expect(Object.isFrozen(parsed.value.allowedServices)).toBe(true);
+    expect(parseAuthenticatedEventContext({ ...context(), allowedServices: ["orders", "orders"] }).ok).toBe(false);
+    expect(parseAuthenticatedEventContext({ ...context(), surprise: true }).ok).toBe(false);
+  });
+
+  test("requires event.ingest before reading hostile event input", () => {
+    const touched = vi.fn();
+    const event = Object.defineProperty({}, "event_type", { enumerable: true, get: () => { touched(); return "branch.updated"; } });
+    expect(() => authorizeNormalizedEvent(
+      { ...context(), capabilities: [] },
+      event,
+      config(),
+    )).toThrowError(expect.objectContaining({ code: "EVENT_UNAUTHORIZED" }));
+    expect(touched).not.toHaveBeenCalled();
+  });
+
+  test("authorizes exact repository/service scope and rejects widening", () => {
+    expect(authorizeNormalizedEvent(context(), branchEvent(), config())).toMatchObject({
+      event: { event_type: "branch.updated" },
+      targets: [{ repositoryId: "commerce", serviceId: "orders" }],
+    });
+    const widened = branchEvent();
+    widened.subjects.service_ids = ["orders", "unknown"];
+    expect(() => authorizeNormalizedEvent(context(), widened, config())).toThrowError(
+      expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }),
+    );
+  });
+
+  test("binds configuration events to administrator capability and exact computed impact", () => {
+    const event = branchEvent() as Record<string, unknown>;
+    event.event_type = "configuration.changed";
+    event.payload = {
+      config_version: "1.0.0",
+      config_fingerprint: "candidate",
+      affected_service_ids: ["orders"],
+      affected_scope: "installation",
+    };
+    const admin = {
+      ...context(),
+      allowedEventTypes: ["configuration.changed"],
+      capabilities: ["configuration.admin", "event.ingest"],
+    };
+    expect(() => authorizeNormalizedEvent(
+      { ...admin, capabilities: ["event.ingest"] }, event, config(),
+    )).toThrowError(expect.objectContaining({ code: "EVENT_UNAUTHORIZED" }));
+    expect(authorizeNormalizedEvent(admin, event, config(), {
+      activeConfiguration: { fingerprint: "active", document: config() },
+      candidateConfiguration: { fingerprint: "candidate", document: config() },
+    })).toMatchObject({ targets: [{ serviceId: "orders" }] });
+    (event.payload as { affected_service_ids: string[] }).affected_service_ids = ["unrelated"];
+    expect(() => authorizeNormalizedEvent(admin, event, config(), {
+      activeConfiguration: { fingerprint: "active", document: config() },
+      candidateConfiguration: { fingerprint: "candidate", document: config() },
+    })).toThrowError(expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }));
+  });
+
+  test("binds reconciliation environments without cross-service widening", () => {
+    const event = branchEvent() as Record<string, unknown>;
+    event.event_type = "reconciliation.requested";
+    event.subjects = { service_ids: ["orders"], environment: "uat" };
+    event.payload = {
+      scope: { service_ids: ["orders"], environments: ["uat"] },
+      provider_snapshot_reference: "snapshot-1",
+    };
+    const reconContext = { ...context(), allowedEventTypes: ["reconciliation.requested"] };
+    expect(authorizeNormalizedEvent(reconContext, event, config())).toMatchObject({ targets: [{ serviceId: "orders" }] });
+    (event.payload as { scope: { service_ids: string[]; environments: string[] } }).scope.environments = ["production"];
+    expect(() => authorizeNormalizedEvent(reconContext, event, config())).toThrowError(
+      expect.objectContaining({ code: "EVENT_SUBJECT_MISMATCH" }),
+    );
+  });
+
+  test("binds deployment adapters and observation authorities before deferral", () => {
+    const event = branchEvent() as Record<string, unknown>;
+    event.event_type = "deployment.changed";
+    event.producer = { producer_id: "deploy", adapter_version: "1" };
+    event.subjects = { repository_id: "commerce", service_ids: ["orders"], environment: "uat" };
+    event.payload = {
+      change_kind: "serving_observation", observation_id: "observation-1", environment: "uat",
+      source: { authority_id: "inventory", reference: "ref", access_label: "engineering" },
+      completeness: "complete", effective_order: "1",
+      serving_state: { status: "known", inventory: [] },
+    };
+    const deploymentContext = {
+      ...context(), producerId: "deploy", allowedEventTypes: ["deployment.changed"],
+      deploymentAuthorityGrants: [{
+        repositoryId: "commerce", serviceId: "orders", environment: "uat", adapterId: "deploy",
+        sourceAuthorityIds: ["inventory"],
+      }],
+    };
+    expect(authorizeNormalizedEvent(deploymentContext, event, config())).toMatchObject({ targets: [{ serviceId: "orders" }] });
+    (event.payload as { source: { authority_id: string } }).source.authority_id = "untrusted";
+    expect(() => authorizeNormalizedEvent(deploymentContext, event, config())).toThrowError(
+      expect.objectContaining({ code: "EVENT_UNAUTHORIZED" }),
+    );
+  });
+
+  test("uses exact case-sensitive branches, blocks glob expansion, and isolates PR heads", () => {
+    const service = config().repositories[0]!.services[0]!;
+    expect(selectPullRequestScope(service, "main", "feature/payments")).toEqual({
+      configuredBaseBranch: "main", isolatedHeadBranch: "feature/payments",
+    });
+    expect(selectPullRequestScope(service, "Main", "feature/payments")).toBeUndefined();
+    expect(selectPullRequestScope(service, "release/2026", "feature/payments")).toBeUndefined();
+    expect(selectReconciliationBranches(service, [])).toEqual(["main", "release/*"]);
+    expect(selectReconciliationBranches(service, ["uat"])).toEqual(["main"]);
+    expect(selectReconciliationBranches({
+      ...service,
+      intended_branches: [],
+      environments: service.environments.map(({ intended_branch: _branch, ...environment }) => environment),
+    }, [])).toEqual([]);
+  });
+
+  test("computes complete configuration impact including external identity", () => {
+    expect(calculateConfigurationImpact(
+      { fingerprint: "one", document: config() },
+      { fingerprint: "two", document: config() },
+    )).toEqual(["orders"]);
+    const next = config();
+    next.repositories[0]!.services[0]!.root = "apps/orders";
+    expect(calculateConfigurationImpact(
+      { fingerprint: "one", document: config() },
+      { fingerprint: "one", document: next },
+    )).toEqual(["orders"]);
+    expect(calculateConfigurationImpact(
+      { fingerprint: "one", document: config() },
+      { fingerprint: "one", document: config() },
+    )).toEqual([]);
+  });
+
+  test("classifies every provider ordering outcome without numeric conversion", () => {
+    const evidence = (value?: string) => ({
+      provider: "github", provider_reference: "ref",
+      ...(value === undefined ? {} : { order: { kind: "sequence" as const, value } }),
+    });
+    expect(classifyProviderUpdate(undefined, { evidence: evidence("1"), relevantPayload: { revision: "a" } })).toBe("first");
+    const current = { evidence: evidence("9"), relevantPayload: { revision: "a" } };
+    expect(classifyProviderUpdate(current, { evidence: evidence("9"), relevantPayload: { revision: "a" } })).toBe("exact_replay");
+    expect(classifyProviderUpdate(current, { evidence: evidence("10"), relevantPayload: { revision: "b" } })).toBe("newer");
+    expect(classifyProviderUpdate(current, { evidence: evidence("8"), relevantPayload: { revision: "b" } })).toBe("stale");
+    expect(classifyProviderUpdate(current, { evidence: evidence("9"), relevantPayload: { revision: "b" } })).toBe("conflict");
+    expect(classifyProviderUpdate(current, { evidence: evidence(), relevantPayload: { revision: "b" } })).toBe("incomparable");
+    const cursor = { evidence: { provider: "github", provider_reference: "ref", order: { kind: "cursor" as const, value: "opaque" } }, relevantPayload: { revision: "a" } };
+    expect(classifyProviderUpdate(cursor, structuredClone(cursor))).toBe("exact_replay");
+    expect(classifyProviderUpdate(cursor, { ...structuredClone(cursor), evidence: { ...cursor.evidence, order: { kind: "cursor", value: "changed" } } })).toBe("incomparable");
+    const huge = "9".repeat(500);
+    expect(classifyProviderUpdate(current, { evidence: evidence(huge), relevantPayload: { revision: "b" } })).toBe("newer");
+    expect(classifyProviderUpdate(current, { evidence: evidence("01"), relevantPayload: { revision: "b" } })).toBe("incomparable");
+  });
+
+  test("applies state precedence, idempotence, and deterministic retry", () => {
+    expect(reduceJobState({ state: "queued" }, { kind: "dependency_failed" })).toEqual({ state: "failed", errorCode: "JOB_DEPENDENCY_FAILED" });
+    expect(reduceJobState({ state: "retry_wait" }, { kind: "dependency_failed" })).toEqual({ state: "failed", errorCode: "JOB_DEPENDENCY_FAILED" });
+    expect(reduceJobState({ state: "queued" }, { kind: "dependency_failed", cancellationRequested: true, supersedingJobId: "j2" })).toEqual({ state: "superseded", supersedingJobId: "j2" });
+    expect(reduceJobState({ state: "succeeded" }, { kind: "dependency_failed" })).toEqual({ state: "succeeded" });
+    expect(computeRetryDelayMs({ attempt: 1, baseDelayMs: 1000, maxDelayMs: 5000 })).toBe(1000);
+    expect(computeRetryDelayMs({ attempt: 1000, baseDelayMs: 1000, maxDelayMs: 5000 })).toBe(5000);
+    expect(reduceOutboxState("pending", "lease")).toBe("leased");
+    expect(reduceOutboxState("leased", "deliver")).toBe("delivered");
+    expect(() => reduceOutboxState("pending", "deliver")).toThrowError(
+      expect.objectContaining({ code: "OUTBOX_LEASE_CONFLICT" }),
+    );
+  });
+
+  test("separates control and worker capabilities", () => {
+    expect(requireControlCapability({
+      tenantId: "tenant-1", principalId: "admin", capabilities: ["configuration.admin"],
+    }, "configuration.admin")).toMatchObject({ tenantId: "tenant-1" });
+    expect(() => requireWorkerCapability({
+      workerId: "worker-1", instanceId: "instance-1", capabilities: ["outbox.deliver"],
+    }, "jobs.execute")).toThrowError(expect.objectContaining({ code: "WORKER_UNAUTHORIZED" }));
+  });
+
+  test("normalizes event set order and excludes receiver time from event identity", () => {
+    const first = branchEvent();
+    const second = branchEvent();
+    second.received_at = "2026-01-02T00:00:00.000Z";
+    expect(eventSha256(first)).toBe(eventSha256(second));
+    second.occurred_at = "2026-01-02T00:00:00.000Z";
+    expect(eventSha256(first)).not.toBe(eventSha256(second));
+  });
+
+  test("keeps hashes deterministic and public status strict", () => {
+    expect(canonicalOrchestrationHash({ b: 2, a: 1 })).toBe(canonicalOrchestrationHash({ a: 1, b: 2 }));
+    const status = { jobId: "job-1", kind: "branch_analysis", state: "failed", attemptCount: "2", maxAttempts: "3", safeErrorCode: "JOB_EXECUTION_FAILED" };
+    expect(parseJobStatus(status)).toEqual({ ok: true, value: status });
+    expect(parseJobStatus({ ...status, branch: "secret" }).ok).toBe(false);
+    const marker = "credential=hunter2";
+    const error = new OrchestrationError("INVALID_ORCHESTRATION_INPUT", { issues: [{ path: `/${marker}`, code: marker }] });
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(marker);
+  });
+
+  test("contains hostile pure-policy inputs behind constant errors", () => {
+    const marker = "secret://orchestration-policy";
+    const hostile = new Proxy({}, { ownKeys: () => { throw new Error(marker); } });
+    for (const operation of [
+      () => classifyProviderUpdate(undefined, hostile),
+      () => selectPullRequestScope(hostile, "main", "feature"),
+      () => reduceJobState(hostile, { kind: "lease" }),
+      () => computeRetryDelayMs(hostile),
+    ]) {
+      let caught: unknown;
+      try { operation(); } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(OrchestrationError);
+      expect(caught).toMatchObject({ code: "INVALID_ORCHESTRATION_INPUT" });
+      expect(`${String(caught)} ${JSON.stringify(caught)}`).not.toContain(marker);
+    }
+  });
+});
