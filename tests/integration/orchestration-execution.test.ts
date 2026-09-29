@@ -19,7 +19,7 @@ const configuration = { fingerprint: "exec-config", document: {
 } };
 const admin = { tenantId, principalId: "admin", capabilities: ["configuration.admin"] };
 const context = { tenantId, principalId: "connector", producerId: "github-adapter",
-  allowedEventTypes: ["branch.updated", "repository.baseline_requested"], allowedRepositories: ["commerce"],
+  allowedEventTypes: ["branch.updated", "pull_request.updated", "repository.baseline_requested"], allowedRepositories: ["commerce"],
   allowedServices: ["orders"], deploymentAuthorityGrants: [], capabilities: ["event.ingest"] };
 const workerIdentity = { workerId: "execution-worker", instanceId: "one", capabilities: ["jobs.execute"] };
 const requestFor = (revision: string): AnalyzerRequest => ({
@@ -49,6 +49,16 @@ const branchEvent = (id: string, sequence: string, revision: string) => ({
   provider_evidence: { provider: "github", provider_reference: `delivery-${sequence}`,
     order: { kind: "sequence", value: sequence } },
   payload: { branch: "main", prior_revision: null, new_revision: revision, reference_state: "fast_forward" },
+});
+const pullRequestEvent = (baseRevision: string, headRevision: string) => ({
+  event_version: "1.0.0", event_id: `pr-${headRevision}`, event_type: "pull_request.updated",
+  producer: { producer_id: "github-adapter", adapter_version: "1" },
+  occurred_at: "2026-01-01T00:00:00.000Z", received_at: "2026-01-01T00:00:01.000Z",
+  subjects: { repository_id: "commerce", service_ids: ["orders"] },
+  provider_evidence: { provider: "github", provider_reference: `pr-delivery-${headRevision}`,
+    order: { kind: "sequence", value: "3" } },
+  payload: { pull_request_id: "42", state: "open", base_branch: "main", base_revision: baseRevision,
+    head_branch: "feature/orders", head_revision: headRevision },
 });
 
 const preparedAnalysis = async (revision: string, fixture = "baseline") => {
@@ -580,5 +590,100 @@ test("a changed D06 base pointer version during resolver work cannot commit a st
       [tenantId, second!.jobId, secondRevision],
     );
     expect(unchanged.rows[0]).toEqual({ state: "leased", count: "0" });
+  } finally { await database.cleanup(); }
+});
+
+test("a PR preview uses its declared base revision and never changes the branch pointer", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const baseRevision = "a".repeat(40);
+    const branchRevision = "c".repeat(40);
+    const headRevision = "b".repeat(40);
+    const base = await preparedAnalysis(baseRevision);
+    const branch = await preparedAnalysis(branchRevision, "changed");
+    base.result.status = "success";
+    base.result.coverage = { status: "complete", analyzed_roots: ["."], diagnostic_ids: [] };
+    const { repository, worker } = await activate(database, base.result);
+    const run = async (request: AnalyzerRequest, result: typeof base.result) => {
+      const [claim] = await worker.claimJobs(workerIdentity, { limit: 1 });
+      expect(claim).toBeDefined();
+      await worker.runJob(workerIdentity, claim!.lease, {
+        resolver: { resolve: async () => ({ request, changedPaths: [], changedPathsComplete: false }) },
+        analyzer: { analyze: async () => result },
+      });
+      return claim!;
+    };
+    await repository.ingestEvent(context, baselineEvent(baseRevision));
+    await run(base.request, base.result);
+    await repository.ingestEvent(context, branchEvent("branch-newer", "2", branchRevision));
+    await run(branch.request, branch.result);
+
+    const schema = quoteCatalogTestSchema(database.schema);
+    const before = await database.pool.query<{ snapshot_id: string; pointer_version: string }>(
+      `SELECT snapshot_id,pointer_version::text FROM ${schema}.catalog_branch_pointers
+       WHERE tenant_id=$1 AND repository_id='commerce' AND service_id='orders' AND branch='main'`, [tenantId],
+    );
+    expect(before.rows[0]?.snapshot_id).toBe(branch.result.snapshot_id);
+
+    await repository.ingestEvent(context, pullRequestEvent(baseRevision, headRevision));
+    const [preview] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(preview?.kind).toBe("pr_preview_analysis");
+    const headRequest = { ...base.request, request_id: `execution-${headRevision}`,
+      source: { ...base.request.source, immutable_revision: headRevision } };
+    let analyzerCalls = 0;
+    expect(await worker.runJob(workerIdentity, preview!.lease, {
+      resolver: { resolve: async ({ baseRevision: selectedBase }) => {
+        expect(selectedBase).toBe(baseRevision);
+        return { request: headRequest, changedPaths: [], changedPathsComplete: true };
+      } },
+      analyzer: { analyze: async () => { analyzerCalls += 1; return base.result; } },
+    })).toMatchObject({ state: "succeeded" });
+    expect(analyzerCalls).toBe(0);
+    const after = await database.pool.query<{ snapshot_id: string; pointer_version: string }>(
+      `SELECT snapshot_id,pointer_version::text FROM ${schema}.catalog_branch_pointers
+       WHERE tenant_id=$1 AND repository_id='commerce' AND service_id='orders' AND branch='main'`, [tenantId],
+    );
+    expect(after.rows).toEqual(before.rows);
+    const result = await database.pool.query<{ scope_kind: string; base_selected_revision: string;
+      base_snapshot_id: string }>(
+      `SELECT scope_kind,base_selected_revision,base_snapshot_id FROM ${schema}.orchestration_job_results
+       WHERE tenant_id=$1 AND job_id=$2`, [tenantId, preview!.jobId],
+    );
+    expect(result.rows).toEqual([{ scope_kind: "pr_preview", base_selected_revision: baseRevision,
+      base_snapshot_id: base.result.snapshot_id }]);
+
+    const nextHead = "d".repeat(40);
+    await repository.ingestEvent(context, { ...pullRequestEvent(baseRevision, nextHead),
+      payload: { ...pullRequestEvent(baseRevision, nextHead).payload, state: "updated" },
+      provider_evidence: { provider: "github", provider_reference: "pr-delivery-update",
+        order: { kind: "sequence", value: "4" } } });
+    const [pending] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(pending?.kind).toBe("pr_preview_analysis");
+    let release!: () => void;
+    const hold = new Promise<void>((resolveHold) => { release = resolveHold; });
+    let entered!: () => void;
+    const started = new Promise<void>((resolveStarted) => { entered = resolveStarted; });
+    const running = worker.runJob(workerIdentity, pending!.lease, {
+      resolver: { resolve: async () => {
+        entered();
+        await hold;
+        return { request: { ...headRequest, request_id: `execution-${nextHead}`,
+          source: { ...headRequest.source, immutable_revision: nextHead } },
+        changedPaths: [], changedPathsComplete: true };
+      } },
+      analyzer: { analyze: async () => base.result },
+    });
+    await started;
+    await repository.ingestEvent(context, { ...pullRequestEvent(baseRevision, nextHead),
+      event_id: "pr-closed", payload: { ...pullRequestEvent(baseRevision, nextHead).payload, state: "closed" },
+      provider_evidence: { provider: "github", provider_reference: "pr-delivery-close",
+        order: { kind: "sequence", value: "5" } } });
+    release();
+    await expect(running).rejects.toMatchObject({ code: "JOB_CANCELLED" });
+    const stale = await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schema}.orchestration_job_results
+       WHERE tenant_id=$1 AND job_id=$2`, [tenantId, pending!.jobId],
+    );
+    expect(stale.rows[0]?.count).toBe("0");
   } finally { await database.cleanup(); }
 });

@@ -21,6 +21,7 @@ import type { WorkerIdentity } from "./schemas.js";
 type Job = {
   tenant_id: string; job_id: string; kind: string; repository_id: string; service_id: string;
   branch: string | null; pull_request_id: string | null; target_revision: string | null;
+  base_revision: string | null;
   config_fingerprint: string; config_document_sha256: string; config_version: string;
   service_root: string; analyzer_adapter_id: string; analyzer_adapter_version: string;
   exchange_version: string; ir_version: string; identity_version: string;
@@ -39,6 +40,8 @@ type BranchCheckpoint = {
   last_successful_association_key: string | null;
 };
 type AnalysisCheckpoint = { current_job_id: string | null; attempt_generation: string };
+type PullRequestCheckpoint = { current_job_id: string | null; analysis_generation: string;
+  state: string; base_branch: string | null; base_revision: string | null; head_revision: string | null };
 type Configuration = { document: unknown; document_sha256: string; config_version: string };
 type Prepared = {
   job: Job; configuration: InstallationConfig; repository: InstallationConfig["repositories"][number];
@@ -48,7 +51,7 @@ type Materialized = {
   request: AnalyzerRequest; result?: AnalyzerResult; snapshot: StoredSnapshot["snapshot"];
   analyzerStatus: "success" | "partial"; associationKind: "analyzed" | "reused";
   update?: UpdateExecutionResult;
-  baseSelection?: { selectedRevision: string; snapshotId: string; pointerVersion: string;
+  baseSelection?: { selectedRevision: string; snapshotId: string; pointerVersion?: string;
     associationKey: string };
 };
 
@@ -84,7 +87,8 @@ const readPrepared = async (client: PoolClient, worker: WorkerIdentity, lease: J
     `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
   );
   const job = await validateLease(client, selected.rows[0], worker, lease);
-  if (job.kind !== "baseline_analysis" && job.kind !== "branch_analysis") fail("JOB_EXECUTION_FAILED");
+  if (job.kind !== "baseline_analysis" && job.kind !== "branch_analysis"
+    && job.kind !== "pr_preview_analysis") fail("JOB_EXECUTION_FAILED");
   const stored = await client.query<Configuration>(
     `SELECT document,document_sha256,config_version FROM orchestration_configurations
      WHERE tenant_id=$1 AND config_fingerprint=$2`, [job.tenant_id, job.config_fingerprint],
@@ -99,7 +103,9 @@ const readPrepared = async (client: PoolClient, worker: WorkerIdentity, lease: J
   if (repository === undefined || service === undefined || service.root !== job.service_root
     || service.analyzer.adapter_id !== job.analyzer_adapter_id
     || service.analyzer.adapter_version !== job.analyzer_adapter_version
-    || job.target_revision === null) fail("JOB_EXECUTION_FAILED");
+    || job.target_revision === null || job.kind === "pr_preview_analysis" && job.base_revision === null) {
+    fail("JOB_EXECUTION_FAILED");
+  }
   return { job, configuration: parsed.value, repository, service };
 };
 
@@ -236,9 +242,54 @@ const baseForBranch = async (pool: Pool, options: { schema: string }, prepared: 
   return undefined;
 };
 
+const baseForPreview = async (pool: Pool, options: { schema: string }, prepared: Prepared): Promise<{
+  stored: StoredSnapshot; selectedRevision: string; exchangeVersion: string;
+  associationKey: string;
+}> => {
+  const { job } = prepared;
+  const selected = await withOrchestrationTransaction(pool, options, (client) => client.query<{
+    immutable_revision: string; source_digest: string; snapshot_id: string; service_root: string;
+    analyzer_adapter_id: string; analyzer_adapter_version: string; exchange_version: string;
+    ir_version: string; identity_version: string; config_version: string; config_fingerprint: string;
+  }>(
+    `SELECT immutable_revision,source_digest,snapshot_id,service_root,analyzer_adapter_id,
+            analyzer_adapter_version,exchange_version,ir_version,identity_version,config_version,
+            config_fingerprint FROM orchestration_revision_snapshots
+     WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND immutable_revision=$4
+       AND service_root=$5 AND analyzer_adapter_id=$6 AND analyzer_adapter_version=$7
+       AND exchange_version=$8 AND ir_version=$9 AND identity_version=$10
+       AND config_version=$11 AND config_fingerprint=$12`,
+    [job.tenant_id, job.repository_id, job.service_id, job.base_revision, job.service_root,
+      job.analyzer_adapter_id, job.analyzer_adapter_version, job.exchange_version, job.ir_version,
+      job.identity_version, job.config_version, job.config_fingerprint],
+  ));
+  if (selected.rows.length !== 1) fail("JOB_EXECUTION_FAILED");
+  const row = selected.rows[0]!;
+  let stored: StoredSnapshot;
+  try {
+    stored = await createCatalogOrchestrationReader(pool, options).readStoredSnapshot({
+      tenantId: job.tenant_id, repositoryId: job.repository_id, serviceId: job.service_id,
+      snapshotId: row.snapshot_id,
+    });
+  } catch { fail("JOB_EXECUTION_FAILED"); }
+  if (stored.snapshotId !== row.snapshot_id || stored.snapshot.source.source_digest !== row.source_digest
+    || stored.snapshot.service.root !== row.service_root
+    || stored.snapshot.analyzer.analyzer_id !== row.analyzer_adapter_id
+    || stored.snapshot.analyzer.analyzer_version !== row.analyzer_adapter_version
+    || stored.snapshot.ir_version !== row.ir_version
+    || stored.snapshot.identity_version !== row.identity_version
+    || stored.snapshot.config.config_version !== row.config_version
+    || stored.snapshot.config.config_fingerprint !== row.config_fingerprint) fail("JOB_EXECUTION_FAILED");
+  return { stored, selectedRevision: row.immutable_revision, exchangeVersion: row.exchange_version,
+    associationKey: canonicalOrchestrationHash([job.tenant_id, job.repository_id, job.service_id,
+      row.service_root, row.immutable_revision, row.source_digest, row.analyzer_adapter_id,
+      row.analyzer_adapter_version, row.exchange_version, row.ir_version, row.identity_version,
+      row.config_version, row.config_fingerprint]) };
+};
+
 const materialize = async (prepared: Prepared,
   resolved: Awaited<ReturnType<typeof resolveRequest>>, ports: WorkerPorts,
-  baseSelection: Awaited<ReturnType<typeof baseForBranch>>,
+  baseSelection: Awaited<ReturnType<typeof baseForBranch>> | Awaited<ReturnType<typeof baseForPreview>>,
   beforeAnalyze: () => Promise<void>): Promise<Materialized> => {
   const { job } = prepared;
   const checkedPorts: WorkerPorts = { ...ports, analyzer: { analyze: async (request) => {
@@ -290,7 +341,8 @@ const materialize = async (prepared: Prepared,
     return { request: resolved.request, snapshot: parsedSnapshot.value, analyzerStatus: base.analyzerStatus,
       associationKind: "reused", update: result,
       baseSelection: { selectedRevision: baseSelection.selectedRevision, snapshotId: base.snapshotId,
-        pointerVersion: baseSelection.pointerVersion, associationKey: baseSelection.associationKey } };
+        ...("pointerVersion" in baseSelection ? { pointerVersion: baseSelection.pointerVersion } : {}),
+        associationKey: baseSelection.associationKey } };
   }
   if (result.analyzer_result === undefined) fail("JOB_EXECUTION_FAILED");
   let converted: ReturnType<typeof contractSnapshotFromAnalyzerResult>;
@@ -300,7 +352,8 @@ const materialize = async (prepared: Prepared,
   return { request: resolved.request, result: result.analyzer_result, snapshot: converted.snapshot,
     analyzerStatus: converted.analyzerStatus, associationKind: "analyzed", update: result,
     baseSelection: { selectedRevision: baseSelection.selectedRevision, snapshotId: base.snapshotId,
-      pointerVersion: baseSelection.pointerVersion, associationKey: baseSelection.associationKey } };
+      ...("pointerVersion" in baseSelection ? { pointerVersion: baseSelection.pointerVersion } : {}),
+      associationKey: baseSelection.associationKey } };
 };
 
 const provider = (row: { provider: string; provider_reference: string;
@@ -341,8 +394,11 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
   if (repo === undefined || service === undefined || service.root !== discovered.service_root) fail("PROMOTION_INELIGIBLE");
   if (discovered.kind === "branch_analysis" && (discovered.branch === null
     || !service.intended_branches.includes(discovered.branch))) fail("PROMOTION_INELIGIBLE");
+  if (discovered.kind === "pr_preview_analysis" && (discovered.pull_request_id === null
+    || service.intended_branches.length === 0)) fail("PROMOTION_INELIGIBLE");
   let branch: BranchCheckpoint | undefined;
   let analysis: AnalysisCheckpoint | undefined;
+  let pullRequest: PullRequestCheckpoint | undefined;
   if (discovered.kind === "branch_analysis") {
     const selected = await client.query<BranchCheckpoint>(
       `SELECT current_job_id,analysis_generation::text,desired_state,desired_revision,provider,provider_reference,
@@ -352,6 +408,14 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
        FOR UPDATE`, [lease.tenantId, discovered.repository_id, discovered.service_id, discovered.branch],
     );
     branch = selected.rows[0];
+  } else if (discovered.kind === "pr_preview_analysis") {
+    const selected = await client.query<PullRequestCheckpoint>(
+      `SELECT current_job_id,analysis_generation::text,state,base_branch,base_revision,head_revision
+       FROM orchestration_pr_checkpoints WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3
+         AND pull_request_id=$4 FOR UPDATE`,
+      [lease.tenantId, discovered.repository_id, discovered.service_id, discovered.pull_request_id],
+    );
+    pullRequest = selected.rows[0];
   } else {
     const selected = await client.query<AnalysisCheckpoint>(
       `SELECT current_job_id,attempt_generation::text FROM orchestration_analysis_checkpoints
@@ -382,6 +446,13 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
       || branch.last_successful_association_key !== material.baseSelection.associationKey)) {
       fail("PROMOTION_INELIGIBLE");
     }
+  } else if (job.kind === "pr_preview_analysis") {
+    if (pullRequest?.current_job_id !== job.job_id
+      || pullRequest.analysis_generation !== job.subject_generation
+      || !["open", "updated"].includes(pullRequest.state)
+      || !service.intended_branches.includes(pullRequest.base_branch ?? "")
+      || pullRequest.base_revision !== job.base_revision || pullRequest.head_revision !== job.target_revision
+      || material.baseSelection?.selectedRevision !== job.base_revision) fail("PROMOTION_INELIGIBLE");
   } else if (analysis?.current_job_id !== job.job_id || analysis.attempt_generation !== job.subject_generation) {
     fail("PROMOTION_INELIGIBLE");
   }
@@ -418,6 +489,12 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND branch=$4`,
       [job.tenant_id, job.repository_id, job.service_id, job.branch, job.job_id,
         snapshot.snapshot_id, job.target_revision, associationKey],
+    );
+  } else if (job.kind === "pr_preview_analysis") {
+    await client.query(
+      `UPDATE orchestration_pr_checkpoints SET last_preview_result_job_id=$5,updated_at=clock_timestamp()
+       WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND pull_request_id=$4`,
+      [job.tenant_id, job.repository_id, job.service_id, job.pull_request_id, job.job_id],
     );
   } else {
     await client.query(
@@ -480,7 +557,7 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
         plan_document,difference_document,target_snapshot_id,coverage_status,base_selected_revision,base_snapshot_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING`,
     [job.tenant_id, job.job_id, job.repository_id, job.service_id,
-      job.kind === "branch_analysis" ? "branch" : "baseline",
+      job.kind === "branch_analysis" ? "branch" : job.kind === "pr_preview_analysis" ? "pr_preview" : "baseline",
       material.update?.plan.update_plan_version ?? null,
       material.update?.differences.contract_difference_version ?? null,
       material.update?.plan ?? null, material.update?.differences ?? null,
@@ -525,7 +602,8 @@ export const executeLeasedAnalysisJob = async (pool: Pool, options: { schema: st
   const prepared = await withOrchestrationTransaction(pool, options, (client) => readPrepared(client, worker, lease));
   await confirmLive(pool, options, worker, lease);
   const baseSelection = prepared.job.kind === "branch_analysis"
-    ? await baseForBranch(pool, options, prepared) : undefined;
+    ? await baseForBranch(pool, options, prepared)
+    : prepared.job.kind === "pr_preview_analysis" ? await baseForPreview(pool, options, prepared) : undefined;
   await confirmLive(pool, options, worker, lease);
   const resolved = await resolveRequest(prepared, ports, baseSelection?.selectedRevision);
   await confirmLive(pool, options, worker, lease);
