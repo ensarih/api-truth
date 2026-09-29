@@ -25,6 +25,8 @@ export {
 } from "./migrations.js";
 export type { OrchestrationMigration } from "./migrations.js";
 export { createOrchestrationRepository } from "./repository.js";
+export { createReconciliationScheduler } from "./reconciliation-scheduler.js";
+export type { ScheduledReconciliationRequest } from "./reconciliation-scheduler.js";
 export { createOrchestrationWorker } from "./worker.js";
 export type { WorkerPorts } from "./worker.js";
 export type {

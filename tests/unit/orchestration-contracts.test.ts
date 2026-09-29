@@ -108,6 +108,7 @@ describe("D08 orchestration contracts", () => {
       "computeRetryDelayMs",
       "createOrchestrationRepository",
       "createOrchestrationWorker",
+      "createReconciliationScheduler",
       "eventSha256",
       "isConfiguredBranch",
       "isMonotoneProviderConfirmation",
