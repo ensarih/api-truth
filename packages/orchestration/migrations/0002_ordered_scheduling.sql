@@ -122,6 +122,20 @@ BEGIN
     EXECUTE format('ALTER TABLE %s ALTER CONSTRAINT %I DEFERRABLE INITIALLY DEFERRED',
       foreign_key.table_name, foreign_key.conname);
   END LOOP;
+
+  FOR foreign_key IN
+    SELECT constraint_row.conname
+    FROM pg_catalog.pg_constraint constraint_row
+    WHERE constraint_row.contype='f'
+      AND constraint_row.conrelid='orchestration_active_configurations'::regclass
+      AND constraint_row.confrelid='orchestration_events'::regclass
+      AND NOT constraint_row.condeferrable
+  LOOP
+    EXECUTE format(
+      'ALTER TABLE orchestration_active_configurations ALTER CONSTRAINT %I DEFERRABLE INITIALLY DEFERRED',
+      foreign_key.conname
+    );
+  END LOOP;
 END;
 $$;
 
@@ -239,16 +253,35 @@ BEGIN
   IF NEW.job_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM orchestration_jobs job
     WHERE job.tenant_id=NEW.tenant_id AND job.job_id=NEW.job_id
-      AND job.event_producer_id=NEW.producer_id AND job.event_id=NEW.event_id
       AND job.repository_id=NEW.repository_id AND job.service_id=NEW.service_id
       AND (
-        (NEW.scope_key='baseline' AND job.kind='baseline_analysis')
+        (NEW.scope_key='baseline' AND job.kind='baseline_analysis' AND EXISTS (
+          SELECT 1 FROM orchestration_analysis_checkpoints checkpoint
+          WHERE checkpoint.tenant_id=job.tenant_id AND checkpoint.repository_id=job.repository_id
+            AND checkpoint.service_id=job.service_id AND checkpoint.current_job_id=job.job_id
+            AND checkpoint.attempt_generation=job.subject_generation
+        ))
         OR (NEW.scope_key LIKE 'branch:%' AND job.kind='branch_analysis'
-          AND job.branch=substring(NEW.scope_key FROM 8))
+          AND job.branch=substring(NEW.scope_key FROM 8) AND EXISTS (
+            SELECT 1 FROM orchestration_branch_checkpoints checkpoint
+            WHERE checkpoint.tenant_id=job.tenant_id AND checkpoint.repository_id=job.repository_id
+              AND checkpoint.service_id=job.service_id AND checkpoint.branch=job.branch
+              AND checkpoint.current_job_id=job.job_id AND checkpoint.analysis_generation=job.subject_generation
+          ))
         OR (NEW.scope_key LIKE 'pr:%' AND job.kind='pr_preview_analysis'
-          AND job.pull_request_id=substring(NEW.scope_key FROM 4))
+          AND job.pull_request_id=substring(NEW.scope_key FROM 4) AND EXISTS (
+            SELECT 1 FROM orchestration_pr_checkpoints checkpoint
+            WHERE checkpoint.tenant_id=job.tenant_id AND checkpoint.repository_id=job.repository_id
+              AND checkpoint.service_id=job.service_id AND checkpoint.pull_request_id=job.pull_request_id
+              AND checkpoint.current_job_id=job.job_id AND checkpoint.analysis_generation=job.subject_generation
+          ))
         OR (NEW.scope_key LIKE 'reconciliation:%' AND job.kind='branch_reconciliation'
-          AND job.branch=substring(NEW.scope_key FROM 16))
+          AND job.branch=substring(NEW.scope_key FROM 16) AND EXISTS (
+            SELECT 1 FROM orchestration_reconciliation_checkpoints checkpoint
+            WHERE checkpoint.tenant_id=job.tenant_id AND checkpoint.repository_id=job.repository_id
+              AND checkpoint.service_id=job.service_id AND checkpoint.branch=job.branch
+              AND checkpoint.current_job_id=job.job_id AND checkpoint.generation=job.subject_generation
+          ))
       )
   ) THEN
     RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='event target job mismatch';
@@ -256,13 +289,22 @@ BEGIN
   IF NEW.reconciliation_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM orchestration_jobs job
     WHERE job.tenant_id=NEW.tenant_id AND job.job_id=NEW.reconciliation_id
-      AND job.event_producer_id=NEW.producer_id AND job.event_id=NEW.event_id
       AND job.repository_id=NEW.repository_id AND job.service_id=NEW.service_id
       AND (
         (NEW.scope_key LIKE 'branch:%' AND job.kind='branch_reconciliation'
-          AND job.branch=substring(NEW.scope_key FROM 8))
+          AND job.branch=substring(NEW.scope_key FROM 8) AND EXISTS (
+            SELECT 1 FROM orchestration_reconciliation_checkpoints checkpoint
+            WHERE checkpoint.tenant_id=job.tenant_id AND checkpoint.repository_id=job.repository_id
+              AND checkpoint.service_id=job.service_id AND checkpoint.branch=job.branch
+              AND checkpoint.current_job_id=job.job_id AND checkpoint.generation=job.subject_generation
+          ))
         OR (NEW.scope_key LIKE 'pr:%' AND job.kind='pr_reconciliation'
-          AND job.pull_request_id=substring(NEW.scope_key FROM 4))
+          AND job.pull_request_id=substring(NEW.scope_key FROM 4) AND EXISTS (
+            SELECT 1 FROM orchestration_pr_checkpoints checkpoint
+            WHERE checkpoint.tenant_id=job.tenant_id AND checkpoint.repository_id=job.repository_id
+              AND checkpoint.service_id=job.service_id AND checkpoint.pull_request_id=job.pull_request_id
+              AND checkpoint.current_job_id=job.job_id AND checkpoint.reconciliation_generation=job.subject_generation
+          ))
       )
   ) THEN
     RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='event target reconciliation mismatch';

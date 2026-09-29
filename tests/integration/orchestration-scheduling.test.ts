@@ -3,7 +3,11 @@ import { expect, test } from "vitest";
 import { applyOrchestrationMigrations, createOrchestrationRepository } from "../../packages/orchestration/src/index.js";
 import { catalogBranchAdvisoryKey } from "../../packages/catalog/src/index.js";
 import { setOrchestrationSearchPath } from "../../packages/orchestration/src/database.js";
-import { acquireAdvisoryLocks, catalogBranchLock } from "../../packages/orchestration/src/locking.js";
+import {
+  acquireAdvisoryLocks,
+  capacityServiceLock,
+  catalogBranchLock,
+} from "../../packages/orchestration/src/locking.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 
 const configuration = () => ({
@@ -91,6 +95,39 @@ test("opposite multi-service input order completes through canonical locks witho
       { service_id: "orders", desired_revision: "b".repeat(40) },
       { service_id: "payments", desired_revision: "b".repeat(40) },
     ]);
+  } finally { await database.cleanup(); }
+});
+
+test("multi-service PR scheduling writes every PR checkpoint before its analysis prerequisites", async () => {
+  const config = configuration();
+  config.document.repositories[0]!.services.push({
+    ...structuredClone(config.document.repositories[0]!.services[0]!),
+    service_id: "payments",
+    root: "services/payments",
+  });
+  const { database, repository, schemaSql } = await setup(config);
+  try {
+    const eventContext = { ...context(["pull_request.updated"]), allowedServices: ["orders", "payments"] };
+    const event = envelope("multi-pr", "pull_request.updated", "1", {
+      pull_request_id: "42", state: "open", base_branch: "main", base_revision: "a".repeat(40),
+      head_branch: "feature/multi", head_revision: "b".repeat(40),
+    });
+    event.subjects.service_ids = ["payments", "orders"];
+    await expect(repository.ingestEvent(eventContext, event)).resolves.toEqual({
+      outcome: "accepted", disposition: "scheduled", dispositionCounts: { scheduled: 2 },
+    });
+    const counts = await database.pool.query<{
+      pr_checkpoints: string; analysis_checkpoints: string; jobs: string; dependencies: string;
+    }>(
+      `SELECT
+         (SELECT count(*) FROM ${schemaSql}.orchestration_pr_checkpoints)::text AS pr_checkpoints,
+         (SELECT count(*) FROM ${schemaSql}.orchestration_analysis_checkpoints)::text AS analysis_checkpoints,
+         (SELECT count(*) FROM ${schemaSql}.orchestration_jobs)::text AS jobs,
+         (SELECT count(*) FROM ${schemaSql}.orchestration_job_dependencies)::text AS dependencies`,
+    );
+    expect(counts.rows).toEqual([{
+      pr_checkpoints: "2", analysis_checkpoints: "2", jobs: "4", dependencies: "2",
+    }]);
   } finally { await database.cleanup(); }
 });
 
@@ -212,6 +249,89 @@ test("uses reconciliation for incomparable branch evidence without changing desi
   } finally { await database.cleanup(); }
 });
 
+test("coalesces repeated exact-branch reconciliation requests across event identities", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    const reconciliation = (eventId: string) => ({
+      ...envelope(eventId, "reconciliation.requested", eventId, {
+        scope: { service_ids: ["orders"], environments: [] },
+        provider_snapshot_reference: "snapshot-shared",
+      }),
+      subjects: { repository_id: "commerce", service_ids: ["orders"] },
+    });
+    await expect(repository.ingestEvent(context(), reconciliation("reconcile-1"))).resolves.toMatchObject({ disposition: "scheduled" });
+    await expect(repository.ingestEvent(context(), reconciliation("reconcile-2"))).resolves.toMatchObject({ disposition: "scheduled" });
+    const rows = await database.pool.query<{ jobs: string; targets: string; links: string }>(
+      `SELECT
+         (SELECT count(*) FROM ${schemaSql}.orchestration_jobs WHERE kind='branch_reconciliation')::text AS jobs,
+         (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets WHERE scope_key='reconciliation:main')::text AS targets,
+         (SELECT count(DISTINCT job_id) FROM ${schemaSql}.orchestration_event_targets
+          WHERE scope_key='reconciliation:main')::text AS links`,
+    );
+    expect(rows.rows).toEqual([{ jobs: "1", targets: "2", links: "1" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("coalesces repeated opaque PR events onto one exact-PR reconciliation job", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    const opaquePr = (eventId: string, cursor: string, headRevision: string) => ({
+      ...envelope(eventId, "pull_request.updated", eventId, {
+        pull_request_id: "opaque-42", state: "updated", base_branch: "main", base_revision: "a".repeat(40),
+        head_branch: "feature/opaque", head_revision: headRevision,
+      }),
+      provider_evidence: {
+        provider: "github", provider_reference: `opaque-${cursor}`, order: { kind: "cursor", value: cursor },
+      },
+    });
+    await expect(repository.ingestEvent(context(), opaquePr("opaque-pr-1", "cursor-1", "b".repeat(40))))
+      .resolves.toMatchObject({ disposition: "reconciliation_required" });
+    await expect(repository.ingestEvent(context(), opaquePr("opaque-pr-2", "cursor-2", "c".repeat(40))))
+      .resolves.toMatchObject({ disposition: "reconciliation_required" });
+    const rows = await database.pool.query<{ jobs: string; targets: string; links: string }>(
+      `SELECT
+         (SELECT count(*) FROM ${schemaSql}.orchestration_jobs WHERE kind='pr_reconciliation')::text AS jobs,
+         (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets WHERE scope_key='pr:opaque-42')::text AS targets,
+         (SELECT count(DISTINCT reconciliation_id) FROM ${schemaSql}.orchestration_event_targets
+          WHERE scope_key='pr:opaque-42')::text AS links`,
+    );
+    expect(rows.rows).toEqual([{ jobs: "1", targets: "2", links: "1" }]);
+  } finally { await database.cleanup(); }
+});
+
+test.each(["queued", "leased", "succeeded", "failed"] as const)(
+  "advances same-revision provider evidence without a new generation when current work is %s",
+  async (jobState) => {
+    const { database, repository, schemaSql } = await setup();
+    try {
+      const revision = "a".repeat(40);
+      await repository.ingestEvent(context(), branch(`same-${jobState}-1`, "1", revision));
+      if (jobState === "leased") {
+        await database.pool.query(
+          `UPDATE ${schemaSql}.orchestration_jobs SET state='leased',lease_worker_id='worker',lease_instance_id='instance',
+             lease_token='token',lease_expires_at=clock_timestamp()+interval '5 minutes',started_at=clock_timestamp()
+           WHERE kind='branch_analysis'`,
+        );
+      } else if (jobState === "succeeded" || jobState === "failed") {
+        await database.pool.query(
+          `UPDATE ${schemaSql}.orchestration_jobs SET state=$1,completed_at=clock_timestamp(),
+             safe_last_error_code=CASE WHEN $1='failed' THEN 'JOB_EXECUTION_FAILED' ELSE NULL END
+           WHERE kind='branch_analysis'`,
+          [jobState],
+        );
+      }
+      const receipt = await repository.ingestEvent(context(), branch(`same-${jobState}-2`, "2", revision));
+      expect(receipt.disposition).toBe(jobState === "queued" || jobState === "leased" ? "scheduled" : "no_work");
+      const rows = await database.pool.query<{ jobs: string; checkpoint_version: string; generation: string; order_value: string }>(
+        `SELECT (SELECT count(*) FROM ${schemaSql}.orchestration_jobs WHERE kind='branch_analysis')::text AS jobs,
+                checkpoint_version::text,generation.analysis_generation::text AS generation,order_value
+         FROM ${schemaSql}.orchestration_branch_checkpoints generation`,
+      );
+      expect(rows.rows).toEqual([{ jobs: "1", checkpoint_version: "2", generation: "1", order_value: "2" }]);
+    } finally { await database.cleanup(); }
+  },
+);
+
 test("marks leased old work for cancellation while preserving its lease", async () => {
   const { database, repository, schemaSql } = await setup();
   try {
@@ -235,6 +355,35 @@ test("marks leased old work for cancellation while preserving its lease", async 
       superseding_job_id: expect.any(String), lease_token: "token",
     }]);
   } finally { await database.cleanup(); }
+});
+
+test("automatic leased supersession waits for the service capacity lock", async () => {
+  const { database, repository } = await setup();
+  const blocker = await database.pool.connect();
+  try {
+    await repository.ingestEvent(context(), branch("capacity-1", "1", "a".repeat(40)));
+    await database.pool.query(
+      `UPDATE ${quoteCatalogTestSchema(database.schema)}.orchestration_jobs
+       SET state='leased',lease_worker_id='worker',lease_instance_id='instance',lease_token='token',
+           lease_expires_at=clock_timestamp()+interval '5 minutes',started_at=clock_timestamp(),updated_at=clock_timestamp()
+       WHERE tenant_id='tenant-a' AND kind='branch_analysis'`,
+    );
+    await blocker.query("BEGIN");
+    await setOrchestrationSearchPath(blocker, database.schema);
+    await acquireAdvisoryLocks(blocker, [capacityServiceLock("tenant-a", "commerce", "orders")]);
+    const pending = repository.ingestEvent(context(), branch("capacity-2", "2", "b".repeat(40)));
+    const beforeRelease = await Promise.race([
+      pending.then(() => "settled", () => "settled"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("blocked"), 75)),
+    ]);
+    expect(beforeRelease).toBe("blocked");
+    await blocker.query("ROLLBACK");
+    await expect(pending).resolves.toMatchObject({ disposition: "scheduled" });
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    blocker.release();
+    await database.cleanup();
+  }
 });
 
 test("control cancellation is tenant-scoped, capability-gated, and updates the owning checkpoint", async () => {

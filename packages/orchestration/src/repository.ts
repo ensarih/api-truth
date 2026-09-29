@@ -21,9 +21,17 @@ import {
   pullRequestLock,
   reconciliationBranchLock,
   reconciliationPullRequestLock,
+  requireDiscoveredLocks,
   type AdvisoryLockKey,
 } from "./locking.js";
-import { discoverSchedulingLocks, scheduleEventTargets } from "./scheduler.js";
+import {
+  discoverConfigurationTransitionLocks,
+  discoverSchedulingLocks,
+  persistScheduledJobs,
+  scheduleConfigurationTransition,
+  scheduleEventTargets,
+  type SchedulingPlan,
+} from "./scheduler.js";
 import {
   parseAuthenticatedEventContext,
   parseActiveConfigurationSummary,
@@ -282,13 +290,6 @@ const activate = async (
     [tenantId, candidate.config_fingerprint, evidence.provider, evidence.provider_reference,
       evidence.order?.kind ?? null, evidence.order?.value ?? null],
   );
-  for (const serviceId of affectedServiceIds) {
-    const target = targetForService(candidateDocument.repositories.some((repository) =>
-      repository.services.some((service) => service.service_id === serviceId)) ? candidateDocument : activeDocument, serviceId);
-    await insertOutbox(client, tenantId,
-      { kind: "configuration.activated", fingerprint: candidate.config_fingerprint, repositoryId: target.repositoryId, serviceId },
-      "configuration.activated", { fingerprint: String(candidate.config_fingerprint), serviceId });
-  }
   return detachedFrozen({
     outcome: candidate.config_fingerprint === current.config_fingerprint ? "existing" : "activated",
     fingerprint: String(candidate.config_fingerprint),
@@ -296,6 +297,33 @@ const activate = async (
     affectedServiceIds,
   });
 };
+
+const insertActivationOutboxes = async (
+  client: PoolClient,
+  tenantId: string,
+  fingerprint: string,
+  affectedServiceIds: readonly string[],
+  currentDocument: InstallationConfig,
+  candidateDocument: InstallationConfig,
+): Promise<void> => {
+  for (const serviceId of [...affectedServiceIds].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))) {
+    const target = targetForService(candidateDocument.repositories.some((repository) =>
+      repository.services.some((service) => service.service_id === serviceId)) ? candidateDocument : currentDocument, serviceId);
+    await insertOutbox(client, tenantId,
+      { kind: "configuration.activated", fingerprint, repositoryId: target.repositoryId, serviceId },
+      "configuration.activated", { fingerprint, serviceId });
+  }
+};
+
+const schedulingConfiguration = (row: ConfigurationRow): {
+  fingerprint: string;
+  documentSha256: string;
+  document: InstallationConfig;
+} => ({
+  fingerprint: String(row.config_fingerprint),
+  documentSha256: String(row.document_sha256),
+  document: configurationFromRow(row),
+});
 
 type TargetOutcome = {
   repositoryId: string;
@@ -410,12 +438,43 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
   async activateConfigurationByCas(contextInput, input) {
     const context = requireControlCapability(contextInput, "configuration.admin");
     const activation = activationInput(input, true);
-    return withOrchestrationTransaction(pool, options, async (client) => {
-      await acquireAdvisoryLocks(client, [configurationLock(context.tenantId)]);
+    return withRestartingOrchestrationTransaction(pool, options, [configurationLock(context.tenantId)], async (client, carriedLocks) => {
+      const discoveredCurrent = await readActive(client, context.tenantId);
+      const candidate = await readConfiguration(client, context.tenantId, activation.fingerprint);
+      const discoveredCurrentConfiguration = schedulingConfiguration(discoveredCurrent);
+      const candidateConfiguration = schedulingConfiguration(candidate);
+      const discoveredAffectedServiceIds = calculateConfigurationImpact(
+        { fingerprint: discoveredCurrentConfiguration.fingerprint, document: discoveredCurrentConfiguration.document },
+        { fingerprint: candidateConfiguration.fingerprint, document: candidateConfiguration.document },
+      );
+      const discoveredTransition = await discoverConfigurationTransitionLocks(
+        client, context.tenantId, discoveredCurrentConfiguration, candidateConfiguration, discoveredAffectedServiceIds,
+      );
+      const acquired = await acquireAdvisoryLocks(client, [...carriedLocks, ...discoveredTransition.locks]);
       const current = await readActive(client, context.tenantId, true);
       if (current.checkpoint_version !== activation.expectedCheckpointVersion) throw new OrchestrationError("CONFIGURATION_CONFLICT");
-      const candidate = await readConfiguration(client, context.tenantId, activation.fingerprint);
-      return activate(client, context.tenantId, candidate, current, activation.providerEvidence!);
+      const currentConfiguration = schedulingConfiguration(current);
+      const affectedServiceIds = calculateConfigurationImpact(
+        { fingerprint: currentConfiguration.fingerprint, document: currentConfiguration.document },
+        { fingerprint: candidateConfiguration.fingerprint, document: candidateConfiguration.document },
+      );
+      const requiredTransition = await discoverConfigurationTransitionLocks(
+        client, context.tenantId, currentConfiguration, candidateConfiguration, affectedServiceIds,
+      );
+      requireDiscoveredLocks(acquired, requiredTransition.locks);
+      const result = await activate(client, context.tenantId, candidate, current, activation.providerEvidence!);
+      if (result.outcome === "activated") {
+        const plan = await scheduleConfigurationTransition(
+          client, context.tenantId, currentConfiguration, candidateConfiguration,
+          affectedServiceIds, activation.providerEvidence!,
+        );
+        await persistScheduledJobs(client, context.tenantId, plan);
+        await insertActivationOutboxes(
+          client, context.tenantId, result.fingerprint, affectedServiceIds,
+          currentConfiguration.document, candidateConfiguration.document,
+        );
+      }
+      return result;
     });
   },
 
@@ -466,8 +525,26 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         documentSha256: String(discoveredActive.document_sha256),
         document: configurationFromRow(discoveredActive),
       };
-      const discoveredLocks = discoverSchedulingLocks(context.tenantId, detachedEvent, discoveredConfiguration);
-      await acquireAdvisoryLocks(client, [...carriedLocks, ...discoveredLocks]);
+      let discoveredCandidate: ConfigurationRow | undefined;
+      let discoveredAffectedServiceIds: readonly string[] = [];
+      let discoveredTransitionLocks: readonly AdvisoryLockKey[] = [];
+      if (detachedEvent.event_type === "configuration.changed") {
+        discoveredCandidate = await readConfiguration(client, context.tenantId,
+          (detachedEvent.payload as { config_fingerprint: string }).config_fingerprint);
+        const candidateConfiguration = schedulingConfiguration(discoveredCandidate);
+        discoveredAffectedServiceIds = calculateConfigurationImpact(
+          { fingerprint: discoveredConfiguration.fingerprint, document: discoveredConfiguration.document },
+          { fingerprint: candidateConfiguration.fingerprint, document: candidateConfiguration.document },
+        );
+        discoveredTransitionLocks = (await discoverConfigurationTransitionLocks(
+          client, context.tenantId, discoveredConfiguration, candidateConfiguration, discoveredAffectedServiceIds,
+        )).locks;
+      }
+      const discoveredLocks = [
+        ...discoverSchedulingLocks(context.tenantId, detachedEvent, discoveredConfiguration),
+        ...discoveredTransitionLocks,
+      ];
+      const acquired = await acquireAdvisoryLocks(client, [...carriedLocks, ...discoveredLocks]);
       const existing = await client.query<{ event_sha256: unknown; active_config_fingerprint: unknown }>(
         `SELECT event_sha256, active_config_fingerprint
          FROM orchestration_events WHERE tenant_id = $1 AND producer_id = $2 AND event_id = $3`,
@@ -514,25 +591,91 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       const active = await readActive(client, context.tenantId, true);
       if (active.config_fingerprint !== discoveredActive.config_fingerprint
         || active.document_sha256 !== discoveredActive.document_sha256) {
-        const currentConfiguration = {
-          fingerprint: String(active.config_fingerprint),
-          documentSha256: String(active.document_sha256),
-          document: configurationFromRow(active),
-        };
-        throw new OrchestrationLockRestart(discoverSchedulingLocks(context.tenantId, detachedEvent, currentConfiguration));
+        const currentConfiguration = schedulingConfiguration(active);
+        const currentLocks = discoverSchedulingLocks(context.tenantId, detachedEvent, currentConfiguration);
+        if (discoveredCandidate !== undefined) {
+          const candidateConfiguration = schedulingConfiguration(discoveredCandidate);
+          const affectedServiceIds = calculateConfigurationImpact(
+            { fingerprint: currentConfiguration.fingerprint, document: currentConfiguration.document },
+            { fingerprint: candidateConfiguration.fingerprint, document: candidateConfiguration.document },
+          );
+          currentLocks.push(...(await discoverConfigurationTransitionLocks(
+            client, context.tenantId, currentConfiguration, candidateConfiguration, affectedServiceIds,
+          )).locks);
+        }
+        throw new OrchestrationLockRestart(currentLocks);
       }
       const activeDocument = configurationFromRow(active);
-      let candidate: ConfigurationRow | undefined;
-      if (detachedEvent.event_type === "configuration.changed") {
-        candidate = await readConfiguration(client, context.tenantId,
-          (detachedEvent.payload as { config_fingerprint: string }).config_fingerprint);
-      }
+      const candidate = discoveredCandidate;
       const authorized = authorizeNormalizedEvent(context, detachedEvent, activeDocument,
         candidate === undefined ? {} : {
           activeConfiguration: { fingerprint: active.config_fingerprint, document: activeDocument },
           candidateConfiguration: { fingerprint: candidate.config_fingerprint, document: configurationFromRow(candidate) },
         });
       const hash = eventSha256(authorized.event);
+      let schedulingPlan: SchedulingPlan | undefined;
+      let activationAffectedServiceIds: readonly string[] = [];
+      let outcomes: TargetOutcome[] = authorized.event.event_type === "configuration.changed"
+        ? authorized.targets.map((target) => ({ ...target, scopeKey: "configuration", disposition: "scheduled" as const }))
+        : outcomesForEvent(authorized.event, activeDocument);
+      if (authorized.event.event_type === "configuration.changed") {
+        const nextCheckpoint = { evidence: authorized.event.provider_evidence, relevantPayload: authorized.event.payload };
+        const currentPayload = isRecord(active.activation_document) && Object.hasOwn(active.activation_document, "payload")
+          ? active.activation_document.payload
+          : { config_fingerprint: active.config_fingerprint, config_version: active.config_version };
+        const currentCheckpoint = typeof active.provider === "string" && typeof active.provider_reference === "string"
+          ? { evidence: { provider: active.provider, provider_reference: active.provider_reference,
+            ...(typeof active.order_kind === "string" && typeof active.order_value === "string"
+              ? { order: { kind: active.order_kind as "sequence" | "cursor" | "effective_version", value: active.order_value } } : {}) },
+            relevantPayload: currentPayload }
+          : undefined;
+        const classification = classifyProviderUpdate(currentCheckpoint, nextCheckpoint);
+        if (classification === "conflict") throw new OrchestrationError("EVENT_ORDER_CONFLICT");
+        const disposition: EventDisposition = classification === "stale" ? "ignored_stale"
+          : classification === "incomparable" ? "reconciliation_required"
+          : classification === "exact_replay" ? "no_work" : "scheduled";
+        outcomes = outcomes.map((outcome) => ({ ...outcome, disposition }));
+        if (disposition === "scheduled") {
+          activationAffectedServiceIds = calculateConfigurationImpact(
+            { fingerprint: active.config_fingerprint, document: activeDocument },
+            { fingerprint: candidate!.config_fingerprint, document: configurationFromRow(candidate) },
+          );
+          const candidateConfiguration = schedulingConfiguration(candidate!);
+          const requiredTransition = await discoverConfigurationTransitionLocks(
+            client, context.tenantId, schedulingConfiguration(active), candidateConfiguration, activationAffectedServiceIds,
+          );
+          requireDiscoveredLocks(acquired, requiredTransition.locks);
+          await client.query(
+            `UPDATE orchestration_active_configurations
+             SET config_fingerprint = $2, checkpoint_version = checkpoint_version + 1,
+                 provider = $3, provider_reference = $4, order_kind = $5, order_value = $6,
+                 activation_producer_id = $7, activation_event_id = $8, activated_at = clock_timestamp()
+             WHERE tenant_id = $1`,
+            [context.tenantId, candidate!.config_fingerprint, authorized.event.provider_evidence.provider,
+              authorized.event.provider_evidence.provider_reference, authorized.event.provider_evidence.order?.kind ?? null,
+              authorized.event.provider_evidence.order?.value ?? null, authorized.event.producer.producer_id, authorized.event.event_id],
+          );
+          if (canonicalOrchestrationJson(activationAffectedServiceIds)
+            !== canonicalOrchestrationJson(authorized.event.subjects.service_ids)) {
+            throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
+          }
+          schedulingPlan = await scheduleConfigurationTransition(
+            client, context.tenantId, schedulingConfiguration(active), candidateConfiguration,
+            activationAffectedServiceIds, authorized.event.provider_evidence, authorized.event,
+          );
+        }
+      } else {
+        schedulingPlan = await scheduleEventTargets(client, context.tenantId, authorized.event, {
+          fingerprint: String(active.config_fingerprint),
+          documentSha256: String(active.document_sha256),
+          document: activeDocument,
+        });
+        outcomes = [...schedulingPlan.targets];
+      }
+      outcomes.sort((left, right) => Buffer.compare(
+        Buffer.from(`${left.repositoryId}\u0000${left.serviceId}\u0000${left.scopeKey}`, "utf8"),
+        Buffer.from(`${right.repositoryId}\u0000${right.serviceId}\u0000${right.scopeKey}`, "utf8"),
+      ));
       const inserted = await client.query(
         `INSERT INTO orchestration_events
            (tenant_id, producer_id, event_id, event_sha256, event_type, repository_id, service_ids, document,
@@ -556,53 +699,6 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         [context.tenantId, authorized.event.producer.producer_id, authorized.event.event_id, authorized.event.received_at],
       );
       if (inserted.rowCount !== 1) throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
-
-      let outcomes: TargetOutcome[] = authorized.event.event_type === "configuration.changed"
-        ? authorized.targets.map((target) => ({ ...target, scopeKey: "configuration", disposition: "scheduled" as const }))
-        : outcomesForEvent(authorized.event, activeDocument);
-      if (authorized.event.event_type === "configuration.changed") {
-        const nextCheckpoint = { evidence: authorized.event.provider_evidence, relevantPayload: authorized.event.payload };
-        const currentPayload = isRecord(active.activation_document) && Object.hasOwn(active.activation_document, "payload")
-          ? active.activation_document.payload
-          : { config_fingerprint: active.config_fingerprint, config_version: active.config_version };
-        const currentCheckpoint = typeof active.provider === "string" && typeof active.provider_reference === "string"
-          ? { evidence: { provider: active.provider, provider_reference: active.provider_reference,
-            ...(typeof active.order_kind === "string" && typeof active.order_value === "string"
-              ? { order: { kind: active.order_kind as "sequence" | "cursor" | "effective_version", value: active.order_value } } : {}) },
-            relevantPayload: currentPayload }
-          : undefined;
-        const classification = classifyProviderUpdate(currentCheckpoint, nextCheckpoint);
-        if (classification === "conflict") throw new OrchestrationError("EVENT_ORDER_CONFLICT");
-        const disposition: EventDisposition = classification === "stale" ? "ignored_stale"
-          : classification === "incomparable" ? "reconciliation_required"
-          : classification === "exact_replay" ? "no_work" : "scheduled";
-        outcomes = outcomes.map((outcome) => ({ ...outcome, disposition }));
-        if (disposition === "scheduled") {
-          const affectedServiceIds = calculateConfigurationImpact(
-            { fingerprint: active.config_fingerprint, document: activeDocument },
-            { fingerprint: candidate!.config_fingerprint, document: configurationFromRow(candidate) },
-          );
-          await client.query(
-            `UPDATE orchestration_active_configurations
-             SET config_fingerprint = $2, checkpoint_version = checkpoint_version + 1,
-                 provider = $3, provider_reference = $4, order_kind = $5, order_value = $6,
-                 activation_producer_id = $7, activation_event_id = $8, activated_at = clock_timestamp()
-             WHERE tenant_id = $1`,
-            [context.tenantId, candidate!.config_fingerprint, authorized.event.provider_evidence.provider,
-              authorized.event.provider_evidence.provider_reference, authorized.event.provider_evidence.order?.kind ?? null,
-              authorized.event.provider_evidence.order?.value ?? null, authorized.event.producer.producer_id, authorized.event.event_id],
-          );
-          if (canonicalOrchestrationJson(affectedServiceIds) !== canonicalOrchestrationJson(authorized.event.subjects.service_ids)) {
-            throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
-          }
-        }
-      } else {
-        outcomes = await scheduleEventTargets(client, context.tenantId, authorized.event, {
-          fingerprint: String(active.config_fingerprint),
-          documentSha256: String(active.document_sha256),
-          document: activeDocument,
-        });
-      }
       for (const outcome of outcomes) {
         await client.query(
           `INSERT INTO orchestration_event_targets
@@ -613,12 +709,21 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
             outcome.repositoryId, outcome.serviceId, outcome.scopeKey, outcome.disposition,
             outcome.jobId ?? null, outcome.reconciliationId ?? null, outcome.safeReason ?? null],
         );
+      }
+      if (schedulingPlan !== undefined) await persistScheduledJobs(client, context.tenantId, schedulingPlan);
+      for (const outcome of outcomes) {
         await insertOutbox(client, context.tenantId,
           { kind: "event.disposition", producerId: authorized.event.producer.producer_id,
             eventId: authorized.event.event_id, repositoryId: outcome.repositoryId,
             serviceId: outcome.serviceId, scopeKey: outcome.scopeKey, disposition: outcome.disposition },
           "event.disposition", { eventId: authorized.event.event_id, disposition: outcome.disposition },
           authorized.event.producer.producer_id, authorized.event.event_id);
+      }
+      if (activationAffectedServiceIds.length > 0) {
+        await insertActivationOutboxes(
+          client, context.tenantId, String(candidate!.config_fingerprint), activationAffectedServiceIds,
+          activeDocument, configurationFromRow(candidate),
+        );
       }
       return receiptFor("accepted", outcomes.map((outcome) => outcome.disposition));
     });

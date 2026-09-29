@@ -234,7 +234,85 @@ test("configuration events require exact registered candidate authority and acti
               (SELECT count(*) FROM ${schemaSql}.orchestration_event_deliveries)::text AS deliveries,
               (SELECT count(*) FROM ${schemaSql}.orchestration_outbox)::text AS outbox`,
     );
-    expect(counts.rows).toEqual([{ deliveries: "2", targets: "2", outbox: "2" }]);
+    expect(counts.rows).toEqual([{ deliveries: "2", targets: "2", outbox: "5" }]);
+    const reconciliation = await database.pool.query<{
+      branch: string; config_fingerprint: string; event_id: string | null; state: string;
+    }>(
+      `SELECT job.branch,job.config_fingerprint,job.event_id,job.state
+       FROM ${schemaSql}.orchestration_jobs job
+       WHERE job.kind='branch_reconciliation'`,
+    );
+    expect(reconciliation.rows).toEqual([{
+      branch: "main", config_fingerprint: "config-b", event_id: "config-event", state: "queued",
+    }]);
+  } finally { await database.cleanup(); }
+});
+
+test("CAS activation cancels stale work, reconciles exact new branches, and honors an empty allowlist", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    const configA = configuration("config-a");
+    const configB = configuration("config-b");
+    configB.document.repositories[0]!.services[0]!.intended_branches = ["release"];
+    configB.document.repositories[0]!.services[0]!.environments = [];
+    const configC = configuration("config-c");
+    configC.document.repositories[0]!.services[0]!.intended_branches = [];
+    configC.document.repositories[0]!.services[0]!.environments = [];
+    await repository.registerConfiguration(admin(), configA);
+    await repository.registerConfiguration(admin(), configB);
+    await repository.registerConfiguration(admin(), configC);
+    await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await repository.ingestEvent(eventContext(), branchEvent({ subjects: {
+      repository_id: "commerce", service_ids: ["orders"],
+    } }));
+    await repository.ingestEvent({
+      ...eventContext(),
+      allowedEventTypes: [...eventContext().allowedEventTypes, "repository.baseline_requested"].sort(),
+    }, branchEvent({
+      event_id: "baseline-before-config", event_type: "repository.baseline_requested",
+      subjects: { repository_id: "commerce", service_ids: ["orders"] },
+      provider_evidence: {
+        provider: "github", provider_reference: "baseline-delivery", order: { kind: "sequence", value: "2" },
+      },
+      payload: { immutable_revision: "b".repeat(40), service_ids: ["orders"] },
+    }));
+
+    await expect(repository.activateConfigurationByCas(admin(), {
+      fingerprint: "config-b", expectedCheckpointVersion: "1",
+      providerEvidence: { provider: "control-plane", provider_reference: "approval-b" },
+    })).resolves.toMatchObject({ outcome: "activated", checkpointVersion: "2" });
+    const afterB = await database.pool.query<{
+      branch: string; kind: string; state: string; config_fingerprint: string; event_id: string | null;
+    }>(
+      `SELECT branch,kind,state,config_fingerprint,event_id FROM ${schemaSql}.orchestration_jobs
+       WHERE service_id='orders' ORDER BY kind COLLATE "C",branch COLLATE "C"`,
+    );
+    expect(afterB.rows).toEqual([
+      { branch: null, kind: "baseline_analysis", state: "cancelled", config_fingerprint: "config-a", event_id: "baseline-before-config" },
+      { branch: "main", kind: "branch_analysis", state: "cancelled", config_fingerprint: "config-a", event_id: "event-1" },
+      { branch: "release", kind: "branch_reconciliation", state: "queued", config_fingerprint: "config-b", event_id: null },
+    ]);
+
+    await expect(repository.activateConfigurationByCas(admin(), {
+      fingerprint: "config-c", expectedCheckpointVersion: "2",
+      providerEvidence: { provider: "control-plane", provider_reference: "approval-c" },
+    })).resolves.toMatchObject({ outcome: "activated", checkpointVersion: "3" });
+    const afterC = await database.pool.query<{
+      state: string; cancellation_requested: boolean; current_job_id: string | null; last_outcome: string | null;
+    }>(
+      `SELECT job.state,job.cancellation_requested,checkpoint.current_job_id,checkpoint.last_outcome
+       FROM ${schemaSql}.orchestration_jobs job
+       JOIN ${schemaSql}.orchestration_reconciliation_checkpoints checkpoint
+         ON checkpoint.tenant_id=job.tenant_id AND checkpoint.current_job_id IS NULL
+        AND checkpoint.repository_id=job.repository_id AND checkpoint.service_id=job.service_id AND checkpoint.branch=job.branch
+       WHERE job.kind='branch_reconciliation'`,
+    );
+    expect(afterC.rows).toEqual([{
+      state: "cancelled", cancellation_requested: false, current_job_id: null, last_outcome: "obsolete",
+    }]);
   } finally { await database.cleanup(); }
 });
 
