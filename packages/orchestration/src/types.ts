@@ -1,6 +1,6 @@
 import type { EventEnvelope, InstallationConfig } from "@api-truth/ir";
 
-export const EVENT_TYPES = [
+export const EVENT_TYPES = Object.freeze([
   "branch.updated",
   "configuration.changed",
   "deployment.changed",
@@ -8,7 +8,7 @@ export const EVENT_TYPES = [
   "reconciliation.requested",
   "repository.baseline_requested",
   "source_document.changed",
-] as const;
+] as const);
 
 export type EventType = (typeof EVENT_TYPES)[number];
 export type EventCapability = "configuration.admin" | "event.ingest";

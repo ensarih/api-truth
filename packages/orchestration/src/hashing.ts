@@ -48,5 +48,7 @@ export const normalizedEventIdentityProjection = (input: unknown): Omit<EventEnv
 export const eventSha256 = (input: unknown): `sha256:${string}` =>
   canonicalOrchestrationHash(normalizedEventIdentityProjection(input));
 
-export const semanticOrchestrationId = (prefix: "job" | "outbox", identity: unknown): string =>
-  `${prefix}-${canonicalOrchestrationHash(identity).slice("sha256:".length)}`;
+export const semanticOrchestrationId = (prefixInput: unknown, identity: unknown): string => {
+  if (prefixInput !== "job" && prefixInput !== "outbox") throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
+  return `${prefixInput}-${canonicalOrchestrationHash(identity).slice("sha256:".length)}`;
+};

@@ -4,17 +4,22 @@ import { orchestrationValidationError } from "./errors.js";
 import type { ConfigurationPair } from "./types.js";
 
 const validatePair = (input: unknown): ConfigurationPair => {
-  let candidate: { fingerprint?: unknown; document?: unknown };
+  let detached: unknown;
   try {
-    candidate = JSON.parse(canonicalOrchestrationJson(input)) as { fingerprint?: unknown; document?: unknown };
+    detached = JSON.parse(canonicalOrchestrationJson(input)) as unknown;
   } catch {
     throw orchestrationValidationError({ kind: "validation_error", issues: [{ path: "/", code: "shape.invalid_json_value", message: "invalid" }] });
   }
+  if (detached === null || typeof detached !== "object" || Array.isArray(detached)) {
+    throw orchestrationValidationError({ kind: "validation_error", issues: [{ path: "/", code: "shape.type", message: "invalid" }] });
+  }
+  const candidate = detached as Record<string, unknown>;
+  if (Object.keys(candidate).length !== 2
+    || !Object.hasOwn(candidate, "fingerprint") || !Object.hasOwn(candidate, "document")) {
+    throw orchestrationValidationError({ kind: "validation_error", issues: [{ path: "/", code: "shape.required", message: "invalid" }] });
+  }
   if (typeof candidate.fingerprint !== "string" || candidate.fingerprint.length === 0) {
     throw orchestrationValidationError({ kind: "validation_error", issues: [{ path: "/fingerprint", code: "shape.minLength", message: "invalid" }] });
-  }
-  if (Object.keys(candidate).some((key) => key !== "fingerprint" && key !== "document")) {
-    throw orchestrationValidationError({ kind: "validation_error", issues: [{ path: "/", code: "shape.additionalProperties", message: "invalid" }] });
   }
   const parsed = parseConfig(candidate.document);
   if (!parsed.ok) throw orchestrationValidationError(parsed.error);

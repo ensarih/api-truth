@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
+import * as orchestrationApi from "../../packages/orchestration/src/index.js";
 import {
-  OrchestrationError,
   authorizeNormalizedEvent,
   calculateConfigurationImpact,
   canonicalOrchestrationHash,
@@ -18,6 +18,7 @@ import {
   selectPullRequestScope,
   selectReconciliationBranches,
 } from "../../packages/orchestration/src/index.js";
+import { OrchestrationError } from "../../packages/orchestration/src/errors.js";
 
 const config = () => ({
   config_version: "1.0.0",
@@ -76,6 +77,56 @@ const branchEvent = () => ({
 });
 
 describe("D08 orchestration contracts", () => {
+  test("exports only the reviewed package-root API", () => {
+    expect(Object.keys(orchestrationApi).sort()).toEqual([
+      "ActiveConfigurationSummarySchema",
+      "AuthenticatedEventContextSchema",
+      "ControlContextSchema",
+      "DeploymentAuthorityGrantSchema",
+      "EVENT_TYPES",
+      "EventReceiptSchema",
+      "EventStatusSchema",
+      "JobStatusSchema",
+      "OutboxStatusSchema",
+      "ProviderEvidenceSchema",
+      "WorkerIdentitySchema",
+      "authorizeNormalizedEvent",
+      "calculateConfigurationImpact",
+      "canonicalOrchestrationHash",
+      "classifyProviderUpdate",
+      "computeRetryDelayMs",
+      "eventSha256",
+      "isConfiguredBranch",
+      "normalizedEventIdentityProjection",
+      "parseActiveConfigurationSummary",
+      "parseAuthenticatedEventContext",
+      "parseControlContext",
+      "parseEventReceipt",
+      "parseEventStatus",
+      "parseJobStatus",
+      "parseOutboxStatus",
+      "parseProviderEvidence",
+      "parseWorkerIdentity",
+      "reduceJobState",
+      "reduceOutboxState",
+      "requireControlCapability",
+      "requireWorkerCapability",
+      "selectBranchlessBaseline",
+      "selectPullRequestScope",
+      "selectReconciliationBranches",
+      "semanticOrchestrationId",
+    ]);
+    expect(Object.isFrozen(orchestrationApi.EVENT_TYPES)).toBe(true);
+    expect(orchestrationApi).not.toHaveProperty("OrchestrationError");
+    expect(orchestrationApi).not.toHaveProperty("compareCanonicalSequence");
+    expect(orchestrationApi).not.toHaveProperty("compareUtf8");
+    expect(orchestrationApi).not.toHaveProperty("canonicalStringSet");
+    expect(orchestrationApi).not.toHaveProperty("isCanonicalStringSet");
+    expect(orchestrationApi).not.toHaveProperty("orchestrationValidationError");
+    expect(orchestrationApi).not.toHaveProperty("orchestrationStorageError");
+    expect(orchestrationApi).not.toHaveProperty("sanitizeOrchestrationIssuePath");
+  });
+
   test("parses and detaches canonical authenticated contexts", () => {
     const input = context();
     const parsed = parseAuthenticatedEventContext(input);
@@ -265,6 +316,58 @@ describe("D08 orchestration contracts", () => {
       { fingerprint: "one", document: config() },
       { fingerprint: "one", document: config() },
     )).toEqual([]);
+  });
+
+  test("contains every malformed configuration pair behind a safe error", () => {
+    const marker = "secret://configuration-pair";
+    const validPair = { fingerprint: "valid", document: config() };
+    const hostile = new Proxy({}, { ownKeys: () => { throw new Error(marker); } });
+    const accessor = Object.defineProperty({ fingerprint: "value" }, "document", {
+      enumerable: true,
+      get: () => { throw new Error(marker); },
+    });
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const malformed of [null, "value", [], hostile, accessor, cyclic]) {
+      for (const operation of [
+        () => calculateConfigurationImpact(malformed, validPair),
+        () => calculateConfigurationImpact(validPair, malformed),
+      ]) {
+        let caught: unknown;
+        try { operation(); } catch (error) { caught = error; }
+        expect(caught).toBeInstanceOf(OrchestrationError);
+        expect(caught).toMatchObject({
+          code: "INVALID_ORCHESTRATION_INPUT",
+          issues: expect.arrayContaining([expect.objectContaining({ path: expect.any(String), code: expect.any(String) })]),
+        });
+        expect(`${String(caught)} ${JSON.stringify(caught)}`).not.toContain(marker);
+      }
+    }
+  });
+
+  test("contains hostile calls made through the package root", () => {
+    const marker = "secret://package-root";
+    const hostile = new Proxy({}, { ownKeys: () => { throw new Error(marker); } });
+    const parserNames = [
+      "parseActiveConfigurationSummary", "parseAuthenticatedEventContext", "parseControlContext",
+      "parseEventReceipt", "parseEventStatus", "parseJobStatus", "parseOutboxStatus",
+      "parseProviderEvidence", "parseWorkerIdentity",
+    ] as const;
+    for (const name of parserNames) {
+      const result = orchestrationApi[name](hostile);
+      expect(result).toMatchObject({ ok: false });
+      expect(JSON.stringify(result)).not.toContain(marker);
+    }
+    for (const operation of [
+      () => orchestrationApi.canonicalOrchestrationHash(hostile),
+      () => orchestrationApi.semanticOrchestrationId(marker as never, {}),
+    ]) {
+      let caught: unknown;
+      try { operation(); } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(OrchestrationError);
+      expect(caught).toMatchObject({ code: "INVALID_ORCHESTRATION_INPUT" });
+      expect(`${String(caught)} ${JSON.stringify(caught)}`).not.toContain(marker);
+    }
   });
 
   test("classifies every provider ordering outcome without numeric conversion", () => {
