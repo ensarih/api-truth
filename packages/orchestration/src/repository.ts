@@ -10,8 +10,9 @@ import { OrchestrationError, orchestrationValidationError } from "./errors.js";
 import { eventSha256, semanticOrchestrationId } from "./hashing.js";
 import { classifyProviderUpdate } from "./ordering.js";
 import {
-  discoverActiveTransitionJobs, discoverTransitionClosure, lockTransitionCheckpoints, lockTransitionJobs,
-  propagateAndNotifyTerminalDependencies, transitionAdvisoryLocks,
+  checkpointOrder, discoverActiveTransitionJobs, discoverTransitionClosure, lockTransitionCheckpoints, lockTransitionJobs,
+  stageTerminalDependents, transitionAdvisoryLocks, writePlannedCheckpoints, writePlannedJobChange,
+  writePlannedNotifications,
 } from "./worker.js";
 import {
   acquireAdvisoryLocks,
@@ -792,63 +793,67 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       const closure = await discoverTransitionClosure(client, [{ tenant_id: context.tenantId, job_id: jobIdInput }]);
       requireDiscoveredLocks(acquired, transitionAdvisoryLocks(closure));
       await lockTransitionCheckpoints(client, closure);
-      await lockTransitionJobs(client, closure);
-      await client.query(
-        `SELECT 1 FROM orchestration_branch_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
-        [context.tenantId, jobIdInput],
-      );
-      await client.query(
-        `SELECT 1 FROM orchestration_pr_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
-        [context.tenantId, jobIdInput],
-      );
-      await client.query(
-        `SELECT 1 FROM orchestration_reconciliation_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
-        [context.tenantId, jobIdInput],
-      );
-      await client.query(
-        `SELECT 1 FROM orchestration_analysis_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
-        [context.tenantId, jobIdInput],
-      );
-      const locked = await client.query<{ state: string }>(
-        `SELECT state FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2 FOR UPDATE`,
-        [context.tenantId, jobIdInput],
-      );
-      const currentState = locked.rows[0]?.state;
+      const lockedJobs = await lockTransitionJobs(client, closure);
+      const root = lockedJobs.find((row) => row.job_id === jobIdInput);
+      const currentState = root?.state;
       const knownStates = ["queued", "leased", "retry_wait", "succeeded", "failed", "cancelled", "superseded"] as const;
       if (currentState === undefined || !knownStates.includes(currentState as typeof knownStates[number])) {
         throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
       }
-      if (["succeeded", "failed", "cancelled", "superseded"].includes(currentState)) {
+      if (["succeeded", "failed", "superseded"].includes(currentState)) {
         return detachedFrozen({ jobId: jobIdInput, state: currentState as typeof knownStates[number] });
       }
-      await client.query(
-        `UPDATE orchestration_branch_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
-         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
-      );
-      await client.query(
-        `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
-         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
-      );
-      await client.query(
-        `UPDATE orchestration_reconciliation_checkpoints SET current_job_id=NULL,last_outcome='obsolete',updated_at=clock_timestamp()
-         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
-      );
-      await client.query(
-        `UPDATE orchestration_analysis_checkpoints SET current_job_id=NULL,last_terminal_outcome='cancelled',updated_at=clock_timestamp()
-         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
-      );
-      await client.query(
-        `UPDATE orchestration_jobs SET
-           state=CASE WHEN state='leased' THEN state ELSE 'cancelled' END,
-           cancellation_requested=true,
-           completed_at=CASE WHEN state='leased' THEN completed_at ELSE clock_timestamp() END,
-           updated_at=clock_timestamp(),row_version=row_version+1
-         WHERE tenant_id=$1 AND job_id=$2`,
-        [context.tenantId, jobIdInput],
-      );
       const nextState = currentState === "leased" ? "leased" : "cancelled";
-      if (nextState === "cancelled") {
-        await propagateAndNotifyTerminalDependencies(client, context.tenantId, [jobIdInput]);
+      const dependents = nextState === "cancelled"
+        ? await stageTerminalDependents(client, context.tenantId, [jobIdInput], lockedJobs) : [];
+      const checkpoint = checkpointOrder(root!);
+      const rootCheckpoint = currentState === "cancelled" ? [] : [{ ...checkpoint, apply: async () => {
+        if (root!.kind === "branch_analysis") {
+          await client.query(
+            `UPDATE orchestration_branch_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
+             WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+          );
+        } else if (root!.kind === "pr_preview_analysis" || root!.kind === "pr_reconciliation") {
+          await client.query(
+            `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
+             WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+          );
+        } else if (root!.kind === "branch_reconciliation") {
+          await client.query(
+            `UPDATE orchestration_reconciliation_checkpoints SET current_job_id=NULL,last_outcome='obsolete',updated_at=clock_timestamp()
+             WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+          );
+        } else {
+          await client.query(
+            `UPDATE orchestration_analysis_checkpoints SET current_job_id=NULL,last_terminal_outcome='cancelled',updated_at=clock_timestamp()
+             WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+          );
+        }
+      } }];
+      await writePlannedCheckpoints(client, dependents, rootCheckpoint);
+      const dependentsById = new Map(dependents.map((change) => [change.job.job_id, change]));
+      const notifications = [];
+      for (const jobId of [...new Set([jobIdInput, ...dependentsById.keys()])]
+        .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))) {
+        if (jobId === jobIdInput && currentState !== "cancelled") {
+          await client.query(
+            `UPDATE orchestration_jobs SET
+               state=CASE WHEN state='leased' THEN state ELSE 'cancelled' END,
+               cancellation_requested=true,
+               completed_at=CASE WHEN state='leased' THEN completed_at ELSE clock_timestamp() END,
+               updated_at=clock_timestamp(),row_version=row_version+1
+             WHERE tenant_id=$1 AND job_id=$2`,
+            [context.tenantId, jobIdInput],
+          );
+        }
+        const dependent = dependentsById.get(jobId);
+        if (dependent !== undefined) {
+          const result = await writePlannedJobChange(client, dependent);
+          if (result.notification !== undefined) notifications.push(result.notification);
+        }
+      }
+      await writePlannedNotifications(client, notifications);
+      if (nextState === "cancelled" && currentState !== "cancelled") {
         await insertOutbox(client, context.tenantId, { kind: "job.state_changed", jobId: jobIdInput, state: nextState },
           "job.state_changed", { jobId: jobIdInput, state: nextState }, undefined, undefined, jobIdInput);
       }

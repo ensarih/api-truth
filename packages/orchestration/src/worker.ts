@@ -277,7 +277,7 @@ const updateCheckpointState = async (client: PoolClient, job: JobRow, state: str
   }
 };
 
-type PlannedJobChange =
+export type PlannedJobChange =
   | { kind: "claim"; job: JobRow; token: string; worker: WorkerIdentity; queueIndex: number }
   | { kind: "retry"; job: JobRow; delay: number; code?: string | undefined }
   | { kind: "terminal"; job: JobRow; state: "failed" | "cancelled" | "superseded"; code?: string | undefined }
@@ -285,7 +285,7 @@ type PlannedJobChange =
 
 const jobKey = (job: Pick<JobRow, "tenant_id" | "job_id">): string => `${job.tenant_id}\u0000${job.job_id}`;
 
-const checkpointOrder = (job: JobRow): { rank: number; key: string } => {
+export const checkpointOrder = (job: JobRow): { rank: number; key: string } => {
   const base = [job.tenant_id, job.repository_id, job.service_id];
   if (job.kind === "branch_analysis") return { rank: 4, key: [...base, job.branch ?? ""].join("\u0000") };
   if (job.kind === "pr_preview_analysis" || job.kind === "pr_reconciliation") {
@@ -297,66 +297,91 @@ const checkpointOrder = (job: JobRow): { rank: number; key: string } => {
     job.config_version, job.config_fingerprint].join("\u0000") };
 };
 
+export type StagedCheckpointWrite = Readonly<{ rank: number; key: string; apply: () => Promise<void> }>;
+
+export const writePlannedCheckpoints = async (client: PoolClient, changes: readonly PlannedJobChange[],
+  additional: readonly StagedCheckpointWrite[] = []): Promise<void> => {
+  const writes: StagedCheckpointWrite[] = changes.filter((change) => change.kind !== "request_cancel")
+    .map((change) => ({ ...checkpointOrder(change.job), apply: () => updateCheckpointState(client, change.job,
+      change.kind === "terminal" ? change.state : change.kind === "claim" ? "leased" : "retry_wait",
+      change.kind === "terminal" ? change.code : undefined) }));
+  writes.push(...additional);
+  writes.sort((left, right) => left.rank - right.rank
+    || Buffer.compare(Buffer.from(left.key), Buffer.from(right.key)));
+  for (const write of writes) await write.apply();
+};
+
+export const writePlannedJobChange = async (client: PoolClient, change: PlannedJobChange): Promise<{
+  claimed?: LeasedJob; notification?: StateNotification;
+}> => {
+  const job = change.job;
+  if (change.kind === "terminal") {
+    await client.query(
+      `UPDATE orchestration_jobs SET state=$3,lease_worker_id=NULL,lease_instance_id=NULL,lease_token=NULL,
+         lease_expires_at=NULL,safe_last_error_code=$4,completed_at=clock_timestamp(),updated_at=clock_timestamp(),
+         row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
+      [job.tenant_id, job.job_id, change.state, change.code ?? null],
+    );
+    return { notification: { job, state: change.state, ...(change.code === undefined ? {} : { reason: change.code }) } };
+  }
+  if (change.kind === "retry") {
+    await client.query(
+      `UPDATE orchestration_jobs SET state='retry_wait',lease_worker_id=NULL,lease_instance_id=NULL,
+         lease_token=NULL,lease_expires_at=NULL,safe_last_error_code=$3,
+         available_at=clock_timestamp()+($4::bigint * interval '1 millisecond'),
+         updated_at=clock_timestamp(),row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
+      [job.tenant_id, job.job_id, change.code ?? null, change.delay],
+    );
+    return { notification: { job, state: "retry_wait", reason: `attempt:${job.attempt_count}` } };
+  }
+  if (change.kind === "request_cancel") {
+    await client.query(
+      `UPDATE orchestration_jobs SET cancellation_requested=true,updated_at=clock_timestamp(),row_version=row_version+1
+       WHERE tenant_id=$1 AND job_id=$2 AND cancellation_requested=false`, [job.tenant_id, job.job_id],
+    );
+    return {};
+  }
+  const updated = await client.query<{ lease_expires_at: Date }>(
+    `UPDATE orchestration_jobs SET state='leased',attempt_count=attempt_count+1,
+       lease_worker_id=$3,lease_instance_id=$4,lease_token=$5,safe_last_error_code=NULL,
+       lease_expires_at=clock_timestamp()+($6::bigint * interval '1 millisecond'),
+       started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp(),row_version=row_version+1
+     WHERE tenant_id=$1 AND job_id=$2 RETURNING lease_expires_at`,
+    [job.tenant_id, job.job_id, change.worker.workerId, change.worker.instanceId,
+      change.token, LEASE_DURATION_MS],
+  );
+  return { claimed: detachedFrozen({
+    tenantId: job.tenant_id, jobId: job.job_id, kind: job.kind,
+    attemptCount: (BigInt(job.attempt_count) + 1n).toString(), maxAttempts: job.max_attempts,
+    leaseExpiresAt: updated.rows[0]!.lease_expires_at.toISOString(),
+    lease: { tenantId: job.tenant_id, jobId: job.job_id, leaseToken: change.token },
+  }) };
+};
+
+export const writePlannedNotifications = flushNotifications;
+
 const applyPlannedJobChanges = async (client: PoolClient, changes: readonly PlannedJobChange[]): Promise<{
   claimed: LeasedJob[]; notifications: StateNotification[];
 }> => {
-  const checkpointChanges = changes.filter((change) => change.kind !== "request_cancel")
-    .sort((left, right) => {
-      const a = checkpointOrder(left.job);
-      const b = checkpointOrder(right.job);
-      return a.rank - b.rank || Buffer.compare(Buffer.from(a.key), Buffer.from(b.key));
-    });
-  for (const change of checkpointChanges) {
-    await updateCheckpointState(client, change.job,
-      change.kind === "terminal" ? change.state : change.kind === "claim" ? "leased" : "retry_wait",
-      change.kind === "terminal" ? change.code : undefined);
-  }
+  await writePlannedCheckpoints(client, changes);
   const notifications: StateNotification[] = [];
   const claimed: Array<{ queueIndex: number; value: LeasedJob }> = [];
   for (const change of [...changes].sort((left, right) =>
     Buffer.compare(Buffer.from(jobKey(left.job)), Buffer.from(jobKey(right.job))))) {
-    const job = change.job;
-    if (change.kind === "terminal") {
-      await client.query(
-        `UPDATE orchestration_jobs SET state=$3,lease_worker_id=NULL,lease_instance_id=NULL,lease_token=NULL,
-           lease_expires_at=NULL,safe_last_error_code=$4,completed_at=clock_timestamp(),updated_at=clock_timestamp(),
-           row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
-        [job.tenant_id, job.job_id, change.state, change.code ?? null],
-      );
-      notifications.push({ job, state: change.state, ...(change.code === undefined ? {} : { reason: change.code }) });
-    } else if (change.kind === "retry") {
-      await client.query(
-        `UPDATE orchestration_jobs SET state='retry_wait',lease_worker_id=NULL,lease_instance_id=NULL,
-           lease_token=NULL,lease_expires_at=NULL,safe_last_error_code=$3,
-           available_at=clock_timestamp()+($4::bigint * interval '1 millisecond'),
-           updated_at=clock_timestamp(),row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
-        [job.tenant_id, job.job_id, change.code ?? null, change.delay],
-      );
-      notifications.push({ job, state: "retry_wait", reason: `attempt:${job.attempt_count}` });
-    } else if (change.kind === "request_cancel") {
-      await client.query(
-        `UPDATE orchestration_jobs SET cancellation_requested=true,updated_at=clock_timestamp(),row_version=row_version+1
-         WHERE tenant_id=$1 AND job_id=$2 AND cancellation_requested=false`, [job.tenant_id, job.job_id],
-      );
-    } else {
-      const updated = await client.query<{ lease_expires_at: Date }>(
-        `UPDATE orchestration_jobs SET state='leased',attempt_count=attempt_count+1,
-           lease_worker_id=$3,lease_instance_id=$4,lease_token=$5,safe_last_error_code=NULL,
-           lease_expires_at=clock_timestamp()+($6::bigint * interval '1 millisecond'),
-           started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp(),row_version=row_version+1
-         WHERE tenant_id=$1 AND job_id=$2 RETURNING lease_expires_at`,
-        [job.tenant_id, job.job_id, change.worker.workerId, change.worker.instanceId,
-          change.token, LEASE_DURATION_MS],
-      );
-      claimed.push({ queueIndex: change.queueIndex, value: detachedFrozen({
-        tenantId: job.tenant_id, jobId: job.job_id, kind: job.kind,
-        attemptCount: (BigInt(job.attempt_count) + 1n).toString(), maxAttempts: job.max_attempts,
-        leaseExpiresAt: updated.rows[0]!.lease_expires_at.toISOString(),
-        lease: { tenantId: job.tenant_id, jobId: job.job_id, leaseToken: change.token },
-      }) });
+    const result = await writePlannedJobChange(client, change);
+    if (result.notification !== undefined) notifications.push(result.notification);
+    if (result.claimed !== undefined && change.kind === "claim") {
+      claimed.push({ queueIndex: change.queueIndex, value: result.claimed });
     }
   }
   return { claimed: claimed.sort((a, b) => a.queueIndex - b.queueIndex).map((item) => item.value), notifications };
+};
+
+export const stageTerminalDependents = async (client: PoolClient, tenantId: string, roots: readonly string[],
+  locked: readonly JobRow[]): Promise<PlannedJobChange[]> => {
+  const changes = new Map<string, PlannedJobChange>();
+  await planTerminalDependents(client, tenantId, roots, locked, changes);
+  return [...changes.values()];
 };
 
 const planTerminalDependents = async (client: PoolClient, tenantId: string, roots: readonly string[],

@@ -222,13 +222,55 @@ test("scheduler touches old and new jobs by canonical ID when replacement IDs re
       if (Buffer.compare(Buffer.from(newId), Buffer.from(oldId)) >= 0) continue;
       reversed = true;
       const firstTouches = statements.filter(({ sql }) =>
-        /^\s*(?:SELECT 1 FROM orchestration_jobs .* FOR UPDATE|INSERT INTO orchestration_jobs)\b/s.test(sql))
+        /^\s*SELECT \* FROM orchestration_jobs .* FOR UPDATE\b/s.test(sql))
         .map(({ values }) => String(values[1]));
       expect(firstTouches).toContain(newId);
       expect(firstTouches).toContain(oldId);
       expect(firstTouches.indexOf(newId)).toBeLessThan(firstTouches.indexOf(oldId));
     }
     expect(reversed).toBe(true);
+  } finally { await database.cleanup(); }
+});
+
+test("scheduler writes a terminal prerequisite's descendant checkpoint before any job mutation", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    await repository.ingestEvent(eventContext, event("ordered-branch-1", "1"));
+    await repository.ingestEvent({ ...eventContext, allowedEventTypes: ["pull_request.updated"] }, {
+      ...event("ordered-pr", "2"), event_type: "pull_request.updated",
+      payload: { pull_request_id: "42", state: "open", base_branch: "main", base_revision: "a".repeat(40),
+        head_branch: "feature/test", head_revision: "b".repeat(40) },
+    });
+    const root = await database.pool.query<{ job_id: string }>(
+      `SELECT job_id FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND kind='branch_analysis'`,
+    );
+    const child = await database.pool.query<{ job_id: string }>(
+      `SELECT job_id FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND kind='pr_preview_analysis'`,
+    );
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_job_dependencies (tenant_id,job_id,prerequisite_job_id)
+       VALUES ('tenant-a',$1,$2)`, [child.rows[0]!.job_id, root.rows[0]!.job_id],
+    );
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const traced = createOrchestrationRepository(recordingPool(database.pool, statements), { schema: database.schema });
+    await traced.ingestEvent(eventContext, event("ordered-branch-2", "3"));
+    const mutations = statements.filter(({ sql }) => /^\s*(?:UPDATE|INSERT INTO) orchestration_(?:branch_checkpoints|pr_checkpoints|jobs|job_dependencies|outbox)\b/.test(sql));
+    const lastCheckpoint = mutations.findLastIndex(({ sql }) => /orchestration_(?:branch|pr)_checkpoints/.test(sql));
+    const firstJob = mutations.findIndex(({ sql }) => /orchestration_jobs/.test(sql));
+    expect(mutations.some(({ sql, values }) => /UPDATE orchestration_pr_checkpoints/.test(sql)
+      && values[1] === child.rows[0]!.job_id)).toBe(true);
+    expect(lastCheckpoint).toBeLessThan(firstJob);
+    const jobIds = mutations.filter(({ sql }) => /orchestration_jobs/.test(sql)).map(({ values }) => String(values[1]));
+    expect(jobIds).toEqual([...jobIds].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))));
+    const firstOutbox = mutations.findIndex(({ sql }) => /orchestration_outbox/.test(sql));
+    expect(firstOutbox).toBeGreaterThan(mutations.findLastIndex(({ sql }) => /orchestration_jobs/.test(sql)));
+    const result = await database.pool.query<{ state: string; latest_outcome: string }>(
+      `SELECT job.state,checkpoint.latest_outcome FROM ${schemaSql}.orchestration_jobs job
+       JOIN ${schemaSql}.orchestration_pr_checkpoints checkpoint ON checkpoint.tenant_id=job.tenant_id
+         AND checkpoint.current_job_id=job.job_id WHERE job.tenant_id='tenant-a' AND job.job_id=$1`,
+      [child.rows[0]!.job_id],
+    );
+    expect(result.rows[0]).toEqual({ state: "failed", latest_outcome: "failed" });
   } finally { await database.cleanup(); }
 });
 
@@ -408,6 +450,66 @@ test("explicit cancellation propagates through a dependent chain in the same tra
         state: "failed", attempt_count: "0", safe_last_error_code: "JOB_DEPENDENCY_FAILED",
       });
     }
+  } finally { await database.cleanup(); }
+});
+
+test("explicit cancellation writes chain and fanout checkpoints before sorted jobs and replays once", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    for (const id of ["51", "52", "53", "54"]) {
+      await repository.ingestEvent({ ...eventContext, allowedEventTypes: ["pull_request.updated"] }, {
+        ...event(`ordered-pr-${id}`, id), event_type: "pull_request.updated",
+        payload: { pull_request_id: id, state: "open", base_branch: "main", base_revision: "a".repeat(40),
+          head_branch: `feature/${id}`, head_revision: id.repeat(20) },
+      });
+    }
+    const jobs = await database.pool.query<{ job_id: string; pull_request_id: string }>(
+      `SELECT job_id,pull_request_id FROM ${schemaSql}.orchestration_jobs
+       WHERE tenant_id='tenant-a' AND kind='pr_preview_analysis' AND pull_request_id=ANY($1::text[])
+       ORDER BY pull_request_id`, [["51", "52", "53", "54"]],
+    );
+    const [root, first, second, grandchild] = jobs.rows.map((row) => row.job_id);
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_job_dependencies (tenant_id,job_id,prerequisite_job_id)
+       VALUES ('tenant-a',$1,$2),('tenant-a',$3,$2),('tenant-a',$4,$1)`, [first, root, second, grandchild],
+    );
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const traced = createOrchestrationRepository(recordingPool(database.pool, statements), { schema: database.schema });
+    const cancel = { tenantId: "tenant-a", principalId: "admin", capabilities: ["orchestration.cancel"] };
+    expect(await traced.cancelJob(cancel, root)).toMatchObject({ state: "cancelled" });
+    const writes = statements.filter(({ sql }) => /^\s*UPDATE orchestration_(?:pr_checkpoints|jobs)\b/.test(sql));
+    expect(writes.filter(({ sql }) => /orchestration_pr_checkpoints/.test(sql))).toHaveLength(4);
+    const pullRequestIds = new Map(jobs.rows.map((row) => [row.job_id, row.pull_request_id]));
+    const checkpointIds = writes.filter(({ sql }) => /orchestration_pr_checkpoints/.test(sql))
+      .map(({ values }) => pullRequestIds.get(String(values[1])));
+    expect(checkpointIds).toEqual(["51", "52", "53", "54"]);
+    const firstJob = writes.findIndex(({ sql }) => /orchestration_jobs/.test(sql));
+    expect(firstJob).toBe(4);
+    const jobIds = writes.filter(({ sql }) => /orchestration_jobs/.test(sql)).map(({ values }) => String(values[1]));
+    expect(jobIds).toEqual([...jobIds].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))));
+    const firstOutbox = statements.findIndex(({ sql }) => /^\s*INSERT INTO orchestration_outbox\b/.test(sql));
+    const lastJob = statements.findLastIndex(({ sql }) => /^\s*UPDATE orchestration_jobs\b/.test(sql));
+    expect(firstOutbox).toBeGreaterThan(lastJob);
+    const state = await database.pool.query<{ job_id: string; state: string; safe_last_error_code: string | null }>(
+      `SELECT job_id,state,safe_last_error_code FROM ${schemaSql}.orchestration_jobs
+       WHERE tenant_id='tenant-a' AND job_id=ANY($1::text[])`, [[root, first, second, grandchild]],
+    );
+    expect(state.rows.find((row) => row.job_id === root)?.state).toBe("cancelled");
+    for (const jobId of [first, second, grandchild]) {
+      expect(state.rows.find((row) => row.job_id === jobId)).toMatchObject({
+        state: "failed", safe_last_error_code: "JOB_DEPENDENCY_FAILED",
+      });
+    }
+    statements.length = 0;
+    expect(await traced.cancelJob(cancel, root)).toMatchObject({ state: "cancelled" });
+    expect(statements.some(({ sql }) => /^\s*(?:UPDATE|INSERT INTO) orchestration_(?:jobs|pr_checkpoints|outbox)\b/.test(sql)))
+      .toBe(false);
+    const notifications = await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_outbox
+       WHERE tenant_id='tenant-a' AND job_id=ANY($1::text[]) AND payload->>'state' IN ('cancelled','failed')`,
+      [[root, first, second, grandchild]],
+    );
+    expect(notifications.rows[0]?.count).toBe("4");
   } finally { await database.cleanup(); }
 });
 

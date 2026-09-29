@@ -6,7 +6,8 @@ import {
   type InstallationConfig,
 } from "@api-truth/ir";
 import type { PoolClient } from "pg";
-import { discoverTransitionClosure, propagateAndNotifyTerminalDependencies } from "./worker.js";
+import { discoverTransitionClosure, stageTerminalDependents, writePlannedCheckpoints,
+  writePlannedJobChange, writePlannedNotifications, type PlannedJobChange } from "./worker.js";
 
 import { isConfiguredBranch, selectPullRequestScope, selectReconciliationBranches } from "./branch-selection.js";
 import { canonicalOrchestrationHash, canonicalOrchestrationJson } from "./canonical.js";
@@ -810,12 +811,23 @@ export const persistScheduledJobs = async (
   // existing and new job in one PK sequence so an insertion cannot jump ahead of an old row lock.
   const allIds = [...new Set([...jobsById.keys(), ...existingIds, ...transitionsById.keys()])]
     .sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+  const lockedJobs = [];
   for (const jobId of allIds) {
-    if (existingIds.has(jobId)) {
-      await client.query(
-        `SELECT 1 FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2 FOR UPDATE`, [tenantId, jobId],
-      );
-    }
+    const locked = await client.query<Parameters<typeof stageTerminalDependents>[3][number]>(
+      `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2 FOR UPDATE`, [tenantId, jobId],
+    );
+    lockedJobs.push(...locked.rows);
+  }
+  const transitionRoots = lockedJobs.filter((job) => (transitionsById.get(job.job_id) ?? []).some((transition) =>
+    job.state === "queued" || job.state === "retry_wait"
+      || transition.kind === "cancel" && job.state === "cancelled"
+      || transition.kind === "supersede" && job.state === "superseded"))
+    .map((job) => job.job_id);
+  const dependents = await stageTerminalDependents(client, tenantId, transitionRoots, lockedJobs);
+  await writePlannedCheckpoints(client, dependents);
+  const dependentsById = new Map<string, PlannedJobChange>(dependents.map((change) => [change.job.job_id, change]));
+  const dependentNotifications = [];
+  for (const jobId of allIds) {
     const job = jobsById.get(jobId);
     if (job !== undefined && await persistJob(client, tenantId, job)) inserted.push(job);
     for (const transition of transitionsById.get(jobId) ?? []) {
@@ -823,6 +835,11 @@ export const persistScheduledJobs = async (
         ? await persistSupersede(client, tenantId, transition.oldJobId, transition.nextJobId!)
         : await persistCancel(client, tenantId, transition.oldJobId);
       if (result !== undefined) transitioned.push(result);
+    }
+    const dependent = dependentsById.get(jobId);
+    if (dependent !== undefined) {
+      const result = await writePlannedJobChange(client, dependent);
+      if (result.notification !== undefined) dependentNotifications.push(result.notification);
     }
   }
   for (const dependency of [...plan.dependencies].sort((left, right) => Buffer.compare(
@@ -835,10 +852,7 @@ export const persistScheduledJobs = async (
       [tenantId, dependency.jobId, dependency.prerequisiteJobId],
     );
   }
-  // Descendant checkpoint updates below change outcome fields only. Their rows and the
-  // descendant job rows were locked before this pass, so these writes add no reverse wait.
-  await propagateAndNotifyTerminalDependencies(client, tenantId,
-    transitioned.map((transition) => transition.jobId));
+  await writePlannedNotifications(client, dependentNotifications);
   for (const job of inserted) {
     await insertJobStateOutbox(client, tenantId, job.jobId, "queued", job.identity);
   }
