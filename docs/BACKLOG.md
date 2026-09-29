@@ -15,7 +15,7 @@ reviewed, and validated; it does not imply that a later phase is complete.
 | Work | Status | Evidence or next gate |
 |---|---|---|
 | D01–D07 | Complete | Synthetic constraints/fixtures, executable contracts, local test harness, bounded Express extraction, PostgreSQL catalog, and dependency-aware updates are committed. |
-| D08 | In progress: slices 0–5 of 0–7 complete | Slice 6 PR preview execution is implemented; exact branch/PR reconciliation and slice 7 remain. |
+| D08 | In progress: slices 0–5 of 0–7 complete | Slice 6 PR preview and exact-branch repair are implemented; exact-PR reconciliation and slice 7 remain. |
 | D09–D13 | Open | Phase 1 environment, publication, access, reference workflow, and release gates remain. |
 | Phases 2–6 | Planned | Java/framework conformance, runtime evidence, semantic discovery, related documents, and operating readiness follow their roadmap gates. |
 
@@ -27,7 +27,7 @@ yet. `main` may lag `development` while a task is under review.
 
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
-| D08-S6 | In progress | Isolated PR previews; exact branch and PR reconciliation; missed-event repair; confirmed branch absence; configuration-change reconciliation. | PR preview execution and close-during-analysis race now pass PostgreSQL integration tests. Next: exact branch/PR reconcilers, missed-event repair, absence, configuration-change races, and full lifecycle gate. |
+| D08-S6 | In progress | Isolated PR previews; exact branch and PR reconciliation; missed-event repair; confirmed branch absence; configuration-change reconciliation. | PR preview, exact-branch missed-event repair, no-work replay, confirmed absence, invalid provider response, and stale-generation race pass PostgreSQL integration tests. Next: exact-PR reconciler and full configuration-change lifecycle gate. |
 | D08-S7 | Open | Local round trip, truthful package and architecture docs, status/observer projections, privacy and failure hardening. | Clean install, full offline/PostgreSQL suites, required repeated race gates, teardown, safe status visibility, and independent review pass. |
 
 The detailed D08 implementation brief is a local working document. These two

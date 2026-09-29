@@ -458,8 +458,14 @@ const scheduleBranch = async (
   event: EventEnvelope,
   configuration: SchedulingConfiguration,
   target: TargetConfig,
+  authoritative?: { branch: string; revision?: string; evidence: EventEnvelope["provider_evidence"];
+    forceRepair: boolean },
 ): Promise<Readonly<{ target: ScheduledTarget; reconciliation?: Omit<DeferredBranchReconciliation, "resultIndex"> }>> => {
-  const payload = event.payload as { branch: string; new_revision: string; reference_state: string };
+  const payload = authoritative === undefined
+    ? event.payload as { branch: string; new_revision: string; reference_state: string }
+    : { branch: authoritative.branch, new_revision: authoritative.revision ?? "",
+      reference_state: authoritative.revision === undefined ? "deleted" : "fast_forward" };
+  const evidence = authoritative?.evidence ?? event.provider_evidence;
   const base = { repositoryId: target.repository.repository_id, serviceId: target.service.service_id, scopeKey: `branch:${payload.branch}` };
   if (!isConfiguredBranch(target.service, payload.branch)) {
     return { target: { ...base, disposition: "ignored_unconfigured_branch", safeReason: "unconfigured_branch" } };
@@ -478,9 +484,10 @@ const scheduleBranch = async (
   const current = selected.rows[0];
   const desiredState = payload.reference_state === "deleted" ? "absent" : "present";
   const relevantPayload = { state: desiredState, revision: desiredState === "present" ? payload.new_revision : null };
-  const classification = classifyProviderUpdate(current === undefined ? undefined : checkpointEvidence(current), {
-    evidence: event.provider_evidence, relevantPayload,
-  });
+  const classification = authoritative === undefined
+    ? classifyProviderUpdate(current === undefined ? undefined : checkpointEvidence(current), {
+      evidence, relevantPayload,
+    }) : "newer";
   if (classification === "conflict") throw new OrchestrationError("EVENT_ORDER_CONFLICT");
   if (classification === "stale") return { target: { ...base, disposition: "ignored_stale", safeReason: "stale" } };
   if (classification === "exact_replay") return { target: { ...base, disposition: "no_work", safeReason: "no_work" } };
@@ -491,7 +498,7 @@ const scheduleBranch = async (
     };
   }
   const checkpointVersion = current === undefined ? "1" : (BigInt(current.checkpoint_version) + 1n).toString();
-  const sameSemanticTarget = current !== undefined
+  const sameSemanticTarget = !authoritative?.forceRepair && current !== undefined
     && current.desired_state === desiredState
     && (desiredState === "absent" || current.desired_revision === payload.new_revision)
     && (desiredState === "absent" || current.current_job_config_fingerprint === configuration.fingerprint);
@@ -502,8 +509,8 @@ const scheduleBranch = async (
          checkpoint_version=$9,updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND branch=$4`,
       [tenantId, target.repository.repository_id, target.service.service_id, payload.branch,
-        event.provider_evidence.provider, event.provider_evidence.provider_reference,
-        event.provider_evidence.order?.kind ?? null, event.provider_evidence.order?.value ?? null, checkpointVersion],
+        evidence.provider, evidence.provider_reference,
+        evidence.order?.kind ?? null, evidence.order?.value ?? null, checkpointVersion],
     );
     const nonterminal = current.current_job_state === "queued" || current.current_job_state === "leased"
       || current.current_job_state === "retry_wait";
@@ -524,15 +531,15 @@ const scheduleBranch = async (
          order_value=EXCLUDED.order_value, checkpoint_version=EXCLUDED.checkpoint_version, current_job_id=NULL,
          latest_outcome='absent', updated_at=clock_timestamp()`,
       [tenantId, target.repository.repository_id, target.service.service_id, payload.branch,
-        event.provider_evidence.provider, event.provider_evidence.provider_reference, event.provider_evidence.order?.kind ?? null,
-        event.provider_evidence.order?.value ?? null, checkpointVersion, current?.analysis_generation ?? "0"],
+        evidence.provider, evidence.provider_reference, evidence.order?.kind ?? null,
+        evidence.order?.value ?? null, checkpointVersion, current?.analysis_generation ?? "0"],
     );
     return { target: { ...base, disposition: "scheduled" } };
   }
   const generation = current === undefined ? "1" : (BigInt(current.analysis_generation) + 1n).toString();
   const jobId = stageJob(state, tenantId, event, configuration, {
     kind: "branch_analysis", target, branch: payload.branch, targetRevision: payload.new_revision, generation,
-  });
+  }, evidence);
   stageSupersede(state, current?.current_job_id, jobId);
   stageCheckpointQuery(state, 4, checkpointKey(tenantId, target.repository.repository_id,
     target.service.service_id, payload.branch), client,
@@ -546,10 +553,32 @@ const scheduleBranch = async (
        analysis_generation=EXCLUDED.analysis_generation, current_job_id=EXCLUDED.current_job_id,
        latest_outcome='queued', updated_at=clock_timestamp()`,
     [tenantId, target.repository.repository_id, target.service.service_id, payload.branch, payload.new_revision,
-      event.provider_evidence.provider, event.provider_evidence.provider_reference, event.provider_evidence.order?.kind ?? null,
-      event.provider_evidence.order?.value ?? null, checkpointVersion, generation, jobId],
+      evidence.provider, evidence.provider_reference, evidence.order?.kind ?? null,
+      evidence.order?.value ?? null, checkpointVersion, generation, jobId],
   );
   return { target: { ...base, disposition: "scheduled", jobId } };
+};
+
+export const scheduleAuthoritativeBranch = async (
+  client: PoolClient,
+  tenantId: string,
+  event: EventEnvelope,
+  configuration: SchedulingConfiguration,
+  input: { repositoryId: string; serviceId: string; branch: string; revision?: string;
+    evidence: EventEnvelope["provider_evidence"]; forceRepair: boolean },
+): Promise<SchedulingPlan> => {
+  const target = targetConfig(configuration.document, input.serviceId);
+  if (target.repository.repository_id !== input.repositoryId
+    || !isConfiguredBranch(target.service, input.branch)) throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
+  const state: SchedulerState = { jobs: new Map(), transitions: [], dependencies: [], checkpointWrites: [] };
+  const scheduled = await scheduleBranch(client, state, tenantId, event, configuration, target, {
+    branch: input.branch, ...(input.revision === undefined ? {} : { revision: input.revision }),
+    evidence: input.evidence, forceRepair: input.forceRepair,
+  });
+  if (scheduled.reconciliation !== undefined) throw new OrchestrationError("RECONCILIATION_FAILED");
+  return Object.freeze({ targets: Object.freeze([scheduled.target]),
+    jobs: Object.freeze([...state.jobs.values()]), transitions: Object.freeze(state.transitions),
+    dependencies: Object.freeze(state.dependencies), checkpointWrites: Object.freeze(state.checkpointWrites) });
 };
 
 const scheduleBranchReconciliation = async (

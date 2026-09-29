@@ -6,7 +6,8 @@ import { requireControlCapability, requireWorkerCapability } from "./authorizati
 import { canonicalOrchestrationHash, canonicalOrchestrationJson, detachedFrozen } from "./canonical.js";
 import { withOrchestrationTransaction, withRestartingOrchestrationTransaction } from "./database.js";
 import { OrchestrationError } from "./errors.js";
-import { executeLeasedAnalysisJob, type WorkerPorts } from "./execution.js";
+import { executeLeasedAnalysisJob, type AnalysisWorkerPorts } from "./execution.js";
+import { executeLeasedReconciliationJob, type ReconciliationWorkerPorts } from "./reconciliation.js";
 import { semanticOrchestrationId } from "./hashing.js";
 import {
   acquireAdvisoryLocks, analysisCheckpointLock, branchLock, capacityGlobalLock, capacityRepositoryLock,
@@ -43,6 +44,7 @@ type OutboxRow = {
 };
 
 export type JobLease = Readonly<{ tenantId: string; jobId: string; leaseToken: string }>;
+export type WorkerPorts = AnalysisWorkerPorts | ReconciliationWorkerPorts;
 export type LeasedJob = Readonly<{
   tenantId: string; jobId: string; kind: string; attemptCount: string; maxAttempts: string;
   leaseExpiresAt: string; lease: JobLease;
@@ -775,6 +777,12 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
   async runJob(workerInput, leaseInput, ports) {
     const worker = requireWorkerCapability(workerInput, "jobs.execute");
     const lease = parseJobLease(leaseInput);
+    const selected = await withOrchestrationTransaction(pool, options, (client) => client.query<{ kind: string }>(
+      `SELECT kind FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
+    ));
+    if (selected.rows[0]?.kind === "branch_reconciliation" || selected.rows[0]?.kind === "pr_reconciliation") {
+      return executeLeasedReconciliationJob(pool, options, worker, lease, ports);
+    }
     return executeLeasedAnalysisJob(pool, options, worker, lease, ports);
   },
   async claimJobs(workerInput, optionsInput) {

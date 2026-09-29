@@ -55,7 +55,7 @@ type Materialized = {
     associationKey: string };
 };
 
-export type WorkerPorts = Readonly<{
+export type AnalysisWorkerPorts = Readonly<{
   resolver: { resolve(input: { tenantId: string; repository: Prepared["repository"];
     service: Prepared["service"]; immutableRevision: string; baseRevision?: string;
     configFingerprint: string }): Promise<{ request: AnalyzerRequest; changedPaths: string[];
@@ -119,21 +119,21 @@ const confirmLive = async (pool: Pool, options: { schema: string }, worker: Work
   });
 };
 
-const validatedPorts = (input: unknown): WorkerPorts => {
+const validatedPorts = (input: unknown): AnalysisWorkerPorts => {
   try {
     if (input === null || typeof input !== "object" || Array.isArray(input)) fail("JOB_EXECUTION_FAILED");
-    const ports = input as WorkerPorts;
+    const ports = input as AnalysisWorkerPorts;
     if (typeof ports.resolver?.resolve !== "function" || typeof ports.analyzer?.analyze !== "function") fail("JOB_EXECUTION_FAILED");
     return ports;
   } catch { fail("JOB_EXECUTION_FAILED"); }
 };
 
-const resolveRequest = async (prepared: Prepared, ports: WorkerPorts,
+const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
   baseRevision?: string): Promise<{
   request: AnalyzerRequest; changedPaths: string[]; changedPathsComplete: boolean;
 }> => {
   const { job, repository, service } = prepared;
-  let raw: Awaited<ReturnType<WorkerPorts["resolver"]["resolve"]>>;
+  let raw: Awaited<ReturnType<AnalysisWorkerPorts["resolver"]["resolve"]>>;
   try {
     raw = await ports.resolver.resolve(detachedFrozen({ tenantId: job.tenant_id, repository, service,
       immutableRevision: job.target_revision!, ...(baseRevision === undefined ? {} : { baseRevision }),
@@ -164,7 +164,7 @@ const resolveRequest = async (prepared: Prepared, ports: WorkerPorts,
   } catch { fail("JOB_EXECUTION_FAILED"); }
 };
 
-const analyzeBaseline = async (request: AnalyzerRequest, ports: WorkerPorts,
+const analyzeBaseline = async (request: AnalyzerRequest, ports: AnalysisWorkerPorts,
   configFingerprint: string): Promise<Materialized> => {
   if (request.extraction_mode !== "baseline") fail("JOB_EXECUTION_FAILED");
   let raw: unknown;
@@ -288,11 +288,11 @@ const baseForPreview = async (pool: Pool, options: { schema: string }, prepared:
 };
 
 const materialize = async (prepared: Prepared,
-  resolved: Awaited<ReturnType<typeof resolveRequest>>, ports: WorkerPorts,
+  resolved: Awaited<ReturnType<typeof resolveRequest>>, ports: AnalysisWorkerPorts,
   baseSelection: Awaited<ReturnType<typeof baseForBranch>> | Awaited<ReturnType<typeof baseForPreview>>,
   beforeAnalyze: () => Promise<void>): Promise<Materialized> => {
   const { job } = prepared;
-  const checkedPorts: WorkerPorts = { ...ports, analyzer: { analyze: async (request) => {
+  const checkedPorts: AnalysisWorkerPorts = { ...ports, analyzer: { analyze: async (request) => {
     await beforeAnalyze();
     return ports.analyzer.analyze(request);
   } } };
