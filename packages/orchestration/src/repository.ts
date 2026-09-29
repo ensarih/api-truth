@@ -5,10 +5,25 @@ import { authorizeNormalizedEvent, requireControlCapability } from "./authorizat
 import { isConfiguredBranch, selectPullRequestScope, selectReconciliationBranches } from "./branch-selection.js";
 import { canonicalOrchestrationHash, canonicalOrchestrationJson, canonicalStringSet, detachedFrozen } from "./canonical.js";
 import { calculateConfigurationImpact } from "./configuration.js";
-import { withOrchestrationTransaction } from "./database.js";
+import { withOrchestrationTransaction, withRestartingOrchestrationTransaction } from "./database.js";
 import { OrchestrationError, orchestrationValidationError } from "./errors.js";
 import { eventSha256, semanticOrchestrationId } from "./hashing.js";
 import { classifyProviderUpdate } from "./ordering.js";
+import {
+  acquireAdvisoryLocks,
+  analysisCheckpointLock,
+  branchLock,
+  capacityGlobalLock,
+  capacityRepositoryLock,
+  capacityServiceLock,
+  configurationLock,
+  OrchestrationLockRestart,
+  pullRequestLock,
+  reconciliationBranchLock,
+  reconciliationPullRequestLock,
+  type AdvisoryLockKey,
+} from "./locking.js";
+import { discoverSchedulingLocks, scheduleEventTargets } from "./scheduler.js";
 import {
   parseAuthenticatedEventContext,
   parseActiveConfigurationSummary,
@@ -82,6 +97,10 @@ export type OrchestrationRepository = Readonly<{
   getActiveConfigurationSummary(context: unknown): Promise<Static<typeof ActiveConfigurationSummarySchema>>;
   getTrustedActiveConfiguration(tenantId: unknown): Promise<TrustedConfiguration>;
   ingestEvent(context: unknown, event: unknown): Promise<EventReceipt>;
+  cancelJob(context: unknown, jobId: unknown): Promise<Readonly<{
+    jobId: string;
+    state: "queued" | "leased" | "retry_wait" | "succeeded" | "failed" | "cancelled" | "superseded";
+  }>>;
 }>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -219,15 +238,16 @@ const insertOutbox = async (
   payload: Record<string, string>,
   eventProducerId?: string,
   eventId?: string,
+  jobId?: string,
 ): Promise<void> => {
   const dedupeKey = canonicalOrchestrationHash(identity);
   const outboxId = semanticOrchestrationId("outbox", identity);
   await client.query(
     `INSERT INTO orchestration_outbox
-       (tenant_id, outbox_id, dedupe_key, message_kind, event_producer_id, event_id, payload, state, max_attempts)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 8)
+       (tenant_id, outbox_id, dedupe_key, message_kind, event_producer_id, event_id, job_id, payload, state, max_attempts)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 8)
      ON CONFLICT (tenant_id, dedupe_key) DO NOTHING`,
-    [tenantId, outboxId, dedupeKey, messageKind, eventProducerId ?? null, eventId ?? null, payload],
+    [tenantId, outboxId, dedupeKey, messageKind, eventProducerId ?? null, eventId ?? null, jobId ?? null, payload],
   );
 };
 
@@ -277,7 +297,15 @@ const activate = async (
   });
 };
 
-type TargetOutcome = { repositoryId: string; serviceId: string; scopeKey: string; disposition: EventDisposition; safeReason?: string };
+type TargetOutcome = {
+  repositoryId: string;
+  serviceId: string;
+  scopeKey: string;
+  disposition: EventDisposition;
+  safeReason?: string;
+  jobId?: string;
+  reconciliationId?: string;
+};
 
 const outcomesForEvent = (event: EventEnvelope, document: InstallationConfig): TargetOutcome[] => {
   const targets = canonicalStringSet(event.subjects.service_ids).map((serviceId) => targetForService(document, serviceId));
@@ -347,6 +375,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     const document = configurationDocument(candidate.document);
     const digest = configDigest(document);
     return withOrchestrationTransaction(pool, options, async (client) => {
+      await acquireAdvisoryLocks(client, [configurationLock(context.tenantId)]);
       const inserted = await client.query(
         `INSERT INTO orchestration_configurations
            (tenant_id, config_fingerprint, config_version, document_sha256, document, registrar_principal_id)
@@ -364,6 +393,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     const context = requireControlCapability(contextInput, "configuration.admin");
     const activation = activationInput(input, false);
     return withOrchestrationTransaction(pool, options, async (client) => {
+      await acquireAdvisoryLocks(client, [configurationLock(context.tenantId)]);
       const candidate = await readConfiguration(client, context.tenantId, activation.fingerprint);
       const inserted = await client.query<{ checkpoint_version: string }>(
         `INSERT INTO orchestration_active_configurations (tenant_id, config_fingerprint, checkpoint_version)
@@ -381,6 +411,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     const context = requireControlCapability(contextInput, "configuration.admin");
     const activation = activationInput(input, true);
     return withOrchestrationTransaction(pool, options, async (client) => {
+      await acquireAdvisoryLocks(client, [configurationLock(context.tenantId)]);
       const current = await readActive(client, context.tenantId, true);
       if (current.checkpoint_version !== activation.expectedCheckpointVersion) throw new OrchestrationError("CONFIGURATION_CONFLICT");
       const candidate = await readConfiguration(client, context.tenantId, activation.fingerprint);
@@ -428,10 +459,15 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       || detachedEvent.subjects.service_ids.some((serviceId) => !context.allowedServices.includes(serviceId))) {
       throw new OrchestrationError("EVENT_UNAUTHORIZED");
     }
-    return withOrchestrationTransaction(pool, options, async (client) => {
-      await client.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
-        canonicalOrchestrationJson({ tenantId: context.tenantId, producerId: context.producerId, eventId: detachedEvent.event_id }),
-      ]);
+    return withRestartingOrchestrationTransaction(pool, options, [configurationLock(context.tenantId)], async (client, carriedLocks) => {
+      const discoveredActive = await readActive(client, context.tenantId);
+      const discoveredConfiguration = {
+        fingerprint: String(discoveredActive.config_fingerprint),
+        documentSha256: String(discoveredActive.document_sha256),
+        document: configurationFromRow(discoveredActive),
+      };
+      const discoveredLocks = discoverSchedulingLocks(context.tenantId, detachedEvent, discoveredConfiguration);
+      await acquireAdvisoryLocks(client, [...carriedLocks, ...discoveredLocks]);
       const existing = await client.query<{ event_sha256: unknown; active_config_fingerprint: unknown }>(
         `SELECT event_sha256, active_config_fingerprint
          FROM orchestration_events WHERE tenant_id = $1 AND producer_id = $2 AND event_id = $3`,
@@ -476,6 +512,15 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       }
 
       const active = await readActive(client, context.tenantId, true);
+      if (active.config_fingerprint !== discoveredActive.config_fingerprint
+        || active.document_sha256 !== discoveredActive.document_sha256) {
+        const currentConfiguration = {
+          fingerprint: String(active.config_fingerprint),
+          documentSha256: String(active.document_sha256),
+          document: configurationFromRow(active),
+        };
+        throw new OrchestrationLockRestart(discoverSchedulingLocks(context.tenantId, detachedEvent, currentConfiguration));
+      }
       const activeDocument = configurationFromRow(active);
       let candidate: ConfigurationRow | undefined;
       if (detachedEvent.event_type === "configuration.changed") {
@@ -551,14 +596,22 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
             throw new OrchestrationError("EVENT_SUBJECT_MISMATCH");
           }
         }
+      } else {
+        outcomes = await scheduleEventTargets(client, context.tenantId, authorized.event, {
+          fingerprint: String(active.config_fingerprint),
+          documentSha256: String(active.document_sha256),
+          document: activeDocument,
+        });
       }
       for (const outcome of outcomes) {
         await client.query(
           `INSERT INTO orchestration_event_targets
-             (tenant_id, producer_id, event_id, repository_id, service_id, scope_key, disposition, safe_reason)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+             (tenant_id, producer_id, event_id, repository_id, service_id, scope_key, disposition,
+              job_id, reconciliation_id, safe_reason)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
           [context.tenantId, authorized.event.producer.producer_id, authorized.event.event_id,
-            outcome.repositoryId, outcome.serviceId, outcome.scopeKey, outcome.disposition, outcome.safeReason ?? null],
+            outcome.repositoryId, outcome.serviceId, outcome.scopeKey, outcome.disposition,
+            outcome.jobId ?? null, outcome.reconciliationId ?? null, outcome.safeReason ?? null],
         );
         await insertOutbox(client, context.tenantId,
           { kind: "event.disposition", producerId: authorized.event.producer.producer_id,
@@ -568,6 +621,110 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
           authorized.event.producer.producer_id, authorized.event.event_id);
       }
       return receiptFor("accepted", outcomes.map((outcome) => outcome.disposition));
+    });
+  },
+
+  async cancelJob(contextInput, jobIdInput) {
+    const context = requireControlCapability(contextInput, "orchestration.cancel");
+    if (typeof jobIdInput !== "string" || jobIdInput.length === 0) {
+      throw new OrchestrationError("JOB_NOT_FOUND_OR_DENIED");
+    }
+    return withOrchestrationTransaction(pool, options, async (client) => {
+      const discovered = await client.query<{
+        kind: string; repository_id: string; service_id: string; branch: string | null; pull_request_id: string | null;
+        semantic_identity: unknown;
+      }>(
+        `SELECT kind,repository_id,service_id,branch,pull_request_id,semantic_identity
+         FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`,
+        [context.tenantId, jobIdInput],
+      );
+      const job = discovered.rows[0];
+      if (job === undefined) throw new OrchestrationError("JOB_NOT_FOUND_OR_DENIED");
+      const locks: AdvisoryLockKey[] = [
+        configurationLock(context.tenantId),
+        capacityGlobalLock(context.tenantId),
+        capacityRepositoryLock(context.tenantId, job.repository_id),
+        capacityServiceLock(context.tenantId, job.repository_id, job.service_id),
+      ];
+      if (job.branch !== null) {
+        locks.push(branchLock(context.tenantId, job.repository_id, job.service_id, job.branch));
+        if (job.kind === "branch_reconciliation") {
+          locks.push(reconciliationBranchLock(context.tenantId, job.repository_id, job.service_id, job.branch));
+        }
+      }
+      if (job.pull_request_id !== null) {
+        locks.push(pullRequestLock(context.tenantId, job.repository_id, job.service_id, job.pull_request_id));
+        if (job.kind === "pr_reconciliation") {
+          locks.push(reconciliationPullRequestLock(context.tenantId, job.repository_id, job.service_id, job.pull_request_id));
+        }
+      }
+      const semantic = isRecord(job.semantic_identity) ? job.semantic_identity : undefined;
+      const analysis = semantic !== undefined && isRecord(semantic.analysis) ? semantic.analysis : undefined;
+      if (analysis !== undefined) {
+        locks.push(analysisCheckpointLock(context.tenantId, job.repository_id, job.service_id,
+          canonicalOrchestrationHash(analysis)));
+      }
+      await acquireAdvisoryLocks(client, locks);
+      await readActive(client, context.tenantId, true);
+      await client.query(
+        `SELECT 1 FROM orchestration_branch_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
+        [context.tenantId, jobIdInput],
+      );
+      await client.query(
+        `SELECT 1 FROM orchestration_pr_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
+        [context.tenantId, jobIdInput],
+      );
+      await client.query(
+        `SELECT 1 FROM orchestration_reconciliation_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
+        [context.tenantId, jobIdInput],
+      );
+      await client.query(
+        `SELECT 1 FROM orchestration_analysis_checkpoints WHERE tenant_id=$1 AND current_job_id=$2 FOR UPDATE`,
+        [context.tenantId, jobIdInput],
+      );
+      const locked = await client.query<{ state: string }>(
+        `SELECT state FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2 FOR UPDATE`,
+        [context.tenantId, jobIdInput],
+      );
+      const currentState = locked.rows[0]?.state;
+      const knownStates = ["queued", "leased", "retry_wait", "succeeded", "failed", "cancelled", "superseded"] as const;
+      if (currentState === undefined || !knownStates.includes(currentState as typeof knownStates[number])) {
+        throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+      }
+      if (["succeeded", "failed", "cancelled", "superseded"].includes(currentState)) {
+        return detachedFrozen({ jobId: jobIdInput, state: currentState as typeof knownStates[number] });
+      }
+      await client.query(
+        `UPDATE orchestration_branch_checkpoints SET current_job_id=NULL,latest_outcome='cancelled',updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+      );
+      await client.query(
+        `UPDATE orchestration_pr_checkpoints SET current_job_id=NULL,updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+      );
+      await client.query(
+        `UPDATE orchestration_reconciliation_checkpoints SET current_job_id=NULL,last_outcome='obsolete',updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+      );
+      await client.query(
+        `UPDATE orchestration_analysis_checkpoints SET current_job_id=NULL,last_terminal_outcome='cancelled',updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND current_job_id=$2`, [context.tenantId, jobIdInput],
+      );
+      await client.query(
+        `UPDATE orchestration_jobs SET
+           state=CASE WHEN state='leased' THEN state ELSE 'cancelled' END,
+           cancellation_requested=true,
+           completed_at=CASE WHEN state='leased' THEN completed_at ELSE clock_timestamp() END,
+           updated_at=clock_timestamp(),row_version=row_version+1
+         WHERE tenant_id=$1 AND job_id=$2`,
+        [context.tenantId, jobIdInput],
+      );
+      const nextState = currentState === "leased" ? "leased" : "cancelled";
+      if (nextState === "cancelled") {
+        await insertOutbox(client, context.tenantId, { kind: "job.state_changed", jobId: jobIdInput, state: nextState },
+          "job.state_changed", { jobId: jobIdInput, state: nextState }, undefined, undefined, jobIdInput);
+      }
+      return detachedFrozen({ jobId: jobIdInput, state: nextState });
     });
   },
 });

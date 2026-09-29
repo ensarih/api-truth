@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 
 import { OrchestrationError, orchestrationStorageError } from "./errors.js";
+import { OrchestrationLockRestart, type AdvisoryLockKey } from "./locking.js";
 
 const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
 const SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -34,9 +35,27 @@ export const withOrchestrationTransaction = async <Value>(
     return value;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
-    if (error instanceof OrchestrationError) throw error;
+    if (error instanceof OrchestrationError || error instanceof OrchestrationLockRestart) throw error;
     throw orchestrationStorageError(error);
   } finally {
     client.release();
   }
+};
+
+export const withRestartingOrchestrationTransaction = async <Value>(
+  pool: Pool,
+  options: { schema: string },
+  initialLocks: readonly AdvisoryLockKey[],
+  operation: (client: PoolClient, locks: readonly AdvisoryLockKey[]) => Promise<Value>,
+): Promise<Value> => {
+  let locks = [...initialLocks];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await withOrchestrationTransaction(pool, options, (client) => operation(client, locks));
+    } catch (error) {
+      if (!(error instanceof OrchestrationLockRestart)) throw error;
+      locks = [...locks, ...error.missingLocks];
+    }
+  }
+  throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: true });
 };

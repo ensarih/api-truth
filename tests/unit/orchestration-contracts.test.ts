@@ -19,6 +19,13 @@ import {
   selectPullRequestScope,
   selectReconciliationBranches,
 } from "../../packages/orchestration/src/index.js";
+import { catalogBranchAdvisoryKey } from "../../packages/catalog/src/index.js";
+import {
+  advisoryLockIdentity,
+  canonicalAdvisoryLocks,
+  catalogBranchLock,
+  requireDiscoveredLocks,
+} from "../../packages/orchestration/src/locking.js";
 import { OrchestrationError } from "../../packages/orchestration/src/errors.js";
 
 const config = () => ({
@@ -419,6 +426,27 @@ describe("D08 orchestration contracts", () => {
     const huge = "9".repeat(500);
     expect(classifyProviderUpdate(current, { evidence: evidence(huge), relevantPayload: { revision: "b" } })).toBe("newer");
     expect(classifyProviderUpdate(current, { evidence: evidence("01"), relevantPayload: { revision: "b" } })).toBe("incomparable");
+  });
+
+  test("orders global advisory namespaces and preserves the exact D06 branch lock identity", () => {
+    const catalog = catalogBranchLock("tenant-1", "commerce", "orders", "main");
+    const locks = canonicalAdvisoryLocks([
+      catalog,
+      { namespace: "subject.branch", parts: ["tenant-1", "commerce", "orders", "main"] },
+      { namespace: "configuration.tenant", parts: ["tenant-1"] },
+      { namespace: "subject.branch", parts: ["tenant-1", "commerce", "orders", "Main"] },
+    ]);
+    expect(locks.map((lock) => lock.namespace)).toEqual([
+      "configuration.tenant", "subject.branch", "subject.branch", "catalog.branch",
+    ]);
+    expect(catalog.advisoryIdentity).toBe(catalogBranchAdvisoryKey({
+      tenantId: "tenant-1", repositoryId: "commerce", serviceId: "orders", branch: "main",
+    }));
+    const acquired = new Set([advisoryLockIdentity(locks[0]!)]);
+    expect(() => requireDiscoveredLocks(acquired, locks)).toThrowError(
+      expect.objectContaining({ name: "OrchestrationLockRestart" }),
+    );
+    expect(() => requireDiscoveredLocks(new Set(locks.map(advisoryLockIdentity)), locks)).not.toThrow();
   });
 
   test("applies state precedence, idempotence, and deterministic retry", () => {

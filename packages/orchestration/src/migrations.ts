@@ -177,10 +177,13 @@ export const applyOrchestrationMigrationManifest = async (
   }
 };
 
-const orchestrationMigrationManifest = async (): Promise<OrchestrationMigration[]> => [{
-  version: "0001_orchestration_core",
-  sql: await readFile(new URL("../migrations/0001_orchestration_core.sql", import.meta.url), "utf8"),
-}];
+const orchestrationMigrationManifest = async (): Promise<OrchestrationMigration[]> => Promise.all([
+  "0001_orchestration_core",
+  "0002_ordered_scheduling",
+].map(async (version) => ({
+  version,
+  sql: await readFile(new URL(`../migrations/${version}.sql`, import.meta.url), "utf8"),
+})));
 
 export const applyOrchestrationMigrations = async (pool: Pool, options: { schema: string }): Promise<void> =>
   applyOrchestrationMigrationManifest(pool, options, await orchestrationMigrationManifest());

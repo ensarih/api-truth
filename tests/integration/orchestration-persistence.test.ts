@@ -72,7 +72,10 @@ test("applies D08 independently, replays idempotently, and rejects checksum drif
     const rows = await database.pool.query<{ version: string }>(
       `SELECT version FROM ${schemaSql}.orchestration_schema_migrations`,
     );
-    expect(rows.rows).toEqual([{ version: "0001_orchestration_core" }]);
+    expect(rows.rows).toEqual([
+      { version: "0001_orchestration_core" },
+      { version: "0002_ordered_scheduling" },
+    ]);
     await expect(applyOrchestrationMigrationManifest(database.pool, { schema: database.schema }, [
       { version: "0001_orchestration_core", sql: "SELECT 'private migration body'" },
     ])).rejects.toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
@@ -125,7 +128,7 @@ test("stores mixed targets, equivalent deliveries, and conflicts atomically", as
               (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets)::text AS targets,
               (SELECT count(*) FROM ${schemaSql}.orchestration_outbox)::text AS outbox`,
     );
-    expect(counts.rows).toEqual([{ events: "1", deliveries: "2", targets: "2", outbox: "2" }]);
+    expect(counts.rows).toEqual([{ events: "1", deliveries: "2", targets: "2", outbox: "3" }]);
   } finally { await database.cleanup(); }
 });
 
@@ -148,7 +151,7 @@ test("concurrent equivalent deliveries create one event and one target/outbox se
               (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets)::text AS targets,
               (SELECT count(*) FROM ${schemaSql}.orchestration_outbox)::text AS outbox`,
     );
-    expect(rows.rows).toEqual([{ events: "1", deliveries: "2", targets: "2", outbox: "2" }]);
+    expect(rows.rows).toEqual([{ events: "1", deliveries: "2", targets: "2", outbox: "3" }]);
   } finally { await database.cleanup(); }
 });
 
@@ -278,7 +281,7 @@ test("rolls back later D08 migration failure without leaking objects or SQL deta
               (SELECT count(*) FROM ${schemaSql}.orchestration_schema_migrations)::text AS count`,
       [`${database.schema}.private_partial`],
     );
-    expect(result.rows).toEqual([{ table_name: null, count: "1" }]);
+    expect(result.rows).toEqual([{ table_name: null, count: "2" }]);
   } finally { await database.cleanup(); }
 });
 
@@ -364,9 +367,13 @@ test("enforces tenant-scoped result/outbox keys, bounded outcomes, and immutable
     await database.pool.query(
       `INSERT INTO ${schemaSql}.orchestration_jobs
        (tenant_id, job_id, dedupe_key, kind, repository_id, service_id, config_fingerprint,
-        config_document_sha256, subject_generation, state, max_attempts, completed_at)
-       VALUES ('tenant-a', 'job-a', $1, 'baseline_analysis', 'commerce', 'orders', 'config-a', $2, 1, 'succeeded', 1, clock_timestamp()),
-              ('tenant-a', 'job-b', $3, 'baseline_analysis', 'commerce', 'orders', 'config-a', $2, 1, 'queued', 1, NULL)`,
+        config_document_sha256, subject_generation, state, max_attempts, completed_at,
+        service_root, analyzer_adapter_id, analyzer_adapter_version, exchange_version, ir_version,
+        identity_version, config_version, semantic_identity)
+       VALUES ('tenant-a', 'job-a', $1, 'baseline_analysis', 'commerce', 'orders', 'config-a', $2, 1, 'succeeded', 1, clock_timestamp(),
+               'services/orders','typescript','1','1.0.0','1.0.0','1.0.0','1.0.0','{}'),
+              ('tenant-a', 'job-b', $3, 'baseline_analysis', 'commerce', 'orders', 'config-a', $2, 1, 'queued', 1, NULL,
+               'services/orders','typescript','1','1.0.0','1.0.0','1.0.0','1.0.0','{}')`,
       [`sha256:${"2".repeat(64)}`, `sha256:${"1".repeat(64)}`, `sha256:${"3".repeat(64)}`],
     );
     await expect(database.pool.query(
@@ -380,6 +387,12 @@ test("enforces tenant-scoped result/outbox keys, bounded outcomes, and immutable
         analyzer_adapter_version, exchange_version, ir_version, identity_version, config_version,
         config_fingerprint, attempt_generation, last_terminal_outcome)
        VALUES ('tenant-a','commerce','orders','services/orders','rev','typescript','1','1.0.0','1.0.0','1.0.0','1.0.0','config-a',1,'invented')`,
+    )).rejects.toMatchObject({ code: "23514" });
+    await expect(database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_branch_checkpoints
+       (tenant_id,repository_id,service_id,branch,desired_state,desired_revision,provider,provider_reference,
+        checkpoint_version,analysis_generation,current_job_id,latest_outcome)
+       VALUES ('tenant-a','commerce','orders','main','present','rev','github','ref',1,1,'job-b','queued')`,
     )).rejects.toMatchObject({ code: "23514" });
     await database.pool.query(
       `INSERT INTO ${schemaSql}.orchestration_job_dependencies (tenant_id, job_id, prerequisite_job_id)
@@ -432,18 +445,20 @@ test("contains corrupt public database projections behind safe storage errors", 
 
     await database.pool.query(`UPDATE ${schemaSql}.orchestration_active_configurations SET checkpoint_version = 1`);
     await repository.ingestEvent(eventContext(), branchEvent());
-    const dispositionConstraint = await database.pool.query<{ constraint_name: string }>(
+    const dispositionConstraints = await database.pool.query<{ constraint_name: string }>(
       `SELECT constraint_row.conname AS constraint_name
        FROM pg_catalog.pg_constraint constraint_row
        JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
        JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
        WHERE namespace_row.nspname = $1 AND table_row.relname = 'orchestration_event_targets'
-         AND constraint_row.conname LIKE '%disposition%check'`,
+         AND pg_get_constraintdef(constraint_row.oid) LIKE '%disposition%'`,
       [database.schema],
     );
-    await database.pool.query(
-      `ALTER TABLE ${schemaSql}.orchestration_event_targets DROP CONSTRAINT "${dispositionConstraint.rows[0]!.constraint_name}"`,
-    );
+    for (const constraint of dispositionConstraints.rows) {
+      await database.pool.query(
+        `ALTER TABLE ${schemaSql}.orchestration_event_targets DROP CONSTRAINT "${constraint.constraint_name}"`,
+      );
+    }
     for (const [index, marker] of ["private-corrupt-marker", "__proto__", "constructor", "prototype"].entries()) {
       await database.pool.query(`ALTER TABLE ${schemaSql}.orchestration_event_targets DISABLE TRIGGER orchestration_event_targets_immutable`);
       await database.pool.query(`UPDATE ${schemaSql}.orchestration_event_targets SET disposition = $1`, [marker]);
