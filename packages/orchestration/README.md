@@ -19,6 +19,13 @@ exact-scope reconciliation; stale evidence is retained without changing a
 checkpoint. Worker leasing, execution, and reconciliation result application
 are implemented by later D08 slices.
 
+PR checkpoints keep authoritative state and evidence separate from a pending
+opaque reconciliation request. A first opaque PR observation creates an
+explicit `pending` checkpoint with no authoritative base, head, or state; a
+later opaque observation can only replace that request generation. It cannot
+open, close, or otherwise rewrite the authoritative PR fields before exact-PR
+reconciliation confirms them.
+
 A newer comparable observation of the same branch revision advances the
 checkpoint evidence without creating a new generation or retrying terminal
 failed work. Worker completion must therefore validate the job's full key,

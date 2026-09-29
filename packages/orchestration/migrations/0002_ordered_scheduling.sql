@@ -53,6 +53,63 @@ BEGIN
 END;
 $$;
 
+DO $$
+DECLARE constraint_to_replace record;
+BEGIN
+  FOR constraint_to_replace IN
+    SELECT constraint_row.conname
+    FROM pg_catalog.pg_constraint constraint_row
+    WHERE constraint_row.conrelid = 'orchestration_pr_checkpoints'::regclass
+      AND constraint_row.contype = 'c'
+      AND pg_catalog.pg_get_constraintdef(constraint_row.oid) LIKE '%state = ANY%open%updated%closed%merged%'
+  LOOP
+    EXECUTE format('ALTER TABLE orchestration_pr_checkpoints DROP CONSTRAINT %I', constraint_to_replace.conname);
+  END LOOP;
+
+  FOR constraint_to_replace IN
+    SELECT constraint_row.conname
+    FROM pg_catalog.pg_constraint constraint_row
+    WHERE constraint_row.conrelid = 'orchestration_pr_checkpoints'::regclass
+      AND constraint_row.contype = 'c'
+      AND pg_catalog.pg_get_constraintdef(constraint_row.oid) LIKE '%tenant_id <>%base_branch <>%provider <>%'
+  LOOP
+    EXECUTE format('ALTER TABLE orchestration_pr_checkpoints DROP CONSTRAINT %I', constraint_to_replace.conname);
+  END LOOP;
+END;
+$$;
+
+ALTER TABLE orchestration_pr_checkpoints
+  ALTER COLUMN base_branch DROP NOT NULL,
+  ALTER COLUMN base_revision DROP NOT NULL,
+  ALTER COLUMN head_branch DROP NOT NULL,
+  ALTER COLUMN head_revision DROP NOT NULL,
+  ALTER COLUMN provider DROP NOT NULL,
+  ALTER COLUMN provider_reference DROP NOT NULL,
+  ADD COLUMN reconciliation_request jsonb,
+  ADD CONSTRAINT orchestration_pr_checkpoints_authoritative_or_pending CHECK (
+    (
+      state = 'pending'
+      AND base_branch IS NULL AND base_revision IS NULL AND head_branch IS NULL AND head_revision IS NULL
+      AND provider IS NULL AND provider_reference IS NULL AND order_kind IS NULL AND order_value IS NULL
+      AND reconciliation_request IS NOT NULL
+    ) OR (
+      state IN ('open', 'updated', 'closed', 'merged')
+      AND base_branch IS NOT NULL AND base_branch <> '' AND base_revision IS NOT NULL AND base_revision <> ''
+      AND head_branch IS NOT NULL AND head_branch <> '' AND head_revision IS NOT NULL AND head_revision <> ''
+      AND provider IS NOT NULL AND provider <> '' AND provider_reference IS NOT NULL AND provider_reference <> ''
+    )
+  ),
+  ADD CONSTRAINT orchestration_pr_checkpoints_pending_request_object CHECK (
+    reconciliation_request IS NULL OR (
+      jsonb_typeof(reconciliation_request) = 'object'
+      AND reconciliation_request ? 'evidence' AND reconciliation_request ? 'relevantPayload'
+    )
+  ),
+  ADD CONSTRAINT orchestration_pr_checkpoints_nonempty_identity CHECK (
+    tenant_id <> '' AND repository_id <> '' AND service_id <> '' AND pull_request_id <> ''
+    AND (order_value IS NULL OR order_value <> '')
+  );
+
 ALTER TABLE orchestration_jobs
   ALTER COLUMN service_root SET NOT NULL,
   ALTER COLUMN analyzer_adapter_id SET NOT NULL,

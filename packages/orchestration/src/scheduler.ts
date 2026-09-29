@@ -562,9 +562,10 @@ const scheduleBranchReconciliation = async (
 };
 
 type PrRow = {
-  state: string; base_branch: string; base_revision: string; head_branch: string; head_revision: string;
+  state: string; base_branch: string | null; base_revision: string | null; head_branch: string | null; head_revision: string | null;
   provider: unknown; provider_reference: unknown; order_kind: unknown; order_value: unknown;
   checkpoint_version: string; analysis_generation: string; reconciliation_generation: string; current_job_id: unknown;
+  reconciliation_request: unknown; current_job_kind: unknown; current_job_state: unknown;
 };
 
 const schedulePullRequest = async (
@@ -585,8 +586,10 @@ const schedulePullRequest = async (
     `SELECT checkpoint.state,checkpoint.base_branch,checkpoint.base_revision,checkpoint.head_branch,checkpoint.head_revision,
             checkpoint.provider,checkpoint.provider_reference,checkpoint.order_kind,checkpoint.order_value,
             checkpoint.checkpoint_version::text,checkpoint.analysis_generation::text,
-            checkpoint.reconciliation_generation::text,checkpoint.current_job_id
+            checkpoint.reconciliation_generation::text,checkpoint.current_job_id,checkpoint.reconciliation_request,
+            job.kind AS current_job_kind,job.state AS current_job_state
      FROM orchestration_pr_checkpoints checkpoint
+     LEFT JOIN orchestration_jobs job ON job.tenant_id=checkpoint.tenant_id AND job.job_id=checkpoint.current_job_id
      WHERE checkpoint.tenant_id=$1 AND checkpoint.repository_id=$2 AND checkpoint.service_id=$3
        AND checkpoint.pull_request_id=$4 FOR UPDATE OF checkpoint`,
     [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id],
@@ -594,38 +597,52 @@ const schedulePullRequest = async (
   const current = selected.rows[0];
   const relevantPayload = { state: payload.state, base_branch: payload.base_branch, base_revision: payload.base_revision,
     head_branch: payload.head_branch, head_revision: payload.head_revision };
-  const classification = classifyProviderUpdate(current === undefined ? undefined : checkpointEvidence(current), {
-    evidence: event.provider_evidence, relevantPayload,
-  });
+  const nextCheckpoint = { evidence: event.provider_evidence, relevantPayload };
+  const repeatedRequest = current?.reconciliation_request === null || current?.reconciliation_request === undefined
+    ? undefined : classifyProviderUpdate(current.reconciliation_request, nextCheckpoint);
+  let classification = current === undefined || current.state === "pending"
+    ? classifyProviderUpdate(undefined, nextCheckpoint)
+    : classifyProviderUpdate(checkpointEvidence(current), nextCheckpoint);
+  if (repeatedRequest === "exact_replay") classification = "exact_replay";
   if (classification === "conflict") throw new OrchestrationError("EVENT_ORDER_CONFLICT");
   if (classification === "stale") return { ...base, disposition: "ignored_stale", safeReason: "stale" };
-  if (classification === "exact_replay") return { ...base, disposition: "no_work", safeReason: "no_work" };
+  if (classification === "exact_replay") {
+    if (repeatedRequest !== "exact_replay") return { ...base, disposition: "no_work", safeReason: "no_work" };
+    if (current?.current_job_kind === "pr_reconciliation"
+      && (current.current_job_state === "queued" || current.current_job_state === "leased"
+        || current.current_job_state === "retry_wait")
+      && typeof current.current_job_id === "string") {
+      return { ...base, disposition: "reconciliation_required", safeReason: "reconciliation_required",
+        reconciliationId: current.current_job_id };
+    }
+    classification = "incomparable";
+  }
   if (classification === "incomparable") {
-    const checkpointVersion = current === undefined ? "1" : (BigInt(current.checkpoint_version) + 1n).toString();
     const generation = current === undefined ? "1" : (BigInt(current.reconciliation_generation) + 1n).toString();
     const reconciliationId = stageJob(schedulerState, tenantId, event, configuration, {
       kind: "pr_reconciliation", target, pullRequestId: payload.pull_request_id,
       baseRevision: payload.base_revision, targetRevision: payload.head_revision, generation,
     });
     stageSupersede(schedulerState, current?.current_job_id, reconciliationId);
-    await client.query(
-      `INSERT INTO orchestration_pr_checkpoints
-         (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
-          provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-       ON CONFLICT (tenant_id,repository_id,service_id,pull_request_id) DO UPDATE SET
-         state=EXCLUDED.state,base_branch=EXCLUDED.base_branch,base_revision=EXCLUDED.base_revision,
-         head_branch=EXCLUDED.head_branch,head_revision=EXCLUDED.head_revision,provider=EXCLUDED.provider,
-         provider_reference=EXCLUDED.provider_reference,order_kind=EXCLUDED.order_kind,order_value=EXCLUDED.order_value,
-         checkpoint_version=EXCLUDED.checkpoint_version,reconciliation_generation=EXCLUDED.reconciliation_generation,
-         current_job_id=EXCLUDED.current_job_id,
-         updated_at=clock_timestamp()`,
-      [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
-        payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
-        event.provider_evidence.provider, event.provider_evidence.provider_reference,
-        event.provider_evidence.order?.kind ?? null, event.provider_evidence.order?.value ?? null,
-        checkpointVersion, current?.analysis_generation ?? "0", generation, reconciliationId],
-    );
+    if (current === undefined) {
+      await client.query(
+        `INSERT INTO orchestration_pr_checkpoints
+           (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
+            provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,
+            reconciliation_generation,current_job_id,reconciliation_request)
+         VALUES ($1,$2,$3,$4,'pending',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,0,$5,$6,$7)`,
+        [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id,
+          generation, reconciliationId, nextCheckpoint],
+      );
+    } else {
+      await client.query(
+        `UPDATE orchestration_pr_checkpoints
+         SET reconciliation_generation=$5,current_job_id=$6,reconciliation_request=$7,updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND pull_request_id=$4`,
+        [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id,
+          generation, reconciliationId, nextCheckpoint],
+      );
+    }
     return { ...base, disposition: "reconciliation_required", safeReason: "reconciliation_required", reconciliationId };
   }
   const terminal = payload.state === "closed" || payload.state === "merged";
@@ -650,7 +667,8 @@ const schedulePullRequest = async (
          base_branch=EXCLUDED.base_branch,base_revision=EXCLUDED.base_revision,head_branch=EXCLUDED.head_branch,
          head_revision=EXCLUDED.head_revision,provider=EXCLUDED.provider,provider_reference=EXCLUDED.provider_reference,
          order_kind=EXCLUDED.order_kind,order_value=EXCLUDED.order_value,checkpoint_version=EXCLUDED.checkpoint_version,
-         analysis_generation=EXCLUDED.analysis_generation,current_job_id=EXCLUDED.current_job_id,updated_at=clock_timestamp()`,
+         analysis_generation=EXCLUDED.analysis_generation,current_job_id=EXCLUDED.current_job_id,
+         reconciliation_request=NULL,updated_at=clock_timestamp()`,
       [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
         payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
         event.provider_evidence.provider, event.provider_evidence.provider_reference, event.provider_evidence.order?.kind ?? null,
@@ -668,7 +686,8 @@ const schedulePullRequest = async (
        base_branch=EXCLUDED.base_branch,base_revision=EXCLUDED.base_revision,head_branch=EXCLUDED.head_branch,
        head_revision=EXCLUDED.head_revision,provider=EXCLUDED.provider,provider_reference=EXCLUDED.provider_reference,
        order_kind=EXCLUDED.order_kind,order_value=EXCLUDED.order_value,checkpoint_version=EXCLUDED.checkpoint_version,
-       analysis_generation=EXCLUDED.analysis_generation,current_job_id=EXCLUDED.current_job_id,updated_at=clock_timestamp()`,
+       analysis_generation=EXCLUDED.analysis_generation,current_job_id=EXCLUDED.current_job_id,
+       reconciliation_request=NULL,updated_at=clock_timestamp()`,
     [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
       payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
       event.provider_evidence.provider, event.provider_evidence.provider_reference, event.provider_evidence.order?.kind ?? null,

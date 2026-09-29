@@ -342,15 +342,69 @@ test("coalesces an equivalent opaque PR observation without replacing its reconc
     await expect(repository.ingestEvent(context(), opaquePr("opaque-pr-1", "cursor-1", "b".repeat(40))))
       .resolves.toMatchObject({ disposition: "reconciliation_required" });
     await expect(repository.ingestEvent(context(), opaquePr("opaque-pr-2", "cursor-1", "b".repeat(40))))
-      .resolves.toMatchObject({ disposition: "no_work" });
-    const rows = await database.pool.query<{ jobs: string; targets: string; links: string }>(
+      .resolves.toMatchObject({ disposition: "reconciliation_required" });
+    const rows = await database.pool.query<{
+      jobs: string; targets: string; links: string; state: string; base_revision: string | null; request_state: string;
+    }>(
       `SELECT
          (SELECT count(*) FROM ${schemaSql}.orchestration_jobs WHERE kind='pr_reconciliation')::text AS jobs,
          (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets WHERE scope_key='pr:opaque-42')::text AS targets,
          (SELECT count(DISTINCT reconciliation_id) FROM ${schemaSql}.orchestration_event_targets
-          WHERE scope_key='pr:opaque-42')::text AS links`,
+          WHERE scope_key='pr:opaque-42')::text AS links,
+         checkpoint.state,checkpoint.base_revision,
+         checkpoint.reconciliation_request->'relevantPayload'->>'state' AS request_state
+       FROM ${schemaSql}.orchestration_pr_checkpoints checkpoint`,
     );
-    expect(rows.rows).toEqual([{ jobs: "1", targets: "2", links: "1" }]);
+    expect(rows.rows).toEqual([{
+      jobs: "1", targets: "2", links: "1", state: "pending", base_revision: null, request_state: "updated",
+    }]);
+  } finally { await database.cleanup(); }
+});
+
+test.each([
+  { authoritativeState: "closed", opaqueState: "open" },
+  { authoritativeState: "open", opaqueState: "closed" },
+])("preserves authoritative $authoritativeState PR state across opaque $opaqueState", async ({ authoritativeState, opaqueState }) => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    const ordered = envelope("ordered-pr", "pull_request.updated", "1", {
+      pull_request_id: "authority-42", state: authoritativeState, base_branch: "main", base_revision: "a".repeat(40),
+      head_branch: "feature/authority", head_revision: "b".repeat(40),
+    });
+    await repository.ingestEvent(context(), ordered);
+    const opaque = envelope("opaque-after-ordered", "pull_request.updated", "opaque", {
+      pull_request_id: "authority-42", state: opaqueState, base_branch: "main", base_revision: "c".repeat(40),
+      head_branch: "feature/changed", head_revision: "d".repeat(40),
+    });
+    opaque.provider_evidence = {
+      provider: "github", provider_reference: "opaque-later", order: { kind: "cursor", value: "cursor-later" },
+    } as never;
+    await expect(repository.ingestEvent(context(), opaque)).resolves.toMatchObject({
+      disposition: "reconciliation_required",
+    });
+    const rows = await database.pool.query<{
+      state: string; base_revision: string; head_revision: string; provider_reference: string;
+      order_kind: string; order_value: string; checkpoint_version: string; reconciliation_generation: string;
+      request_state: string; request_base_revision: string; request_head_revision: string; current_kind: string;
+    }>(
+      `SELECT checkpoint.state,checkpoint.base_revision,checkpoint.head_revision,checkpoint.provider_reference,
+              checkpoint.order_kind,checkpoint.order_value,checkpoint.checkpoint_version::text,
+              checkpoint.reconciliation_generation::text,
+              checkpoint.reconciliation_request->'relevantPayload'->>'state' AS request_state,
+              checkpoint.reconciliation_request->'relevantPayload'->>'base_revision' AS request_base_revision,
+              checkpoint.reconciliation_request->'relevantPayload'->>'head_revision' AS request_head_revision,
+              job.kind AS current_kind
+       FROM ${schemaSql}.orchestration_pr_checkpoints checkpoint
+       JOIN ${schemaSql}.orchestration_jobs job
+         ON job.tenant_id=checkpoint.tenant_id AND job.job_id=checkpoint.current_job_id
+       WHERE checkpoint.pull_request_id='authority-42'`,
+    );
+    expect(rows.rows).toEqual([{
+      state: authoritativeState, base_revision: "a".repeat(40), head_revision: "b".repeat(40),
+      provider_reference: "delivery-1", order_kind: "sequence", order_value: "1", checkpoint_version: "1",
+      reconciliation_generation: "1", request_state: opaqueState, request_base_revision: "c".repeat(40),
+      request_head_revision: "d".repeat(40), current_kind: "pr_reconciliation",
+    }]);
   } finally { await database.cleanup(); }
 });
 
@@ -376,10 +430,11 @@ test("replaces a leased opaque PR reconciliation when a materially different clo
     await expect(repository.ingestEvent(context(), opaquePr("opaque-close", "cursor-2", "closed")))
       .resolves.toMatchObject({ disposition: "reconciliation_required" });
     const rows = await database.pool.query<{
-      state: string; reconciliation_generation: string; checkpoint_version: string; current_state: string;
-      old_state: string; cancellation_requested: boolean; linked: boolean;
+      state: string; reconciliation_generation: string; checkpoint_version: string; request_state: string;
+      current_state: string; old_state: string; cancellation_requested: boolean; linked: boolean;
     }>(
       `SELECT checkpoint.state,checkpoint.reconciliation_generation::text,checkpoint.checkpoint_version::text,
+              checkpoint.reconciliation_request->'relevantPayload'->>'state' AS request_state,
               current_job.state AS current_state,old_job.state AS old_state,old_job.cancellation_requested,
               old_job.superseding_job_id=current_job.job_id AS linked
        FROM ${schemaSql}.orchestration_pr_checkpoints checkpoint
@@ -390,7 +445,7 @@ test("replaces a leased opaque PR reconciliation when a materially different clo
        WHERE checkpoint.pull_request_id='opaque-close'`,
     );
     expect(rows.rows).toEqual([{
-      state: "closed", reconciliation_generation: "2", checkpoint_version: "2", current_state: "queued",
+      state: "pending", reconciliation_generation: "2", checkpoint_version: "1", request_state: "closed", current_state: "queued",
       old_state: "leased", cancellation_requested: true, linked: true,
     }]);
   } finally { await database.cleanup(); }
