@@ -159,4 +159,5 @@ export const OutboxStatusSchema = Type.Object({
   ]),
   attemptCount: Decimal(), maxAttempts: Decimal(), safeErrorCode: Type.Optional(SafeErrorCodeSchema),
 }, { additionalProperties: false });
+export type OutboxStatus = Static<typeof OutboxStatusSchema>;
 export const parseOutboxStatus = safeParser(OutboxStatusSchema);

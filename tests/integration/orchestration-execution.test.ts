@@ -809,6 +809,17 @@ test("exact branch reconciliation rejects wrong scope and noncanonical provider 
         providerEvidence: { ...observation.providerEvidence,
           order: { kind: "sequence", value: "08" } } }) },
     } as never)).rejects.toMatchObject({ code: "RECONCILIATION_FAILED", retryable: true });
+    const marker = "secret://provider-response";
+    let privacyFailure: unknown;
+    try {
+      await worker.runJob(workerIdentity, claim!.lease, {
+        exactBranchReconciler: { observe: async () => new Proxy({}, {
+          ownKeys: () => { throw new Error(marker); },
+        }) },
+      } as never);
+    } catch (error) { privacyFailure = error; }
+    expect(privacyFailure).toMatchObject({ code: "RECONCILIATION_FAILED" });
+    expect(`${String(privacyFailure)} ${JSON.stringify(privacyFailure)}`).not.toContain(marker);
     const schema = quoteCatalogTestSchema(database.schema);
     const unchanged = await database.pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${schema}.orchestration_branch_checkpoints
@@ -1126,5 +1137,42 @@ test("configuration activation prevents an in-flight old reconciliation from wri
        WHERE job.tenant_id=$1 AND job.job_id=$2`, [tenantId, old!.jobId],
     );
     expect(state.rows).toEqual([{ old_state: "leased", fingerprint: "exec-config-next", branch_rows: "0" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("authorized status reads expose safe event, job, and outbox projections", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const revision = "a".repeat(40);
+    const { result, request } = await preparedAnalysis(revision);
+    const { repository, worker } = await activate(database, result);
+    await repository.ingestEvent(context, baselineEvent(revision));
+    const [claim] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(await worker.runJob(workerIdentity, claim!.lease, {
+      resolver: { resolve: async () => ({ request, changedPaths: [], changedPathsComplete: false }) },
+      analyzer: { analyze: async () => result },
+    })).toMatchObject({ state: "succeeded" });
+    const statusContext = { tenantId, principalId: "viewer", capabilities: ["orchestration.status.read"] };
+    const job = await repository.getJobStatus(statusContext, claim!.jobId);
+    expect(job).toMatchObject({ jobId: claim!.jobId, kind: "baseline_analysis", state: "succeeded",
+      coverageStatus: result.coverage.status });
+    expect(JSON.stringify(job)).not.toContain(revision);
+    const event = await repository.getEventStatus(statusContext, "github-adapter", `baseline-${revision}`);
+    expect(event).toMatchObject({ outcome: "accepted", disposition: "scheduled" });
+    expect(event.eventId).not.toContain(revision);
+    const schema = quoteCatalogTestSchema(database.schema);
+    const outboxRow = await database.pool.query<{ outbox_id: string }>(
+      `SELECT outbox_id FROM ${schema}.orchestration_outbox WHERE tenant_id=$1 ORDER BY outbox_id LIMIT 1`, [tenantId],
+    );
+    const outbox = await repository.getOutboxStatus(statusContext, outboxRow.rows[0]!.outbox_id);
+    expect(outbox).toMatchObject({ outboxId: outboxRow.rows[0]!.outbox_id, state: "pending" });
+    for (const read of [
+      () => repository.getJobStatus({ ...statusContext, tenantId: "other-tenant" }, claim!.jobId),
+      () => repository.getJobStatus(statusContext, "missing-job"),
+      () => repository.getEventStatus({ ...statusContext, capabilities: [] }, "github-adapter", `baseline-${revision}`),
+      () => repository.getOutboxStatus({ ...statusContext, tenantId: "other-tenant" }, outboxRow.rows[0]!.outbox_id),
+    ]) {
+      await expect(read()).rejects.toMatchObject({ code: "JOB_NOT_FOUND_OR_DENIED" });
+    }
   } finally { await database.cleanup(); }
 });

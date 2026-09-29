@@ -67,6 +67,7 @@ export type {
   ControlContext,
   EventStatus,
   JobStatus,
+  OutboxStatus,
   ProviderEvidence,
   WorkerIdentity,
 } from "./schemas.js";

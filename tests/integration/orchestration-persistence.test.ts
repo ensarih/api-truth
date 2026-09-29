@@ -508,13 +508,12 @@ test("contains corrupt public database projections behind safe storage errors", 
     await repository.registerConfiguration(admin(), configuration());
     await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
     const checkpointConstraint = await database.pool.query<{ constraint_name: string }>(
-      `SELECT constraint_row.conname AS constraint_name
-       FROM pg_catalog.pg_constraint constraint_row
-       JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
-       JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
-       WHERE namespace_row.nspname = $1 AND table_row.relname = 'orchestration_active_configurations'
-         AND pg_get_constraintdef(constraint_row.oid) LIKE '%checkpoint_version > 0%'`,
-      [database.schema],
+      `WITH target_constraints AS MATERIALIZED (
+         SELECT oid,conname FROM pg_catalog.pg_constraint WHERE conrelid = $1::regclass
+       )
+       SELECT conname AS constraint_name FROM target_constraints
+       WHERE pg_catalog.pg_get_constraintdef(oid) LIKE '%checkpoint_version > 0%'`,
+      [`${schemaSql}.orchestration_active_configurations`],
     );
     await database.pool.query(
       `ALTER TABLE ${schemaSql}.orchestration_active_configurations DROP CONSTRAINT "${checkpointConstraint.rows[0]!.constraint_name}"`,
@@ -527,13 +526,12 @@ test("contains corrupt public database projections behind safe storage errors", 
     await database.pool.query(`UPDATE ${schemaSql}.orchestration_active_configurations SET checkpoint_version = 1`);
     await repository.ingestEvent(eventContext(), branchEvent());
     const dispositionConstraints = await database.pool.query<{ constraint_name: string }>(
-      `SELECT constraint_row.conname AS constraint_name
-       FROM pg_catalog.pg_constraint constraint_row
-       JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
-       JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
-       WHERE namespace_row.nspname = $1 AND table_row.relname = 'orchestration_event_targets'
-         AND pg_get_constraintdef(constraint_row.oid) LIKE '%disposition%'`,
-      [database.schema],
+      `WITH target_constraints AS MATERIALIZED (
+         SELECT oid,conname FROM pg_catalog.pg_constraint WHERE conrelid = $1::regclass
+       )
+       SELECT conname AS constraint_name FROM target_constraints
+       WHERE pg_catalog.pg_get_constraintdef(oid) LIKE '%disposition%'`,
+      [`${schemaSql}.orchestration_event_targets`],
     );
     for (const constraint of dispositionConstraints.rows) {
       await database.pool.query(

@@ -9,6 +9,7 @@ import { withOrchestrationTransaction, withRestartingOrchestrationTransaction } 
 import { OrchestrationError, orchestrationValidationError } from "./errors.js";
 import { eventSha256, semanticOrchestrationId } from "./hashing.js";
 import { classifyProviderUpdate } from "./ordering.js";
+import { readEventStatus, readJobStatus, readOutboxStatus } from "./status.js";
 import {
   checkpointOrder, discoverActiveTransitionJobs, discoverTransitionClosure, lockTransitionCheckpoints, lockTransitionJobs,
   stageTerminalDependents, transitionAdvisoryLocks, writePlannedCheckpoints, writePlannedJobChange,
@@ -44,6 +45,9 @@ import {
   parseEventReceipt,
   parseProviderEvidence,
   type ActiveConfigurationSummarySchema,
+  type EventStatus,
+  type JobStatus,
+  type OutboxStatus,
   type ProviderEvidence,
 } from "./schemas.js";
 import type { Static } from "@sinclair/typebox";
@@ -109,6 +113,9 @@ export type OrchestrationRepository = Readonly<{
   activateInitialConfiguration(context: unknown, input: unknown): Promise<ConfigurationActivation>;
   activateConfigurationByCas(context: unknown, input: unknown): Promise<ConfigurationActivation>;
   getActiveConfigurationSummary(context: unknown): Promise<Static<typeof ActiveConfigurationSummarySchema>>;
+  getEventStatus(context: unknown, producerId: unknown, eventId: unknown): Promise<EventStatus>;
+  getJobStatus(context: unknown, jobId: unknown): Promise<JobStatus>;
+  getOutboxStatus(context: unknown, outboxId: unknown): Promise<OutboxStatus>;
   getTrustedActiveConfiguration(tenantId: unknown): Promise<TrustedConfiguration>;
   ingestEvent(context: unknown, event: unknown): Promise<EventReceipt>;
   cancelJob(context: unknown, jobId: unknown): Promise<Readonly<{
@@ -493,6 +500,10 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     const context = requireControlCapability(contextInput, "orchestration.status.read");
     return withOrchestrationTransaction(pool, options, async (client) => activeSummary(await readActive(client, context.tenantId)));
   },
+
+  getEventStatus: (context, producerId, eventId) => readEventStatus(pool, options, context, producerId, eventId),
+  getJobStatus: (context, jobId) => readJobStatus(pool, options, context, jobId),
+  getOutboxStatus: (context, outboxId) => readOutboxStatus(pool, options, context, outboxId),
 
   async getTrustedActiveConfiguration(tenantIdInput) {
     if (typeof tenantIdInput !== "string" || tenantIdInput.length === 0) throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
