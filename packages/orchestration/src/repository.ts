@@ -55,6 +55,12 @@ export type EventDisposition =
   | "scheduled" | "ignored_unconfigured_branch" | "ignored_stale"
   | "reconciliation_required" | "deferred_handler" | "no_work";
 
+const EVENT_DISPOSITIONS = Object.freeze([
+  "scheduled", "ignored_unconfigured_branch", "ignored_stale",
+  "reconciliation_required", "deferred_handler", "no_work",
+] as const satisfies readonly EventDisposition[]);
+const EVENT_DISPOSITION_SET = new Set<string>(EVENT_DISPOSITIONS);
+
 export type EventReceipt = Readonly<{
   outcome: "accepted" | "duplicate";
   disposition: EventDisposition | "mixed";
@@ -308,10 +314,21 @@ const outcomesForEvent = (event: EventEnvelope, document: InstallationConfig): T
   ));
 };
 
-const receiptFor = (outcome: "accepted" | "duplicate", dispositions: readonly EventDisposition[]): EventReceipt => {
+const receiptFor = (outcome: "accepted" | "duplicate", dispositions: readonly unknown[]): EventReceipt => {
+  const counts = new Map<EventDisposition, number>();
+  for (const disposition of dispositions) {
+    if (typeof disposition !== "string" || !EVENT_DISPOSITION_SET.has(disposition)) {
+      throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+    }
+    const validDisposition = disposition as EventDisposition;
+    counts.set(validDisposition, (counts.get(validDisposition) ?? 0) + 1);
+  }
   const dispositionCounts: Partial<Record<EventDisposition, number>> = {};
-  for (const disposition of dispositions) dispositionCounts[disposition] = (dispositionCounts[disposition] ?? 0) + 1;
-  const distinct = Object.keys(dispositionCounts) as EventDisposition[];
+  for (const disposition of EVENT_DISPOSITIONS) {
+    const count = counts.get(disposition);
+    if (count !== undefined) dispositionCounts[disposition] = count;
+  }
+  const distinct = EVENT_DISPOSITIONS.filter((disposition) => counts.has(disposition));
   const parsed = parseEventReceipt({
     outcome,
     disposition: distinct.length === 1 ? distinct[0]! : "mixed",

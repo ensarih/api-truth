@@ -313,6 +313,42 @@ test("rejects catalog lookalike constraints before creating any D08 object", asy
   } finally { await database.cleanup(); }
 });
 
+test.each([
+  ["delete action", "ON DELETE CASCADE"],
+  ["deferrability", "ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED"],
+  ["validation state", "ON DELETE RESTRICT NOT VALID"],
+] as const)("rejects an exact-column D06 foreign key with incompatible %s", async (_case, foreignKeySuffix) => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    const foreign = await database.pool.query<{ constraint_name: string }>(
+      `SELECT constraint_row.conname AS constraint_name
+       FROM pg_catalog.pg_constraint constraint_row
+       JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
+       JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+       WHERE namespace_row.nspname = $1 AND table_row.relname = 'catalog_branch_pointers'
+         AND constraint_row.contype = 'f'`,
+      [database.schema],
+    );
+    await database.pool.query(
+      `ALTER TABLE ${schemaSql}.catalog_branch_pointers DROP CONSTRAINT "${foreign.rows[0]!.constraint_name}"`,
+    );
+    await database.pool.query(
+      `ALTER TABLE ${schemaSql}.catalog_branch_pointers ADD FOREIGN KEY
+       (tenant_id, repository_id, service_id, snapshot_id)
+       REFERENCES ${schemaSql}.catalog_snapshots (tenant_id, repository_id, service_id, snapshot_id)
+       ${foreignKeySuffix}`,
+    );
+    await expect(applyOrchestrationMigrations(database.pool, { schema: database.schema }))
+      .rejects.toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+    const result = await database.pool.query<{ ledger: string | null; configurations: string | null }>(
+      "SELECT to_regclass($1)::text AS ledger, to_regclass($2)::text AS configurations",
+      [`${database.schema}.orchestration_schema_migrations`, `${database.schema}.orchestration_configurations`],
+    );
+    expect(result.rows).toEqual([{ ledger: null, configurations: null }]);
+  } finally { await database.cleanup(); }
+});
+
 test("enforces tenant-scoped result/outbox keys, bounded outcomes, and immutable dependencies", async () => {
   const database = await createCatalogTestDatabase();
   const schemaSql = quoteCatalogTestSchema(database.schema);
@@ -408,14 +444,16 @@ test("contains corrupt public database projections behind safe storage errors", 
     await database.pool.query(
       `ALTER TABLE ${schemaSql}.orchestration_event_targets DROP CONSTRAINT "${dispositionConstraint.rows[0]!.constraint_name}"`,
     );
-    await database.pool.query(`ALTER TABLE ${schemaSql}.orchestration_event_targets DISABLE TRIGGER orchestration_event_targets_immutable`);
-    await database.pool.query(`UPDATE ${schemaSql}.orchestration_event_targets SET disposition = 'private-corrupt-marker'`);
-    await database.pool.query(`ALTER TABLE ${schemaSql}.orchestration_event_targets ENABLE TRIGGER orchestration_event_targets_immutable`);
-    const receiptFailure = await repository.ingestEvent(eventContext(), {
-      ...branchEvent(), received_at: "2026-01-02T00:00:00.000Z",
-    }).catch((error: unknown) => error);
-    expect(receiptFailure).toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
-    expect(JSON.stringify(receiptFailure)).not.toContain("private-corrupt-marker");
+    for (const [index, marker] of ["private-corrupt-marker", "__proto__", "constructor", "prototype"].entries()) {
+      await database.pool.query(`ALTER TABLE ${schemaSql}.orchestration_event_targets DISABLE TRIGGER orchestration_event_targets_immutable`);
+      await database.pool.query(`UPDATE ${schemaSql}.orchestration_event_targets SET disposition = $1`, [marker]);
+      await database.pool.query(`ALTER TABLE ${schemaSql}.orchestration_event_targets ENABLE TRIGGER orchestration_event_targets_immutable`);
+      const receiptFailure = await repository.ingestEvent(eventContext(), {
+        ...branchEvent(), received_at: `2026-01-02T00:00:0${index}.000Z`,
+      }).catch((error: unknown) => error);
+      expect(receiptFailure).toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+      expect(JSON.stringify(receiptFailure)).not.toContain(marker);
+    }
     const deliveries = await database.pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_event_deliveries`,
     );

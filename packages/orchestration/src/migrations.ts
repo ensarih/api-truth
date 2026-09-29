@@ -46,7 +46,14 @@ const verifyCatalogPrerequisite = async (pool: Pool, schema: string): Promise<vo
       table_name: string;
       columns: string[];
       referenced_table: string | null;
+      referenced_schema: string | null;
       referenced_columns: string[] | null;
+      delete_action: string;
+      update_action: string;
+      match_type: string;
+      validated: boolean;
+      deferrable: boolean;
+      initially_deferred: boolean;
     }>(
       `SELECT constraint_row.conname AS constraint_name,
               constraint_row.contype::text AS constraint_type,
@@ -59,17 +66,25 @@ const verifyCatalogPrerequisite = async (pool: Pool, schema: string): Promise<vo
                 ORDER BY key_column.position
               ) AS columns,
               referenced_table.relname AS referenced_table,
+              referenced_namespace.nspname AS referenced_schema,
               CASE WHEN constraint_row.contype = 'f' THEN ARRAY(
                 SELECT attribute.attname::text
                 FROM unnest(constraint_row.confkey) WITH ORDINALITY AS key_column(attribute_number, position)
                 JOIN pg_catalog.pg_attribute attribute
                   ON attribute.attrelid = constraint_row.confrelid AND attribute.attnum = key_column.attribute_number
                 ORDER BY key_column.position
-              ) ELSE NULL END AS referenced_columns
+              ) ELSE NULL END AS referenced_columns,
+              constraint_row.confdeltype::text AS delete_action,
+              constraint_row.confupdtype::text AS update_action,
+              constraint_row.confmatchtype::text AS match_type,
+              constraint_row.convalidated AS validated,
+              constraint_row.condeferrable AS deferrable,
+              constraint_row.condeferred AS initially_deferred
        FROM pg_catalog.pg_constraint constraint_row
        JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
        JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
        LEFT JOIN pg_catalog.pg_class referenced_table ON referenced_table.oid = constraint_row.confrelid
+       LEFT JOIN pg_catalog.pg_namespace referenced_namespace ON referenced_namespace.oid = referenced_table.relnamespace
        WHERE namespace_row.nspname = $1
          AND table_row.relname IN ('catalog_snapshots', 'catalog_branch_pointers')
          AND constraint_row.contype IN ('p', 'u', 'f')`,
@@ -81,20 +96,30 @@ const verifyCatalogPrerequisite = async (pool: Pool, schema: string): Promise<vo
       columns: readonly string[],
       referencedTable?: string,
       referencedColumns?: readonly string[],
+      foreignKeyOptions?: Readonly<{ deleteAction: string; updateAction: string; matchType: string }>,
     ): boolean => constraints.rows.some((candidate) =>
       candidate.table_name === tableName
       && candidate.constraint_type === type
       && candidate.constraint_name.startsWith(`${tableName}_`)
+      && candidate.validated === true
+      && candidate.deferrable === false
+      && candidate.initially_deferred === false
       && candidate.columns.join("\u0000") === columns.join("\u0000")
-      && (referencedTable === undefined || candidate.referenced_table === referencedTable)
+      && (referencedTable === undefined
+        || candidate.referenced_table === referencedTable && candidate.referenced_schema === schema)
       && (referencedColumns === undefined
-        || candidate.referenced_columns?.join("\u0000") === referencedColumns.join("\u0000")));
+        || candidate.referenced_columns?.join("\u0000") === referencedColumns.join("\u0000"))
+      && (foreignKeyOptions === undefined
+        || candidate.delete_action === foreignKeyOptions.deleteAction
+          && candidate.update_action === foreignKeyOptions.updateAction
+          && candidate.match_type === foreignKeyOptions.matchType));
     if (!exactConstraint("catalog_snapshots", "p", ["tenant_id", "snapshot_id"])
       || !exactConstraint("catalog_snapshots", "u", ["tenant_id", "repository_id", "service_id", "snapshot_id"])
       || !exactConstraint("catalog_branch_pointers", "p", ["tenant_id", "repository_id", "service_id", "branch"])
       || !exactConstraint(
         "catalog_branch_pointers", "f", ["tenant_id", "repository_id", "service_id", "snapshot_id"],
         "catalog_snapshots", ["tenant_id", "repository_id", "service_id", "snapshot_id"],
+        { deleteAction: "r", updateAction: "a", matchType: "s" },
       )) {
       throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
     }
