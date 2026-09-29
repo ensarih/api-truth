@@ -1,9 +1,9 @@
 # API Truth — Implementation Plan
 
-**Status:** development; executable IR, baseline TypeScript analysis, PostgreSQL catalog core, and dependency-aware update/difference core are implemented.
-**Updated:** 2026-09-25
-**Working name:** API Truth (`api-truth`), pending public naming checks.  
-**License:** Apache-2.0 proposed, pending selection before publication.
+**Status:** development; D01–D07 complete and D08 slices 0–5 implemented.
+**Updated:** 2026-09-29
+**Project name:** API Truth (`api-truth`).
+**License:** Apache-2.0; see [LICENSE](LICENSE).
 
 This replaces the initial proposal with the agreed code-first, continuously updated, environment-aware product. See the [specification](docs/SPECIFICATION.md), [architecture](docs/ARCHITECTURE.md), and [phased roadmap](docs/ROADMAP.md).
 
@@ -24,7 +24,7 @@ Create missing documentation from code, enrich it with deployed URLs and safe ex
 7. Deterministic extraction and exact retrieval work without an LLM. Models add semantics and interpret intent.
 8. Observations, declarations, inferences, and owner assertions remain distinguishable; unknowns and contradictions stay visible.
 9. Confluence contributes context and evidenced discrepancies through read-only integration.
-10. Open-source publication is intended. This planning task does not create or publish a GitHub repository.
+10. The project is public at [ensarih/api-truth](https://github.com/ensarih/api-truth). Public fixtures remain synthetic.
 11. Functional development follows TDD, with a reproducible local test environment established before implementing product behavior.
 12. OpenAI, Gemini, and Claude APIs are the initial semantic-understanding providers. Software tests use deterministic fixtures and ordinary assertions; models do not execute or grade tests.
 
@@ -73,6 +73,10 @@ Pin runtime/library versions and support ranges when creating the code skeleton.
 
 ## 6. First development backlog
 
+The maintained [development backlog](docs/BACKLOG.md) records current status,
+remaining slices, dependencies, and acceptance evidence. This table is the
+original task outline.
+
 Task status is shown inline. Split remaining work into smaller reviewable pull requests where needed.
 
 | ID | Task | Completion evidence |
@@ -84,7 +88,7 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 | D05 | **Complete:** baseline read-only TypeScript/Express extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
 | D06 | **Complete:** immutable catalog snapshots, current access scopes/grants, and atomic selected-branch pointers | Real PostgreSQL round-trip; unauthorized and revoked reads denied; provider ordering/CAS verified |
 | D07 | **Complete:** add dependency-aware updates and structured differences | Shared changes reach every affected API; safe full-service fallback and deterministic differences demonstrated |
-| D08 | Add events, durable jobs, deduplication, and reconciliation | Duplicate, stale, missed-event cases pass |
+| D08 | **In progress (slices 0–5 of 0–7 complete):** add events, durable jobs, deduplication, and reconciliation | Duplicate, stale, missed-event cases pass; Slice 6 reconciliation and Slice 7 release gates remain |
 | D09 | Add deployment/configuration and environment resolution | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
 | D10 | Build OpenAPI compiler and publication manifests | Valid exports, faithful route-variant aggregation/scoping, strict rejection of representation gaps, recovery |
 | D11 | Build query layer, minimal portal, initial MCP tools | Same pinned contract/environment across surfaces |
@@ -206,4 +210,4 @@ Provider-neutral interfaces must remain usable from enterprise CI/CD systems ind
 
 ## 11. Next action
 
-Begin [Phase 0](docs/ROADMAP.md#phase-0--development-preparation): record provisional decisions, create synthetic fixtures, and define executable data contracts. Then build Phase 1 with continuous documentation and environment tracking included. Feature implementation starts in the next development task; this deliverable is the specification and plan.
+Complete [D08-S6](docs/BACKLOG.md#now--finish-event-orchestration): isolated PR previews and exact reconciliation, followed by D08-S7 validation and documentation. Continue through the Phase 1 gates in the maintained backlog.

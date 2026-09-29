@@ -35,13 +35,14 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development is underway. The repository contains the product plans, reviewed synthetic TypeScript/Java and lifecycle fixtures, executable and semantically validated IR contracts, a baseline read-only TypeScript/Express analyzer, a pinned offline TypeScript/Vitest workspace, an isolated PostgreSQL integration harness, and the D06 catalog package for immutable snapshots, current access policy, and explicitly selected branch pointers. Java analysis and the later event, environment, publication, query, portal, and MCP layers are not implemented yet.
+Development is underway. D01–D07 are complete. D08 has implemented event persistence, ordered scheduling, durable workers, and guarded baseline/branch execution; PR preview and reconciliation execution remain. The TypeScript/Express analyzer covers a published bounded subset. Environment resolution, OpenAPI publication, the portal, and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
 
 Start with:
 
 - [Product specification](docs/SPECIFICATION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Project plan](PROJECT%20PLAN.md)
+- [Maintained development backlog](docs/BACKLOG.md)
 - [Phased roadmap](docs/ROADMAP.md)
 - [Testing and local validation](docs/TESTING.md)
 - [TypeScript/Express analyzer and support matrix](analyzers/typescript/README.md)
@@ -63,4 +64,4 @@ The current local workflow can extract the synthetic baseline and round-trip it 
 
 ## License
 
-Apache-2.0 is the planned license. A `LICENSE` file will be added before the first public release.
+This repository is licensed under [Apache-2.0](LICENSE).
