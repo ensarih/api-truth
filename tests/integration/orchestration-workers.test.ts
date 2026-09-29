@@ -1,9 +1,12 @@
 import { expect, test } from "vitest";
+import type { Pool, PoolClient } from "pg";
 
 import { applyOrchestrationMigrations, createOrchestrationRepository, createOrchestrationWorker } from "../../packages/orchestration/src/index.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 import { acquireAdvisoryLocks, capacityGlobalLock, capacityRepositoryLock, capacityServiceLock,
   configurationLock } from "../../packages/orchestration/src/locking.js";
+import { discoverTransitionClosure, propagateAndNotifyTerminalDependencies,
+  transitionAdvisoryLocks } from "../../packages/orchestration/src/worker.js";
 import { setOrchestrationSearchPath } from "../../packages/orchestration/src/database.js";
 
 const config = { fingerprint: "workers-config", document: {
@@ -27,6 +30,22 @@ const event = (id: string, sequence: string) => ({
 });
 const jobWorker = (workerId: string) => ({ workerId, instanceId: "instance-1", capabilities: ["jobs.execute"] });
 const outboxWorker = { workerId: "delivery", instanceId: "instance-1", capabilities: ["outbox.deliver"] };
+
+const recordingPool = (pool: Pool, statements: Array<{ sql: string; values: unknown[] }>): Pool => ({
+  connect: async () => {
+    const client = await pool.connect();
+    return new Proxy(client, {
+      get(target, property) {
+        if (property === "query") return (sql: unknown, values?: unknown[]) => {
+          if (typeof sql === "string") statements.push({ sql, values: values ?? [] });
+          return target.query(sql as string, values);
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PoolClient;
+  },
+}) as Pool;
 
 const setup = async (configInput = config) => {
   const database = await createCatalogTestDatabase();
@@ -98,6 +117,118 @@ test("a saturated service does not block another service in the same repository"
     expect(first?.jobId).toBeDefined();
     expect(second?.jobId).toBeDefined();
     expect(second?.jobId).not.toBe(first?.jobId);
+  } finally { await database.cleanup(); }
+});
+
+test("a locked dependent skips only its own claim root and leaves another service claimable", async () => {
+  const expanded = structuredClone(config);
+  expanded.document.repositories[0]!.services.push({
+    ...structuredClone(expanded.document.repositories[0]!.services[0]!), service_id: "payments", root: "services/payments",
+  });
+  const { database, repository, worker, schemaSql } = await setup(expanded);
+  const barrier = await database.pool.connect();
+  let barrierOpen = false;
+  try {
+    const context = { ...eventContext, allowedEventTypes: ["branch.updated", "pull_request.updated", "repository.baseline_requested"],
+      allowedServices: ["orders", "payments"] };
+    await repository.ingestEvent(context, {
+      ...event("baseline-1", "1"), event_type: "repository.baseline_requested",
+      payload: { immutable_revision: "a".repeat(40), service_ids: ["orders"] },
+    });
+    await repository.ingestEvent(context, {
+      ...event("pr-1", "2"), event_type: "pull_request.updated",
+      payload: { pull_request_id: "42", state: "open", base_branch: "main", base_revision: "a".repeat(40),
+        head_branch: "feature/test", head_revision: "b".repeat(40) },
+    });
+    const payment = event("payments-1", "3");
+    payment.subjects.service_ids = ["payments"];
+    await repository.ingestEvent(context, payment);
+    const preview = await database.pool.query<{ job_id: string }>(
+      `SELECT job_id FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND kind='pr_preview_analysis'`,
+    );
+    await barrier.query("BEGIN");
+    barrierOpen = true;
+    await barrier.query(`SELECT 1 FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND job_id=$1 FOR UPDATE`,
+      [preview.rows[0]!.job_id]);
+    const claims = await worker.claimJobs(jobWorker("worker-a"), { limit: 2 });
+    expect(claims).toHaveLength(1);
+    const selected = await database.pool.query<{ service_id: string }>(
+      `SELECT service_id FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND job_id=$1`,
+      [claims[0]!.jobId],
+    );
+    expect(selected.rows[0]?.service_id).toBe("payments");
+  } finally {
+    if (barrierOpen) await barrier.query("ROLLBACK");
+    barrier.release();
+    await database.cleanup();
+  }
+});
+
+test("mixed claim batches write checkpoints before jobs and jobs by primary key", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    await repository.ingestEvent({ ...eventContext, allowedEventTypes: ["pull_request.updated"] }, {
+      ...event("trace-pr", "1"), event_type: "pull_request.updated",
+      payload: { pull_request_id: "42", state: "open", base_branch: "main", base_revision: "a".repeat(40),
+        head_branch: "feature/test", head_revision: "b".repeat(40) },
+    });
+    await repository.ingestEvent(eventContext, event("trace-branch", "2"));
+    await database.pool.query(
+      `UPDATE ${schemaSql}.orchestration_jobs SET state='succeeded',completed_at=clock_timestamp()
+       WHERE tenant_id='tenant-a' AND kind='baseline_analysis'`,
+    );
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const traced = createOrchestrationWorker(recordingPool(database.pool, statements), { schema: database.schema });
+    await traced.putConcurrencyPolicy(admin, { globalLimit: 4, repositoryLimit: 4, serviceLimit: 2 });
+    statements.length = 0;
+    expect(await traced.claimJobs(jobWorker("trace-worker"), { limit: 2 })).toHaveLength(2);
+    const mutations = statements.filter(({ sql }) => /^\s*UPDATE orchestration_(branch_checkpoints|pr_checkpoints|jobs)\b/.test(sql));
+    const branch = mutations.findIndex(({ sql }) => sql.includes("UPDATE orchestration_branch_checkpoints"));
+    const pr = mutations.findIndex(({ sql }) => sql.includes("UPDATE orchestration_pr_checkpoints"));
+    const firstJob = mutations.findIndex(({ sql }) => sql.includes("UPDATE orchestration_jobs"));
+    expect(branch).toBeGreaterThanOrEqual(0);
+    expect(pr).toBeGreaterThan(branch);
+    expect(firstJob).toBeGreaterThan(pr);
+    const jobIds = mutations.filter(({ sql }) => sql.includes("UPDATE orchestration_jobs"))
+      .map(({ values }) => String(values[1]));
+    expect(jobIds).toEqual([...jobIds].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))));
+    const live = await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND state='leased'`,
+    );
+    expect(live.rows[0]?.count).toBe("2");
+  } finally { await database.cleanup(); }
+});
+
+test("scheduler touches old and new jobs by canonical ID when replacement IDs reverse", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    const traced = createOrchestrationRepository(recordingPool(database.pool, statements), { schema: database.schema });
+    await repository.ingestEvent(eventContext, event("reverse-1", "1"));
+    let reversed = false;
+    for (let sequence = 2; sequence <= 16 && !reversed; sequence += 1) {
+      const before = await database.pool.query<{ current_job_id: string }>(
+        `SELECT current_job_id FROM ${schemaSql}.orchestration_branch_checkpoints
+         WHERE tenant_id='tenant-a' AND repository_id='commerce' AND service_id='orders' AND branch='main'`,
+      );
+      const oldId = before.rows[0]!.current_job_id;
+      statements.length = 0;
+      await traced.ingestEvent(eventContext, event(`reverse-${sequence}`, String(sequence)));
+      const after = await database.pool.query<{ current_job_id: string }>(
+        `SELECT current_job_id FROM ${schemaSql}.orchestration_branch_checkpoints
+         WHERE tenant_id='tenant-a' AND repository_id='commerce' AND service_id='orders' AND branch='main'`,
+      );
+      const newId = after.rows[0]!.current_job_id;
+      if (Buffer.compare(Buffer.from(newId), Buffer.from(oldId)) >= 0) continue;
+      reversed = true;
+      const firstTouches = statements.filter(({ sql }) =>
+        /^\s*(?:SELECT 1 FROM orchestration_jobs .* FOR UPDATE|INSERT INTO orchestration_jobs)\b/s.test(sql))
+        .map(({ values }) => String(values[1]));
+      expect(firstTouches).toContain(newId);
+      expect(firstTouches).toContain(oldId);
+      expect(firstTouches.indexOf(newId)).toBeLessThan(firstTouches.indexOf(oldId));
+    }
+    expect(reversed).toBe(true);
   } finally { await database.cleanup(); }
 });
 
@@ -173,6 +304,76 @@ test("terminal baseline failure propagates once to blocked PR preview without an
     expect(notifications.rows[0]?.count).toBe("1");
   } finally { await database.cleanup(); }
 });
+
+test("more than 2048 active descendants remain claimable and propagate once", async () => {
+  const { database, repository, worker, schemaSql } = await setup();
+  try {
+    await repository.ingestEvent({ ...eventContext, allowedEventTypes: ["repository.baseline_requested"] }, {
+      ...event("baseline-large", "1"), event_type: "repository.baseline_requested",
+      payload: { immutable_revision: "a".repeat(40), service_ids: ["orders"] },
+    });
+    const root = await database.pool.query<{ job_id: string }>(
+      `SELECT job_id FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND kind='baseline_analysis'`,
+    );
+    const rootId = root.rows[0]!.job_id;
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_jobs
+         (tenant_id,job_id,dedupe_key,kind,repository_id,service_id,target_revision,service_root,
+          analyzer_adapter_id,analyzer_adapter_version,exchange_version,ir_version,identity_version,
+          config_version,config_fingerprint,config_document_sha256,subject_generation,semantic_identity,
+          state,max_attempts,available_at)
+       SELECT source.tenant_id,'fanout-'||entry.number,
+              'sha256:'||lpad(to_hex(entry.number),64,'0'),source.kind,source.repository_id,
+              source.service_id,source.target_revision,source.service_root,source.analyzer_adapter_id,
+              source.analyzer_adapter_version,source.exchange_version,source.ir_version,source.identity_version,
+              source.config_version,source.config_fingerprint,source.config_document_sha256,1,
+              jsonb_build_object('fanout',entry.number),'queued',5,clock_timestamp()+interval '1 hour'
+       FROM ${schemaSql}.orchestration_jobs source CROSS JOIN generate_series(1,2050) AS entry(number)
+       WHERE source.tenant_id='tenant-a' AND source.job_id=$1`, [rootId],
+    );
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_job_dependencies (tenant_id,job_id,prerequisite_job_id)
+       SELECT tenant_id,job_id,$1 FROM ${schemaSql}.orchestration_jobs
+       WHERE tenant_id='tenant-a' AND job_id LIKE 'fanout-%'`, [rootId],
+    );
+    await database.pool.query(
+      `UPDATE ${schemaSql}.orchestration_jobs SET max_attempts=1
+       WHERE tenant_id='tenant-a' AND job_id=$1`, [rootId],
+    );
+    await repository.ingestEvent(eventContext, event("branch-after-backlog", "2"));
+    const [claim] = await worker.claimJobs(jobWorker("worker-a"), { limit: 1 });
+    expect(claim?.jobId).toBe(rootId);
+    expect(await worker.failJob(jobWorker("worker-a"), claim!.lease, "private failure"))
+      .toMatchObject({ state: "failed" });
+    const result = await database.pool.query<{ failed: string; notifications: string }>(
+      `SELECT
+         (SELECT count(*)::text FROM ${schemaSql}.orchestration_jobs
+           WHERE tenant_id='tenant-a' AND job_id LIKE 'fanout-%' AND state='failed'
+             AND attempt_count=0 AND safe_last_error_code='JOB_DEPENDENCY_FAILED') AS failed,
+         (SELECT count(*)::text FROM ${schemaSql}.orchestration_outbox
+           WHERE tenant_id='tenant-a' AND job_id LIKE 'fanout-%' AND payload->>'state'='failed') AS notifications`,
+    );
+    expect(result.rows[0]).toEqual({ failed: "2050", notifications: "2050" });
+    const replay = await database.pool.connect();
+    try {
+      await replay.query("BEGIN");
+      await setOrchestrationSearchPath(replay, database.schema);
+      const closure = await discoverTransitionClosure(replay, [{ tenant_id: "tenant-a", job_id: rootId }]);
+      await acquireAdvisoryLocks(replay, transitionAdvisoryLocks(closure));
+      await propagateAndNotifyTerminalDependencies(replay, "tenant-a", [rootId]);
+      await replay.query("COMMIT");
+    } catch (error) {
+      await replay.query("ROLLBACK");
+      throw error;
+    } finally { replay.release(); }
+    const replayCount = await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_outbox
+       WHERE tenant_id='tenant-a' AND job_id LIKE 'fanout-%' AND payload->>'state'='failed'`,
+    );
+    expect(replayCount.rows[0]?.count).toBe("2050");
+    expect(await worker.claimJobs(jobWorker("worker-b"), { limit: 1 })).toHaveLength(1);
+  } finally { await database.cleanup(); }
+}, 60_000);
 
 test("explicit cancellation propagates through a dependent chain in the same transaction", async () => {
   const { database, repository, schemaSql } = await setup();

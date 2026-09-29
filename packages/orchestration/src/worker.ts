@@ -16,6 +16,7 @@ import { computeRetryDelayMs } from "./state.js";
 import type { WorkerIdentity } from "./schemas.js";
 
 const CANDIDATE_LIMIT = 128;
+const GRAPH_PAGE_SIZE = 256;
 const MAX_CLAIM_BATCH = 32;
 const LEASE_DURATION_MS = 30_000;
 const RETRY_BASE_MS = 1_000;
@@ -26,6 +27,9 @@ type JobRow = {
   tenant_id: string; job_id: string; kind: string; repository_id: string; service_id: string;
   config_fingerprint: string; branch: string | null; pull_request_id: string | null;
   semantic_identity: unknown;
+  service_root: string; target_revision: string | null; analyzer_adapter_id: string;
+  analyzer_adapter_version: string; exchange_version: string; ir_version: string;
+  identity_version: string; config_version: string;
   state: string; attempt_count: string; max_attempts: string; available_at: Date; created_at: Date;
   lease_worker_id: string | null; lease_instance_id: string | null; lease_token: string | null;
   lease_expires_at: Date | null; cancellation_requested: boolean; superseding_job_id: string | null;
@@ -176,12 +180,16 @@ export const lockTransitionJobs = async (client: PoolClient, jobs: readonly Pick
   for (const job of jobs) byTenant.set(job.tenant_id, [...(byTenant.get(job.tenant_id) ?? []), job.job_id]);
   const locked: JobRow[] = [];
   for (const tenantId of [...byTenant.keys()].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))) {
-    const result = await client.query<JobRow>(
-      `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=ANY($2::text[])
-       ORDER BY job_id COLLATE "C" FOR UPDATE${skipLocked ? " SKIP LOCKED" : ""}`,
-      [tenantId, byTenant.get(tenantId)],
-    );
-    locked.push(...result.rows);
+    const ids = [...new Set(byTenant.get(tenantId)!)]
+      .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+    for (let start = 0; start < ids.length; start += GRAPH_PAGE_SIZE) {
+      const result = await client.query<JobRow>(
+        `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=ANY($2::text[])
+         ORDER BY job_id COLLATE "C" FOR UPDATE${skipLocked ? " SKIP LOCKED" : ""}`,
+        [tenantId, ids.slice(start, start + GRAPH_PAGE_SIZE)],
+      );
+      locked.push(...result.rows);
+    }
   }
   return locked;
 };
@@ -269,16 +277,130 @@ const updateCheckpointState = async (client: PoolClient, job: JobRow, state: str
   }
 };
 
-const finishJob = async (client: PoolClient, job: JobRow, state: "failed" | "cancelled" | "superseded",
-  code: string | undefined, notifications: StateNotification[]): Promise<void> => {
-  await updateCheckpointState(client, job, state, code);
-  await client.query(
-    `UPDATE orchestration_jobs SET state=$3,lease_worker_id=NULL,lease_instance_id=NULL,lease_token=NULL,
-       lease_expires_at=NULL,safe_last_error_code=$4,completed_at=clock_timestamp(),updated_at=clock_timestamp(),
-       row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
-    [job.tenant_id, job.job_id, state, code ?? null],
-  );
-  notifications.push({ job, state, ...(code === undefined ? {} : { reason: code }) });
+type PlannedJobChange =
+  | { kind: "claim"; job: JobRow; token: string; worker: WorkerIdentity; queueIndex: number }
+  | { kind: "retry"; job: JobRow; delay: number; code?: string | undefined }
+  | { kind: "terminal"; job: JobRow; state: "failed" | "cancelled" | "superseded"; code?: string | undefined }
+  | { kind: "request_cancel"; job: JobRow };
+
+const jobKey = (job: Pick<JobRow, "tenant_id" | "job_id">): string => `${job.tenant_id}\u0000${job.job_id}`;
+
+const checkpointOrder = (job: JobRow): { rank: number; key: string } => {
+  const base = [job.tenant_id, job.repository_id, job.service_id];
+  if (job.kind === "branch_analysis") return { rank: 4, key: [...base, job.branch ?? ""].join("\u0000") };
+  if (job.kind === "pr_preview_analysis" || job.kind === "pr_reconciliation") {
+    return { rank: 5, key: [...base, job.pull_request_id ?? ""].join("\u0000") };
+  }
+  if (job.kind === "branch_reconciliation") return { rank: 6, key: [...base, job.branch ?? ""].join("\u0000") };
+  return { rank: 7, key: [...base, job.service_root, job.target_revision ?? "", job.analyzer_adapter_id,
+    job.analyzer_adapter_version, job.exchange_version, job.ir_version, job.identity_version,
+    job.config_version, job.config_fingerprint].join("\u0000") };
+};
+
+const applyPlannedJobChanges = async (client: PoolClient, changes: readonly PlannedJobChange[]): Promise<{
+  claimed: LeasedJob[]; notifications: StateNotification[];
+}> => {
+  const checkpointChanges = changes.filter((change) => change.kind !== "request_cancel")
+    .sort((left, right) => {
+      const a = checkpointOrder(left.job);
+      const b = checkpointOrder(right.job);
+      return a.rank - b.rank || Buffer.compare(Buffer.from(a.key), Buffer.from(b.key));
+    });
+  for (const change of checkpointChanges) {
+    await updateCheckpointState(client, change.job,
+      change.kind === "terminal" ? change.state : change.kind === "claim" ? "leased" : "retry_wait",
+      change.kind === "terminal" ? change.code : undefined);
+  }
+  const notifications: StateNotification[] = [];
+  const claimed: Array<{ queueIndex: number; value: LeasedJob }> = [];
+  for (const change of [...changes].sort((left, right) =>
+    Buffer.compare(Buffer.from(jobKey(left.job)), Buffer.from(jobKey(right.job))))) {
+    const job = change.job;
+    if (change.kind === "terminal") {
+      await client.query(
+        `UPDATE orchestration_jobs SET state=$3,lease_worker_id=NULL,lease_instance_id=NULL,lease_token=NULL,
+           lease_expires_at=NULL,safe_last_error_code=$4,completed_at=clock_timestamp(),updated_at=clock_timestamp(),
+           row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
+        [job.tenant_id, job.job_id, change.state, change.code ?? null],
+      );
+      notifications.push({ job, state: change.state, ...(change.code === undefined ? {} : { reason: change.code }) });
+    } else if (change.kind === "retry") {
+      await client.query(
+        `UPDATE orchestration_jobs SET state='retry_wait',lease_worker_id=NULL,lease_instance_id=NULL,
+           lease_token=NULL,lease_expires_at=NULL,safe_last_error_code=$3,
+           available_at=clock_timestamp()+($4::bigint * interval '1 millisecond'),
+           updated_at=clock_timestamp(),row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
+        [job.tenant_id, job.job_id, change.code ?? null, change.delay],
+      );
+      notifications.push({ job, state: "retry_wait", reason: `attempt:${job.attempt_count}` });
+    } else if (change.kind === "request_cancel") {
+      await client.query(
+        `UPDATE orchestration_jobs SET cancellation_requested=true,updated_at=clock_timestamp(),row_version=row_version+1
+         WHERE tenant_id=$1 AND job_id=$2 AND cancellation_requested=false`, [job.tenant_id, job.job_id],
+      );
+    } else {
+      const updated = await client.query<{ lease_expires_at: Date }>(
+        `UPDATE orchestration_jobs SET state='leased',attempt_count=attempt_count+1,
+           lease_worker_id=$3,lease_instance_id=$4,lease_token=$5,safe_last_error_code=NULL,
+           lease_expires_at=clock_timestamp()+($6::bigint * interval '1 millisecond'),
+           started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp(),row_version=row_version+1
+         WHERE tenant_id=$1 AND job_id=$2 RETURNING lease_expires_at`,
+        [job.tenant_id, job.job_id, change.worker.workerId, change.worker.instanceId,
+          change.token, LEASE_DURATION_MS],
+      );
+      claimed.push({ queueIndex: change.queueIndex, value: detachedFrozen({
+        tenantId: job.tenant_id, jobId: job.job_id, kind: job.kind,
+        attemptCount: (BigInt(job.attempt_count) + 1n).toString(), maxAttempts: job.max_attempts,
+        leaseExpiresAt: updated.rows[0]!.lease_expires_at.toISOString(),
+        lease: { tenantId: job.tenant_id, jobId: job.job_id, leaseToken: change.token },
+      }) });
+    }
+  }
+  return { claimed: claimed.sort((a, b) => a.queueIndex - b.queueIndex).map((item) => item.value), notifications };
+};
+
+const planTerminalDependents = async (client: PoolClient, tenantId: string, roots: readonly string[],
+  locked: readonly JobRow[], changes: Map<string, PlannedJobChange>): Promise<void> => {
+  if (roots.length === 0) return;
+  const children = new Map<string, string[]>();
+  const ids = locked.filter((job) => job.tenant_id === tenantId).map((job) => job.job_id);
+  for (let start = 0; start < ids.length; start += GRAPH_PAGE_SIZE) {
+    let offset = 0;
+    while (true) {
+      const edges = await client.query<{ job_id: string; prerequisite_job_id: string }>(
+        `SELECT job_id,prerequisite_job_id FROM orchestration_job_dependencies
+         WHERE tenant_id=$1 AND job_id=ANY($2::text[])
+         ORDER BY prerequisite_job_id COLLATE "C",job_id COLLATE "C" LIMIT $3 OFFSET $4`,
+        [tenantId, ids.slice(start, start + GRAPH_PAGE_SIZE), GRAPH_PAGE_SIZE, offset],
+      );
+      for (const edge of edges.rows) children.set(edge.prerequisite_job_id,
+        [...(children.get(edge.prerequisite_job_id) ?? []), edge.job_id]);
+      if (edges.rows.length < GRAPH_PAGE_SIZE) break;
+      offset += GRAPH_PAGE_SIZE;
+    }
+  }
+  const jobs = new Map(locked.filter((job) => job.tenant_id === tenantId).map((job) => [job.job_id, job]));
+  const queue = [...roots].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  const visited = new Set(queue);
+  for (let index = 0; index < queue.length; index += 1) {
+    for (const childId of children.get(queue[index]!) ?? []) {
+      if (visited.has(childId)) continue;
+      visited.add(childId);
+      const child = jobs.get(childId);
+      if (child === undefined) continue;
+      if (TERMINAL.has(child.state)) {
+        if (child.state !== "succeeded") queue.push(childId);
+        continue;
+      }
+      if (child.state === "leased") {
+        changes.set(jobKey(child), { kind: "request_cancel", job: child });
+        continue;
+      }
+      const outcome = terminalState(child, true)!;
+      changes.set(jobKey(child), { kind: "terminal", job: child, state: outcome.state, code: outcome.code });
+      queue.push(childId);
+    }
+  }
 };
 
 /** Caller holds all tenant and affected capacity locks before touching job rows. */
@@ -287,43 +409,11 @@ export const propagateTerminalDependencies = async (
 ): Promise<void> => {
   if (roots.length === 0) return;
   const closure = await discoverTransitionClosure(client, roots.map((jobId) => ({ tenant_id: tenantId, job_id: jobId })));
-  const rootSet = new Set(roots);
-  const dependentIds = closure.map((row) => row.job_id).filter((jobId) => !rootSet.has(jobId));
-  if (dependentIds.length === 0) return;
-  const edges = await client.query<{ job_id: string; prerequisite_job_id: string }>(
-    `SELECT job_id,prerequisite_job_id FROM orchestration_job_dependencies
-     WHERE tenant_id=$1 AND job_id=ANY($2::text[])
-     ORDER BY prerequisite_job_id COLLATE "C",job_id COLLATE "C"`, [tenantId, dependentIds],
-  );
-  const children = new Map<string, string[]>();
-  for (const edge of edges.rows) children.set(edge.prerequisite_job_id,
-    [...(children.get(edge.prerequisite_job_id) ?? []), edge.job_id]);
-  const locked = await client.query<JobRow>(
-    `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=ANY($2::text[])
-     ORDER BY job_id COLLATE "C" FOR UPDATE`, [tenantId, dependentIds],
-  );
-  const jobs = new Map(locked.rows.map((row) => [row.job_id, row]));
-  const queue = [...rootSet].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
-  const visited = new Set(queue);
-  for (let index = 0; index < queue.length; index += 1) {
-    for (const childId of children.get(queue[index]!) ?? []) {
-      if (visited.has(childId)) continue;
-      visited.add(childId);
-      queue.push(childId);
-    }
-    if (index < rootSet.size) continue;
-    const job = jobs.get(queue[index]!);
-    if (job === undefined || TERMINAL.has(job.state) || !await failedPrerequisite(client, tenantId, job.job_id)) continue;
-    if (job.state === "leased") {
-      await client.query(
-        `UPDATE orchestration_jobs SET cancellation_requested=true,updated_at=clock_timestamp(),row_version=row_version+1
-         WHERE tenant_id=$1 AND job_id=$2 AND cancellation_requested=false`, [tenantId, job.job_id],
-      );
-      continue;
-    }
-    const outcome = terminalState(job, true)!;
-    await finishJob(client, job, outcome.state, outcome.code, notifications);
-  }
+  const locked = await lockTransitionJobs(client, closure);
+  const changes = new Map<string, PlannedJobChange>();
+  await planTerminalDependents(client, tenantId, roots, locked, changes);
+  const result = await applyPlannedJobChanges(client, [...changes.values()]);
+  notifications.push(...result.notifications);
 };
 
 export const propagateAndNotifyTerminalDependencies = async (
@@ -425,36 +515,78 @@ const jobDiscovery = async (client: PoolClient) => client.query<JobRow>(
 export const discoverTransitionClosure = async (client: PoolClient,
   roots: readonly Pick<JobRow, "tenant_id" | "job_id">[]): Promise<JobRow[]> => {
   if (roots.length === 0) return [];
-  const tenantIds = roots.map((row) => row.tenant_id);
-  const jobIds = roots.map((row) => row.job_id);
-  const result = await client.query<JobRow>(
-    `WITH RECURSIVE descendants(tenant_id,job_id) AS (
-       SELECT input.tenant_id,input.job_id
-       FROM unnest($1::text[],$2::text[]) AS input(tenant_id,job_id)
-       UNION
-       SELECT dependency.tenant_id,dependency.job_id
-       FROM orchestration_job_dependencies dependency
-       JOIN descendants prior ON prior.tenant_id=dependency.tenant_id
-         AND prior.job_id=dependency.prerequisite_job_id
-     ) SELECT job.* FROM descendants
-       JOIN orchestration_jobs job ON job.tenant_id=descendants.tenant_id AND job.job_id=descendants.job_id
-       ORDER BY job.tenant_id COLLATE "C",job.job_id COLLATE "C" LIMIT 2049`,
-    [tenantIds, jobIds],
-  );
-  if (result.rows.length > 2048) throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: true });
-  return result.rows;
+  const key = (tenantId: string, jobId: string) => `${tenantId}\u0000${jobId}`;
+  const seen = new Map<string, { tenant_id: string; job_id: string }>();
+  let frontier: Array<{ tenant_id: string; job_id: string }> = [];
+  for (const root of roots) {
+    const identity = key(root.tenant_id, root.job_id);
+    if (seen.has(identity)) continue;
+    const entry = { tenant_id: root.tenant_id, job_id: root.job_id };
+    seen.set(identity, entry);
+    frontier.push(entry);
+  }
+  while (frontier.length > 0) {
+    const next: Array<{ tenant_id: string; job_id: string }> = [];
+    for (let start = 0; start < frontier.length; start += GRAPH_PAGE_SIZE) {
+      const page = frontier.slice(start, start + GRAPH_PAGE_SIZE);
+      let offset = 0;
+      while (true) {
+        const edges = await client.query<{ tenant_id: string; job_id: string }>(
+          `SELECT dependency.tenant_id,dependency.job_id
+           FROM orchestration_job_dependencies dependency
+           JOIN unnest($1::text[],$2::text[]) AS parent(tenant_id,job_id)
+             ON parent.tenant_id=dependency.tenant_id
+               AND parent.job_id=dependency.prerequisite_job_id
+           ORDER BY dependency.tenant_id COLLATE "C",dependency.job_id COLLATE "C",
+             dependency.prerequisite_job_id COLLATE "C"
+           LIMIT $3 OFFSET $4`,
+          [page.map((row) => row.tenant_id), page.map((row) => row.job_id), GRAPH_PAGE_SIZE, offset],
+        );
+        for (const edge of edges.rows) {
+          const identity = key(edge.tenant_id, edge.job_id);
+          if (seen.has(identity)) continue;
+          seen.set(identity, edge);
+          next.push(edge);
+        }
+        if (edges.rows.length < GRAPH_PAGE_SIZE) break;
+        offset += GRAPH_PAGE_SIZE;
+      }
+    }
+    frontier = next;
+  }
+  const identities = [...seen.values()].sort((left, right) =>
+    Buffer.compare(Buffer.from(key(left.tenant_id, left.job_id)), Buffer.from(key(right.tenant_id, right.job_id))));
+  const jobs: JobRow[] = [];
+  for (let start = 0; start < identities.length; start += GRAPH_PAGE_SIZE) {
+    const page = identities.slice(start, start + GRAPH_PAGE_SIZE);
+    const result = await client.query<JobRow>(
+      `SELECT job.* FROM orchestration_jobs job
+       JOIN unnest($1::text[],$2::text[]) AS input(tenant_id,job_id)
+         ON input.tenant_id=job.tenant_id AND input.job_id=job.job_id
+       ORDER BY job.tenant_id COLLATE "C",job.job_id COLLATE "C"`,
+      [page.map((row) => row.tenant_id), page.map((row) => row.job_id)],
+    );
+    jobs.push(...result.rows);
+  }
+  return jobs;
 };
 
 export const discoverActiveTransitionJobs = async (client: PoolClient, tenantId: string,
   serviceIds: readonly string[]): Promise<JobRow[]> => {
   if (serviceIds.length === 0) return [];
-  const roots = await client.query<JobRow>(
-    `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND service_id=ANY($2::text[])
-       AND state IN ('queued','retry_wait','leased')
-     ORDER BY job_id COLLATE "C" LIMIT 2049`, [tenantId, serviceIds],
-  );
-  if (roots.rows.length > 2048) throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: true });
-  return discoverTransitionClosure(client, roots.rows);
+  const roots: JobRow[] = [];
+  let after = "";
+  while (true) {
+    const page = await client.query<JobRow>(
+      `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND service_id=ANY($2::text[])
+         AND state IN ('queued','retry_wait','leased') AND job_id COLLATE "C" > $3 COLLATE "C"
+       ORDER BY job_id COLLATE "C" LIMIT $4`, [tenantId, serviceIds, after, GRAPH_PAGE_SIZE],
+    );
+    roots.push(...page.rows);
+    if (page.rows.length < GRAPH_PAGE_SIZE) break;
+    after = page.rows[page.rows.length - 1]!.job_id;
+  }
+  return discoverTransitionClosure(client, roots);
 };
 
 const outboxDiscovery = async (client: PoolClient) => client.query<OutboxRow>(
@@ -496,8 +628,56 @@ const orderOutboxByDatabaseQueue = async (client: PoolClient, rows: readonly Out
   });
 };
 
+const unavailableClaimRoots = async (client: PoolClient, candidates: readonly JobRow[],
+  affected: readonly JobRow[], locked: readonly JobRow[]): Promise<ReadonlySet<string>> => {
+  const key = (row: Pick<JobRow, "tenant_id" | "job_id">) => `${row.tenant_id}\u0000${row.job_id}`;
+  const lockedKeys = new Set(locked.map(key));
+  const skipped = new Set(affected.map(key).filter((identity) => !lockedKeys.has(identity)));
+  if (skipped.size === 0) return new Set();
+  const children = new Map<string, string[]>();
+  for (let start = 0; start < affected.length; start += GRAPH_PAGE_SIZE) {
+    const page = affected.slice(start, start + GRAPH_PAGE_SIZE);
+    let offset = 0;
+    while (true) {
+      const edges = await client.query<{ tenant_id: string; job_id: string; prerequisite_job_id: string }>(
+        `SELECT dependency.tenant_id,dependency.job_id,dependency.prerequisite_job_id
+         FROM orchestration_job_dependencies dependency
+         JOIN unnest($1::text[],$2::text[]) AS child(tenant_id,job_id)
+           ON child.tenant_id=dependency.tenant_id AND child.job_id=dependency.job_id
+         ORDER BY dependency.tenant_id COLLATE "C",dependency.prerequisite_job_id COLLATE "C",
+           dependency.job_id COLLATE "C" LIMIT $3 OFFSET $4`,
+        [page.map((row) => row.tenant_id), page.map((row) => row.job_id), GRAPH_PAGE_SIZE, offset],
+      );
+      for (const edge of edges.rows) {
+        const parent = `${edge.tenant_id}\u0000${edge.prerequisite_job_id}`;
+        children.set(parent, [...(children.get(parent) ?? []), `${edge.tenant_id}\u0000${edge.job_id}`]);
+      }
+      if (edges.rows.length < GRAPH_PAGE_SIZE) break;
+      offset += GRAPH_PAGE_SIZE;
+    }
+  }
+  const unavailable = new Set<string>();
+  for (const candidate of candidates) {
+    const root = key(candidate);
+    const visited = new Set<string>();
+    const pending = [root];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (skipped.has(current)) {
+        unavailable.add(root);
+        break;
+      }
+      pending.push(...children.get(current) ?? []);
+    }
+  }
+  return unavailable;
+};
+
 type CapacityLimits = { global_limit: number; repository_limit: number; service_limit: number };
-const capacityAvailable = async (client: PoolClient, job: JobRow, limits: CapacityLimits): Promise<boolean> => {
+const capacityAvailable = async (client: PoolClient, job: JobRow, limits: CapacityLimits,
+  pending: readonly JobRow[] = []): Promise<boolean> => {
   const counts = await client.query<{ global_count: string; repository_count: string; service_count: string }>(
     `SELECT count(*)::text AS global_count,
        count(*) FILTER (WHERE repository_id=$2)::text AS repository_count,
@@ -506,9 +686,11 @@ const capacityAvailable = async (client: PoolClient, job: JobRow, limits: Capaci
     [job.tenant_id, job.repository_id, job.service_id],
   );
   const count = counts.rows[0]!;
-  return Number(count.global_count) < limits.global_limit
-    && Number(count.repository_count) < limits.repository_limit
-    && Number(count.service_count) < limits.service_limit;
+  return Number(count.global_count) + pending.filter((row) => row.tenant_id === job.tenant_id).length < limits.global_limit
+    && Number(count.repository_count) + pending.filter((row) => row.tenant_id === job.tenant_id
+      && row.repository_id === job.repository_id).length < limits.repository_limit
+    && Number(count.service_count) + pending.filter((row) => row.tenant_id === job.tenant_id
+      && row.repository_id === job.repository_id && row.service_id === job.service_id).length < limits.service_limit;
 };
 
 type ActiveScope = { fingerprint: string; document: InstallationConfig };
@@ -584,13 +766,15 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
       }
       await lockTransitionCheckpoints(client, affected);
       const locked = await lockTransitionJobs(client, affected, true);
-      if (locked.length !== affected.length) return [];
+      const unavailable = await unavailableClaimRoots(client, discovered, affected, locked);
       const candidateSet = new Set(discovered.map((row) => `${row.tenant_id}\u0000${row.job_id}`));
-      const notifications: StateNotification[] = [];
+      const changes = new Map<string, PlannedJobChange>();
       const terminalRoots = new Map<string, string[]>();
-      const claimed: LeasedJob[] = [];
+      const pendingClaims: JobRow[] = [];
+      let queueIndex = 0;
       for (const job of await orderJobsByDatabaseQueue(client,
-        locked.filter((row) => candidateSet.has(`${row.tenant_id}\u0000${row.job_id}`)))) {
+        locked.filter((row) => candidateSet.has(`${row.tenant_id}\u0000${row.job_id}`)
+          && !unavailable.has(`${row.tenant_id}\u0000${row.job_id}`)))) {
         if (job.state === "leased" && job.lease_expires_at !== null
           && !await jobLeaseIsLive(client, job)) {
           const dependentFailed = await failedPrerequisite(client, job.tenant_id, job.job_id);
@@ -598,61 +782,46 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
           const outcome = requested ?? (safeCount(job.attempt_count) >= safeCount(job.max_attempts)
             ? { state: "failed" as const, code: executionFailureCode(job.kind) } : undefined);
           if (outcome !== undefined) {
-            await finishJob(client, job, outcome.state, outcome.code, notifications);
+            changes.set(jobKey(job), { kind: "terminal", job, state: outcome.state, code: outcome.code });
             terminalRoots.set(job.tenant_id, [...(terminalRoots.get(job.tenant_id) ?? []), job.job_id]);
           } else {
             const delay = computeRetryDelayMs({ attempt: safeCount(job.attempt_count), baseDelayMs: RETRY_BASE_MS,
               maxDelayMs: RETRY_MAX_MS });
-            await updateCheckpointState(client, job, "retry_wait");
-            await client.query(
-              `UPDATE orchestration_jobs SET state='retry_wait',lease_worker_id=NULL,lease_instance_id=NULL,
-                 lease_token=NULL,lease_expires_at=NULL,available_at=clock_timestamp()+($3::bigint * interval '1 millisecond'),
-                 updated_at=clock_timestamp(),row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
-              [job.tenant_id, job.job_id, delay],
-            );
-            notifications.push({ job, state: "retry_wait", reason: `attempt:${job.attempt_count}` });
+            changes.set(jobKey(job), { kind: "retry", job, delay });
           }
           continue;
         }
-        if (claimed.length >= limit || !["queued", "retry_wait"].includes(job.state)
+        if (pendingClaims.length >= limit || !["queued", "retry_wait"].includes(job.state)
           || !await jobAvailable(client, job)) continue;
         if (!isAllowedByActiveConfig(job, scopes.get(job.tenant_id))) {
-          await finishJob(client, job, "cancelled", undefined, notifications);
+          changes.set(jobKey(job), { kind: "terminal", job, state: "cancelled" });
           terminalRoots.set(job.tenant_id, [...(terminalRoots.get(job.tenant_id) ?? []), job.job_id]);
           continue;
         }
         const dependentFailed = await failedPrerequisite(client, job.tenant_id, job.job_id);
         const requested = terminalState(job, dependentFailed);
         if (requested !== undefined) {
-          await finishJob(client, job, requested.state, requested.code, notifications);
+          changes.set(jobKey(job), { kind: "terminal", job, state: requested.state, code: requested.code });
           terminalRoots.set(job.tenant_id, [...(terminalRoots.get(job.tenant_id) ?? []), job.job_id]);
           continue;
         }
         if (safeCount(job.attempt_count) >= safeCount(job.max_attempts)) {
-          await finishJob(client, job, "failed", executionFailureCode(job.kind), notifications);
+          changes.set(jobKey(job), { kind: "terminal", job, state: "failed", code: executionFailureCode(job.kind) });
           terminalRoots.set(job.tenant_id, [...(terminalRoots.get(job.tenant_id) ?? []), job.job_id]);
           continue;
         }
         if (!await readyPrerequisites(client, job.tenant_id, job.job_id)
-          || !await capacityAvailable(client, job, policies.get(job.tenant_id)!)) continue;
+          || !await capacityAvailable(client, job, policies.get(job.tenant_id)!, pendingClaims)) continue;
         const token = randomBytes(32).toString("hex");
-        await updateCheckpointState(client, job, "leased");
-        const updated = await client.query<{ lease_expires_at: Date }>(
-          `UPDATE orchestration_jobs SET state='leased',attempt_count=attempt_count+1,
-             lease_worker_id=$3,lease_instance_id=$4,lease_token=$5,safe_last_error_code=NULL,
-             lease_expires_at=clock_timestamp()+($6::bigint * interval '1 millisecond'),
-             started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp(),row_version=row_version+1
-           WHERE tenant_id=$1 AND job_id=$2 RETURNING lease_expires_at`,
-          [job.tenant_id, job.job_id, worker.workerId, worker.instanceId, token, LEASE_DURATION_MS],
-        );
-        claimed.push(detachedFrozen({ tenantId: job.tenant_id, jobId: job.job_id, kind: job.kind,
-          attemptCount: (BigInt(job.attempt_count) + 1n).toString(), maxAttempts: job.max_attempts,
-          leaseExpiresAt: updated.rows[0]!.lease_expires_at.toISOString(),
-          lease: { tenantId: job.tenant_id, jobId: job.job_id, leaseToken: token } }));
+        changes.set(jobKey(job), { kind: "claim", job, token, worker, queueIndex: queueIndex++ });
+        pendingClaims.push(job);
       }
-      for (const [tenantId, roots] of terminalRoots) await propagateTerminalDependencies(client, tenantId, roots, notifications);
-      await flushNotifications(client, notifications);
-      return claimed;
+      for (const [tenantId, roots] of terminalRoots) {
+        await planTerminalDependents(client, tenantId, roots, locked, changes);
+      }
+      const result = await applyPlannedJobChanges(client, [...changes.values()]);
+      await flushNotifications(client, result.notifications);
+      return result.claimed;
     });
   },
 
@@ -694,30 +863,24 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
       await lockTransitionCheckpoints(client, closure);
       const locked = await lockTransitionJobs(client, closure);
       const job = await validateLiveJobLease(client, locked.find((row) => row.job_id === lease.jobId), worker, lease);
-      const notifications: StateNotification[] = [];
       const requested = terminalState(job, await failedPrerequisite(client, job.tenant_id, job.job_id));
       const exhausted = safeCount(job.attempt_count) >= safeCount(job.max_attempts);
       if (requested !== undefined || exhausted) {
         const state = requested?.state ?? "failed";
         const code = requested?.code ?? (state === "failed"
           ? executionFailureCode(job.kind) : undefined);
-        await finishJob(client, job, state, code, notifications);
-        await propagateTerminalDependencies(client, job.tenant_id, [job.job_id], notifications);
-        await flushNotifications(client, notifications);
+        const changes = new Map<string, PlannedJobChange>([[jobKey(job),
+          { kind: "terminal", job, state, code }]]);
+        await planTerminalDependents(client, job.tenant_id, [job.job_id], locked, changes);
+        const result = await applyPlannedJobChanges(client, [...changes.values()]);
+        await flushNotifications(client, result.notifications);
         return jobOutcome(job, state, code);
       }
       const code = executionFailureCode(job.kind);
       const delay = computeRetryDelayMs({ attempt: safeCount(job.attempt_count), baseDelayMs: RETRY_BASE_MS,
         maxDelayMs: RETRY_MAX_MS });
-      await updateCheckpointState(client, job, "retry_wait");
-      await client.query(
-        `UPDATE orchestration_jobs SET state='retry_wait',lease_worker_id=NULL,lease_instance_id=NULL,
-           lease_token=NULL,lease_expires_at=NULL,safe_last_error_code=$3,
-           available_at=clock_timestamp()+($4::bigint * interval '1 millisecond'),
-           updated_at=clock_timestamp(),row_version=row_version+1 WHERE tenant_id=$1 AND job_id=$2`,
-        [job.tenant_id, job.job_id, code, delay],
-      );
-      await flushNotifications(client, [{ job, state: "retry_wait", reason: `attempt:${job.attempt_count}` }]);
+      const result = await applyPlannedJobChanges(client, [{ kind: "retry", job, delay, code }]);
+      await flushNotifications(client, result.notifications);
       return jobOutcome(job, "retry_wait", code);
     });
   },

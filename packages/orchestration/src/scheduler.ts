@@ -6,7 +6,7 @@ import {
   type InstallationConfig,
 } from "@api-truth/ir";
 import type { PoolClient } from "pg";
-import { discoverTransitionClosure, lockTransitionJobs, propagateAndNotifyTerminalDependencies } from "./worker.js";
+import { discoverTransitionClosure, propagateAndNotifyTerminalDependencies } from "./worker.js";
 
 import { isConfiguredBranch, selectPullRequestScope, selectReconciliationBranches } from "./branch-selection.js";
 import { canonicalOrchestrationHash, canonicalOrchestrationJson } from "./canonical.js";
@@ -260,7 +260,7 @@ const persistJob = async (client: PoolClient, tenantId: string, prepared: Prepar
       evidence.order?.kind ?? null, evidence.order?.value ?? null, input.generation, identity],
   );
   const stored = await client.query<{ job_id: unknown; semantic_identity: unknown }>(
-    "SELECT job_id, semantic_identity FROM orchestration_jobs WHERE tenant_id=$1 AND dedupe_key=$2",
+    "SELECT job_id, semantic_identity FROM orchestration_jobs WHERE tenant_id=$1 AND dedupe_key=$2 FOR UPDATE",
     [tenantId, dedupeKey],
   );
   if (stored.rows[0]?.job_id !== jobId
@@ -801,20 +801,29 @@ export const persistScheduledJobs = async (
   const transitioned: Array<Readonly<{ jobId: string; state: "cancelled" | "superseded"; identity: unknown }>> = [];
   const closure = await discoverTransitionClosure(client,
     plan.transitions.map((transition) => ({ tenant_id: tenantId, job_id: transition.oldJobId })));
-  await lockTransitionJobs(client, closure);
-  for (const job of plan.jobs) {
-    if (await persistJob(client, tenantId, job)) inserted.push(job);
-  }
-  for (const transition of [...plan.transitions].sort((left, right) => Buffer.compare(
-    Buffer.from(left.oldJobId, "utf8"), Buffer.from(right.oldJobId, "utf8"),
-  ))) {
-    let result;
-    if (transition.kind === "supersede") {
-      result = await persistSupersede(client, tenantId, transition.oldJobId, transition.nextJobId!);
-    } else {
-      result = await persistCancel(client, tenantId, transition.oldJobId);
+  const jobsById = new Map(plan.jobs.map((job) => [job.jobId, job]));
+  const transitionsById = new Map<string, typeof plan.transitions[number][]>();
+  for (const transition of plan.transitions) transitionsById.set(transition.oldJobId,
+    [...(transitionsById.get(transition.oldJobId) ?? []), transition]);
+  const existingIds = new Set(closure.map((row) => row.job_id));
+  // The caller holds the tenant configuration advisory and checkpoint rows. Touch every
+  // existing and new job in one PK sequence so an insertion cannot jump ahead of an old row lock.
+  const allIds = [...new Set([...jobsById.keys(), ...existingIds, ...transitionsById.keys()])]
+    .sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+  for (const jobId of allIds) {
+    if (existingIds.has(jobId)) {
+      await client.query(
+        `SELECT 1 FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2 FOR UPDATE`, [tenantId, jobId],
+      );
     }
-    if (result !== undefined) transitioned.push(result);
+    const job = jobsById.get(jobId);
+    if (job !== undefined && await persistJob(client, tenantId, job)) inserted.push(job);
+    for (const transition of transitionsById.get(jobId) ?? []) {
+      const result = transition.kind === "supersede"
+        ? await persistSupersede(client, tenantId, transition.oldJobId, transition.nextJobId!)
+        : await persistCancel(client, tenantId, transition.oldJobId);
+      if (result !== undefined) transitioned.push(result);
+    }
   }
   for (const dependency of [...plan.dependencies].sort((left, right) => Buffer.compare(
     Buffer.from(`${left.jobId}\u0000${left.prerequisiteJobId}`, "utf8"),
@@ -826,6 +835,8 @@ export const persistScheduledJobs = async (
       [tenantId, dependency.jobId, dependency.prerequisiteJobId],
     );
   }
+  // Descendant checkpoint updates below change outcome fields only. Their rows and the
+  // descendant job rows were locked before this pass, so these writes add no reverse wait.
   await propagateAndNotifyTerminalDependencies(client, tenantId,
     transitioned.map((transition) => transition.jobId));
   for (const job of inserted) {
