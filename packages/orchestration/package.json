@@ -11,7 +11,7 @@
     "@api-truth/ir": "0.0.0",
     "@api-truth/updates": "0.0.0",
     "@sinclair/typebox": "0.34.41",
-    "ajv": "8.17.1",
+    "ajv": "8.20.0",
     "ajv-formats": "3.0.1"
   }
 }
