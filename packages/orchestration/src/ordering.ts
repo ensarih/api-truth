@@ -21,24 +21,25 @@ const sameExactCheckpoint = (current: ProviderCheckpoint, next: ProviderCheckpoi
   canonicalOrchestrationJson(current.evidence) === canonicalOrchestrationJson(next.evidence)
   && canonicalOrchestrationJson(current.relevantPayload) === canonicalOrchestrationJson(next.relevantPayload);
 
+const parsedCheckpoint = (input: unknown): ProviderCheckpoint => {
+  let detached: unknown;
+  try { detached = JSON.parse(canonicalOrchestrationJson(input)); } catch { throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT"); }
+  if (detached === null || typeof detached !== "object" || Array.isArray(detached)
+    || Object.keys(detached).length !== 2 || !Object.hasOwn(detached, "evidence") || !Object.hasOwn(detached, "relevantPayload")) {
+    throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
+  }
+  const candidate = detached as { evidence: unknown; relevantPayload: unknown };
+  const evidence = parseProviderEvidence(candidate.evidence);
+  if (!evidence.ok) throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
+  return { evidence: evidence.value, relevantPayload: candidate.relevantPayload };
+};
+
 export const classifyProviderUpdate = (
   currentInput: unknown,
   nextInput: unknown,
 ): ProviderUpdateClassification => {
-  const parseCheckpoint = (input: unknown): ProviderCheckpoint => {
-    let detached: unknown;
-    try { detached = JSON.parse(canonicalOrchestrationJson(input)); } catch { throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT"); }
-    if (detached === null || typeof detached !== "object" || Array.isArray(detached)
-      || Object.keys(detached).length !== 2 || !Object.hasOwn(detached, "evidence") || !Object.hasOwn(detached, "relevantPayload")) {
-      throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
-    }
-    const candidate = detached as { evidence: unknown; relevantPayload: unknown };
-    const evidence = parseProviderEvidence(candidate.evidence);
-    if (!evidence.ok) throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
-    return { evidence: evidence.value, relevantPayload: candidate.relevantPayload };
-  };
-  const next = parseCheckpoint(nextInput);
-  const current = currentInput === undefined ? undefined : parseCheckpoint(currentInput);
+  const next = parsedCheckpoint(nextInput);
+  const current = currentInput === undefined ? undefined : parsedCheckpoint(currentInput);
   if (current === undefined) {
     return next.evidence.order?.kind === "sequence" && canonicalDecimal.test(next.evidence.order.value)
       ? "first" : "incomparable";
@@ -55,4 +56,12 @@ export const classifyProviderUpdate = (
   if (comparison === "older") return "stale";
   if (comparison === "newer") return "newer";
   return sameSemanticCheckpoint(current, next) ? "exact_replay" : "conflict";
+};
+
+export const isMonotoneProviderConfirmation = (originInput: unknown, currentInput: unknown): boolean => {
+  const origin = parsedCheckpoint(originInput);
+  const current = parsedCheckpoint(currentInput);
+  if (canonicalOrchestrationJson(origin.relevantPayload) !== canonicalOrchestrationJson(current.relevantPayload)) return false;
+  const classification = classifyProviderUpdate(origin, current);
+  return classification === "exact_replay" || classification === "newer";
 };

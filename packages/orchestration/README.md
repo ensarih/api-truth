@@ -21,7 +21,8 @@ are implemented by later D08 slices.
 
 A newer comparable observation of the same branch revision advances the
 checkpoint evidence without creating a new generation or retrying terminal
-failed work. Slice 5 completion must therefore validate the job's full key,
-revision, and generation against the current checkpoint, accept its newer
-comparable confirmation evidence, and promote with that checkpoint evidence
-instead of requiring byte equality with the job's originating event.
+failed work. Worker completion must therefore validate the job's full key,
+revision, and generation against the current checkpoint, use
+`isMonotoneProviderConfirmation` to accept its newer comparable confirmation,
+and promote with the checkpoint evidence instead of requiring byte equality
+with the job's originating event.

@@ -18,7 +18,7 @@ export {
   normalizedEventIdentityProjection,
   semanticOrchestrationId,
 } from "./hashing.js";
-export { classifyProviderUpdate } from "./ordering.js";
+export { classifyProviderUpdate, isMonotoneProviderConfirmation } from "./ordering.js";
 export {
   applyOrchestrationMigrationManifest,
   applyOrchestrationMigrations,

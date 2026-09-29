@@ -131,6 +131,61 @@ test("multi-service PR scheduling writes every PR checkpoint before its analysis
   } finally { await database.cleanup(); }
 });
 
+test("cross-repository reconciliation checkpoints follow repository then service order", async () => {
+  const config = configuration();
+  const firstRepository = config.document.repositories[0]!;
+  firstRepository.repository_id = "repo-z";
+  firstRepository.locator = "acme/repo-z";
+  firstRepository.services[0]!.service_id = "service-a";
+  const secondRepository = structuredClone(firstRepository);
+  secondRepository.repository_id = "repo-a";
+  secondRepository.locator = "acme/repo-a";
+  secondRepository.services[0]!.service_id = "service-z";
+  secondRepository.services[0]!.root = "services/z";
+  config.document.repositories.push(secondRepository);
+  const { database, repository, schemaSql } = await setup(config);
+  try {
+    await database.pool.query(
+      `CREATE TABLE ${schemaSql}.checkpoint_write_order (
+         sequence bigserial PRIMARY KEY, repository_id text NOT NULL, service_id text NOT NULL
+       )`,
+    );
+    await database.pool.query(
+      `CREATE FUNCTION ${schemaSql}.capture_checkpoint_write_order()
+       RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN
+         INSERT INTO ${schemaSql}.checkpoint_write_order(repository_id,service_id)
+         VALUES (NEW.repository_id,NEW.service_id);
+         RETURN NEW;
+       END;
+       $$`,
+    );
+    await database.pool.query(
+      `CREATE TRIGGER capture_checkpoint_write_order
+       BEFORE INSERT ON ${schemaSql}.orchestration_reconciliation_checkpoints
+       FOR EACH ROW EXECUTE FUNCTION ${schemaSql}.capture_checkpoint_write_order()`,
+    );
+    const reconciliation = envelope("cross-repository", "reconciliation.requested", "1", {
+      scope: { service_ids: ["service-a", "service-z"], environments: [] },
+      provider_snapshot_reference: "snapshot-cross-repository",
+    });
+    delete (reconciliation.subjects as { repository_id?: string }).repository_id;
+    reconciliation.subjects.service_ids = ["service-a", "service-z"];
+    await repository.ingestEvent({
+      ...context(["reconciliation.requested"]),
+      allowedRepositories: ["repo-a", "repo-z"],
+      allowedServices: ["service-a", "service-z"],
+    }, reconciliation);
+    const order = await database.pool.query<{ repository_id: string; service_id: string }>(
+      `SELECT repository_id,service_id FROM ${schemaSql}.checkpoint_write_order ORDER BY sequence`,
+    );
+    expect(order.rows).toEqual([
+      { repository_id: "repo-a", service_id: "service-z" },
+      { repository_id: "repo-z", service_id: "service-a" },
+    ]);
+  } finally { await database.cleanup(); }
+});
+
 test("advances ordered branches, ignores replay/stale evidence, and supersedes old work", async () => {
   const { database, repository, schemaSql } = await setup();
   try {
@@ -272,7 +327,7 @@ test("coalesces repeated exact-branch reconciliation requests across event ident
   } finally { await database.cleanup(); }
 });
 
-test("coalesces repeated opaque PR events onto one exact-PR reconciliation job", async () => {
+test("coalesces an equivalent opaque PR observation without replacing its reconciliation job", async () => {
   const { database, repository, schemaSql } = await setup();
   try {
     const opaquePr = (eventId: string, cursor: string, headRevision: string) => ({
@@ -286,8 +341,8 @@ test("coalesces repeated opaque PR events onto one exact-PR reconciliation job",
     });
     await expect(repository.ingestEvent(context(), opaquePr("opaque-pr-1", "cursor-1", "b".repeat(40))))
       .resolves.toMatchObject({ disposition: "reconciliation_required" });
-    await expect(repository.ingestEvent(context(), opaquePr("opaque-pr-2", "cursor-2", "c".repeat(40))))
-      .resolves.toMatchObject({ disposition: "reconciliation_required" });
+    await expect(repository.ingestEvent(context(), opaquePr("opaque-pr-2", "cursor-1", "b".repeat(40))))
+      .resolves.toMatchObject({ disposition: "no_work" });
     const rows = await database.pool.query<{ jobs: string; targets: string; links: string }>(
       `SELECT
          (SELECT count(*) FROM ${schemaSql}.orchestration_jobs WHERE kind='pr_reconciliation')::text AS jobs,
@@ -296,6 +351,48 @@ test("coalesces repeated opaque PR events onto one exact-PR reconciliation job",
           WHERE scope_key='pr:opaque-42')::text AS links`,
     );
     expect(rows.rows).toEqual([{ jobs: "1", targets: "2", links: "1" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("replaces a leased opaque PR reconciliation when a materially different close arrives", async () => {
+  const { database, repository, schemaSql } = await setup();
+  try {
+    const opaquePr = (eventId: string, cursor: string, state: string) => ({
+      ...envelope(eventId, "pull_request.updated", eventId, {
+        pull_request_id: "opaque-close", state, base_branch: "main", base_revision: "a".repeat(40),
+        head_branch: "feature/opaque", head_revision: "b".repeat(40),
+      }),
+      provider_evidence: {
+        provider: "github", provider_reference: `opaque-${cursor}`, order: { kind: "cursor", value: cursor },
+      },
+    });
+    await repository.ingestEvent(context(), opaquePr("opaque-open", "cursor-1", "open"));
+    await database.pool.query(
+      `UPDATE ${schemaSql}.orchestration_jobs
+       SET state='leased',lease_worker_id='worker',lease_instance_id='instance',lease_token='token',
+           lease_expires_at=clock_timestamp()+interval '5 minutes',started_at=clock_timestamp(),updated_at=clock_timestamp()
+       WHERE kind='pr_reconciliation'`,
+    );
+    await expect(repository.ingestEvent(context(), opaquePr("opaque-close", "cursor-2", "closed")))
+      .resolves.toMatchObject({ disposition: "reconciliation_required" });
+    const rows = await database.pool.query<{
+      state: string; reconciliation_generation: string; checkpoint_version: string; current_state: string;
+      old_state: string; cancellation_requested: boolean; linked: boolean;
+    }>(
+      `SELECT checkpoint.state,checkpoint.reconciliation_generation::text,checkpoint.checkpoint_version::text,
+              current_job.state AS current_state,old_job.state AS old_state,old_job.cancellation_requested,
+              old_job.superseding_job_id=current_job.job_id AS linked
+       FROM ${schemaSql}.orchestration_pr_checkpoints checkpoint
+       JOIN ${schemaSql}.orchestration_jobs current_job
+         ON current_job.tenant_id=checkpoint.tenant_id AND current_job.job_id=checkpoint.current_job_id
+       JOIN ${schemaSql}.orchestration_jobs old_job
+         ON old_job.tenant_id=checkpoint.tenant_id AND old_job.event_id='opaque-open'
+       WHERE checkpoint.pull_request_id='opaque-close'`,
+    );
+    expect(rows.rows).toEqual([{
+      state: "closed", reconciliation_generation: "2", checkpoint_version: "2", current_state: "queued",
+      old_state: "leased", cancellation_requested: true, linked: true,
+    }]);
   } finally { await database.cleanup(); }
 });
 

@@ -565,7 +565,6 @@ type PrRow = {
   state: string; base_branch: string; base_revision: string; head_branch: string; head_revision: string;
   provider: unknown; provider_reference: unknown; order_kind: unknown; order_value: unknown;
   checkpoint_version: string; analysis_generation: string; reconciliation_generation: string; current_job_id: unknown;
-  current_job_kind: unknown; current_job_state: unknown;
 };
 
 const schedulePullRequest = async (
@@ -586,10 +585,8 @@ const schedulePullRequest = async (
     `SELECT checkpoint.state,checkpoint.base_branch,checkpoint.base_revision,checkpoint.head_branch,checkpoint.head_revision,
             checkpoint.provider,checkpoint.provider_reference,checkpoint.order_kind,checkpoint.order_value,
             checkpoint.checkpoint_version::text,checkpoint.analysis_generation::text,
-            checkpoint.reconciliation_generation::text,checkpoint.current_job_id,
-            job.kind AS current_job_kind,job.state AS current_job_state
+            checkpoint.reconciliation_generation::text,checkpoint.current_job_id
      FROM orchestration_pr_checkpoints checkpoint
-     LEFT JOIN orchestration_jobs job ON job.tenant_id=checkpoint.tenant_id AND job.job_id=checkpoint.current_job_id
      WHERE checkpoint.tenant_id=$1 AND checkpoint.repository_id=$2 AND checkpoint.service_id=$3
        AND checkpoint.pull_request_id=$4 FOR UPDATE OF checkpoint`,
     [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id],
@@ -604,13 +601,7 @@ const schedulePullRequest = async (
   if (classification === "stale") return { ...base, disposition: "ignored_stale", safeReason: "stale" };
   if (classification === "exact_replay") return { ...base, disposition: "no_work", safeReason: "no_work" };
   if (classification === "incomparable") {
-    if (current?.current_job_kind === "pr_reconciliation"
-      && (current.current_job_state === "queued" || current.current_job_state === "leased"
-        || current.current_job_state === "retry_wait")
-      && typeof current.current_job_id === "string") {
-      return { ...base, disposition: "reconciliation_required", safeReason: "reconciliation_required",
-        reconciliationId: current.current_job_id };
-    }
+    const checkpointVersion = current === undefined ? "1" : (BigInt(current.checkpoint_version) + 1n).toString();
     const generation = current === undefined ? "1" : (BigInt(current.reconciliation_generation) + 1n).toString();
     const reconciliationId = stageJob(schedulerState, tenantId, event, configuration, {
       kind: "pr_reconciliation", target, pullRequestId: payload.pull_request_id,
@@ -621,15 +612,19 @@ const schedulePullRequest = async (
       `INSERT INTO orchestration_pr_checkpoints
          (tenant_id,repository_id,service_id,pull_request_id,state,base_branch,base_revision,head_branch,head_revision,
           provider,provider_reference,order_kind,order_value,checkpoint_version,analysis_generation,reconciliation_generation,current_job_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,1,0,$14,$15)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        ON CONFLICT (tenant_id,repository_id,service_id,pull_request_id) DO UPDATE SET
-         reconciliation_generation=EXCLUDED.reconciliation_generation,current_job_id=EXCLUDED.current_job_id,
+         state=EXCLUDED.state,base_branch=EXCLUDED.base_branch,base_revision=EXCLUDED.base_revision,
+         head_branch=EXCLUDED.head_branch,head_revision=EXCLUDED.head_revision,provider=EXCLUDED.provider,
+         provider_reference=EXCLUDED.provider_reference,order_kind=EXCLUDED.order_kind,order_value=EXCLUDED.order_value,
+         checkpoint_version=EXCLUDED.checkpoint_version,reconciliation_generation=EXCLUDED.reconciliation_generation,
+         current_job_id=EXCLUDED.current_job_id,
          updated_at=clock_timestamp()`,
       [tenantId, target.repository.repository_id, target.service.service_id, payload.pull_request_id, payload.state,
         payload.base_branch, payload.base_revision, payload.head_branch, payload.head_revision,
         event.provider_evidence.provider, event.provider_evidence.provider_reference,
         event.provider_evidence.order?.kind ?? null, event.provider_evidence.order?.value ?? null,
-        generation, reconciliationId],
+        checkpointVersion, current?.analysis_generation ?? "0", generation, reconciliationId],
     );
     return { ...base, disposition: "reconciliation_required", safeReason: "reconciliation_required", reconciliationId };
   }
@@ -694,11 +689,14 @@ export const scheduleEventTargets = async (
   const deferredAnalysisCheckpoints: DeferredAnalysisCheckpoint[] = [];
   const deferredBaselineRequests: DeferredBaselineRequest[] = [];
   const deferredBranchReconciliations: DeferredBranchReconciliation[] = [];
-  const serviceIds = [...event.subjects.service_ids].sort((left, right) => Buffer.compare(
-    Buffer.from(left, "utf8"), Buffer.from(right, "utf8"),
-  ));
-  for (const serviceId of serviceIds) {
-    const target = targetConfig(configuration.document, serviceId);
+  const targets = event.subjects.service_ids.map((serviceId) => targetConfig(configuration.document, serviceId)).sort(
+    (left, right) => Buffer.compare(
+      Buffer.from(`${left.repository.repository_id}\u0000${left.service.service_id}`, "utf8"),
+      Buffer.from(`${right.repository.repository_id}\u0000${right.service.service_id}`, "utf8"),
+    ),
+  );
+  for (const target of targets) {
+    const serviceId = target.service.service_id;
     if (event.event_type === "deployment.changed" || event.event_type === "source_document.changed") {
       results.push({ repositoryId: target.repository.repository_id, serviceId, scopeKey: "deferred",
         disposition: "deferred_handler", safeReason: "deferred_handler" });

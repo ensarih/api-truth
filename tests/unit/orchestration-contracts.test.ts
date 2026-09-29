@@ -8,6 +8,7 @@ import {
   computeRetryDelayMs,
   createOrchestrationRepository,
   eventSha256,
+  isMonotoneProviderConfirmation,
   isConfiguredBranch,
   parseAuthenticatedEventContext,
   parseJobStatus,
@@ -108,6 +109,7 @@ describe("D08 orchestration contracts", () => {
       "createOrchestrationRepository",
       "eventSha256",
       "isConfiguredBranch",
+      "isMonotoneProviderConfirmation",
       "normalizedEventIdentityProjection",
       "parseActiveConfigurationSummary",
       "parseAuthenticatedEventContext",
@@ -426,6 +428,24 @@ describe("D08 orchestration contracts", () => {
     const huge = "9".repeat(500);
     expect(classifyProviderUpdate(current, { evidence: evidence(huge), relevantPayload: { revision: "b" } })).toBe("newer");
     expect(classifyProviderUpdate(current, { evidence: evidence("01"), relevantPayload: { revision: "b" } })).toBe("incomparable");
+  });
+
+  test("accepts only monotone confirmation of the same semantic observation", () => {
+    const evidence = (value: string) => ({
+      provider: "github", provider_reference: `ref-${value}`, order: { kind: "sequence" as const, value },
+    });
+    const payload = { state: "present", revision: "a".repeat(40) };
+    const origin = { evidence: evidence("9"), relevantPayload: payload };
+    expect(isMonotoneProviderConfirmation(origin, {
+      evidence: evidence("10"), relevantPayload: structuredClone(payload),
+    })).toBe(true);
+    expect(isMonotoneProviderConfirmation(origin, structuredClone(origin))).toBe(true);
+    expect(isMonotoneProviderConfirmation(origin, {
+      evidence: evidence("8"), relevantPayload: structuredClone(payload),
+    })).toBe(false);
+    expect(isMonotoneProviderConfirmation(origin, {
+      evidence: evidence("10"), relevantPayload: { ...payload, revision: "b".repeat(40) },
+    })).toBe(false);
   });
 
   test("orders global advisory namespaces and preserves the exact D06 branch lock identity", () => {
