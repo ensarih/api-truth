@@ -93,6 +93,12 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 
 D01–D03 test the model before the full second adapter; do not permanently freeze a plugin contract designed from one framework. D05–D12 together constitute the first working product. A static-only exporter is insufficient.
 
+The reviewed [Node.js analyzer expansion backlog](docs/NODEJS_ANALYZER_BACKLOG.md)
+tracks Swagger/OpenAPI middleware and controller-decorator coverage. Raw
+Express is implemented within D05's published limits; the additional profiles
+require explicit adapter selection, evidence-authority rules, bounded parsing,
+and framework-specific conformance before they can claim complete coverage.
+
 D06 stores and resolves only explicitly supplied branch keys. The executable
 v0.1 service `intended_branches` array is the exact scan allowlist for later D08
 orchestration: unlisted branches are ignored, and an empty list means scan none.
