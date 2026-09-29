@@ -380,6 +380,9 @@ const scheduleBaseline = async (
     key.analyzerAdapterVersion, key.exchangeVersion, key.irVersion, key.identityVersion,
     key.configVersion, key.configFingerprint,
   );
+  const identity = [tenantId, key.repositoryId, key.serviceId, key.serviceRoot, key.immutableRevision,
+    key.analyzerAdapterId, key.analyzerAdapterVersion, key.exchangeVersion, key.irVersion,
+    key.identityVersion, key.configVersion, key.configFingerprint];
   const selected = await client.query<AnalysisCheckpointRow>(
     `SELECT attempt_generation::text, current_job_id, last_terminal_outcome
      FROM orchestration_analysis_checkpoints
@@ -387,10 +390,24 @@ const scheduleBaseline = async (
        AND analyzer_adapter_id=$6 AND analyzer_adapter_version=$7 AND exchange_version=$8 AND ir_version=$9
        AND identity_version=$10 AND config_version=$11 AND config_fingerprint=$12
      FOR UPDATE`,
-    [tenantId, key.repositoryId, key.serviceId, key.serviceRoot, key.immutableRevision, key.analyzerAdapterId,
-      key.analyzerAdapterVersion, key.exchangeVersion, key.irVersion, key.identityVersion, key.configVersion, key.configFingerprint],
+    identity,
   );
   const current = selected.rows[0];
+  const existing = await client.query<{ producing_job_id: string }>(
+    `SELECT producing_job_id FROM orchestration_revision_snapshots
+     WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND service_root=$4 AND immutable_revision=$5
+       AND analyzer_adapter_id=$6 AND analyzer_adapter_version=$7 AND exchange_version=$8 AND ir_version=$9
+       AND identity_version=$10 AND config_version=$11 AND config_fingerprint=$12`,
+    identity,
+  );
+  if (existing.rows[0] !== undefined) {
+    return { jobId: existing.rows[0].producing_job_id,
+      generation: current?.attempt_generation ?? "1", coalesced: true,
+      checkpoint: { sortKey, persist: async () => undefined } };
+  }
+  if (current?.last_terminal_outcome === "succeeded") {
+    throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+  }
   if (current !== undefined && typeof current.current_job_id === "string" && current.last_terminal_outcome === null) {
     return { jobId: current.current_job_id, generation: current.attempt_generation, coalesced: true,
       checkpoint: { sortKey, persist: async () => undefined } };
@@ -409,9 +426,7 @@ const scheduleBaseline = async (
        analyzer_adapter_version, exchange_version, ir_version, identity_version, config_version, config_fingerprint)
      DO UPDATE SET attempt_generation=EXCLUDED.attempt_generation, current_job_id=EXCLUDED.current_job_id,
        last_terminal_outcome=NULL, updated_at=clock_timestamp()`,
-    [tenantId, key.repositoryId, key.serviceId, key.serviceRoot, key.immutableRevision, key.analyzerAdapterId,
-      key.analyzerAdapterVersion, key.exchangeVersion, key.irVersion, key.identityVersion, key.configVersion,
-      key.configFingerprint, generation, jobId],
+    [...identity, generation, jobId],
   ); };
   return { jobId, generation, coalesced: false, checkpoint: { sortKey, persist: persistCheckpoint } };
 };

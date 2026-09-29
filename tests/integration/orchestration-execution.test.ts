@@ -51,9 +51,9 @@ const branchEvent = (id: string, sequence: string, revision: string) => ({
   payload: { branch: "main", prior_revision: null, new_revision: revision, reference_state: "fast_forward" },
 });
 
-const preparedAnalysis = async (revision: string) => {
+const preparedAnalysis = async (revision: string, fixture = "baseline") => {
   const raw = requestFor(revision);
-  const result = await createAnalyzer({ projectRoot: resolve("fixtures/typescript/orders/baseline/src") }).analyze(raw);
+  const result = await createAnalyzer({ projectRoot: resolve(`fixtures/typescript/orders/${fixture}/src`) }).analyze(raw);
   const request = { ...raw, source: { ...raw.source, source_digest: result.source.source_digest },
     resolution_inputs: [{ kind: "source_tree" as const, path: ".", digest: result.source.source_digest }] };
   return { result, request };
@@ -155,6 +155,24 @@ test("a failed analyzer result is reported through failJob for retry and termina
        FROM ${schema}.orchestration_jobs job WHERE job.tenant_id=$1 AND job.job_id=$2`, [tenantId, first!.jobId],
     );
     expect(stored.rows[0]).toEqual({ state: "failed", result_count: "0", snapshot_count: "0" });
+    const later = { ...baselineEvent(revision), event_id: "baseline-after-failure",
+      provider_evidence: { provider: "github", provider_reference: "retry-authority",
+        order: { kind: "sequence" as const, value: "2" } } };
+    expect(await repository.ingestEvent(context, later)).toMatchObject({
+      outcome: "accepted", disposition: "scheduled" });
+    const [third] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(third?.jobId).not.toBe(first?.jobId);
+    const recovered = await preparedAnalysis(revision);
+    expect(await worker.runJob(workerIdentity, third!.lease, {
+      resolver: { resolve: async () => ({ request: recovered.request,
+        changedPaths: [], changedPathsComplete: false }) },
+      analyzer: { analyze: async () => recovered.result },
+    })).toMatchObject({ state: "succeeded" });
+    const checkpoint = await database.pool.query<{ attempt_generation: string; last_terminal_outcome: string }>(
+      `SELECT attempt_generation::text,last_terminal_outcome FROM ${schema}.orchestration_analysis_checkpoints
+       WHERE tenant_id=$1 AND immutable_revision=$2`, [tenantId, revision],
+    );
+    expect(checkpoint.rows[0]).toEqual({ attempt_generation: "2", last_terminal_outcome: "succeeded" });
   } finally { await database.cleanup(); }
 });
 
@@ -206,6 +224,122 @@ test("a leased baseline analyzes and commits one immutable association without a
     expect(results.rows[0]?.count).toBe("1");
   } finally { await database.cleanup(); }
 });
+
+test("a later authorized request for an already associated immutable baseline reports no_work", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const revision = "4".repeat(40);
+    const { result, request } = await preparedAnalysis(revision);
+    const { repository, worker } = await activate(database, result);
+    await repository.ingestEvent(context, baselineEvent(revision));
+    const [claim] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    await worker.runJob(workerIdentity, claim!.lease, {
+      resolver: { resolve: async () => ({ request, changedPaths: [], changedPathsComplete: false }) },
+      analyzer: { analyze: async () => result },
+    });
+    const replay = { ...baselineEvent(revision), event_id: "baseline-later",
+      provider_evidence: { provider: "github", provider_reference: "later-delivery",
+        order: { kind: "sequence" as const, value: "2" } } };
+    expect(await repository.ingestEvent(context, replay)).toMatchObject({
+      outcome: "accepted", disposition: "no_work" });
+    const schema = quoteCatalogTestSchema(database.schema);
+    const state = await database.pool.query<{ generation: string; jobs: string; associations: string }>(
+      `SELECT checkpoint.attempt_generation::text AS generation,
+         (SELECT count(*)::text FROM ${schema}.orchestration_jobs WHERE tenant_id=$1 AND kind='baseline_analysis') AS jobs,
+         (SELECT count(*)::text FROM ${schema}.orchestration_revision_snapshots WHERE tenant_id=$1) AS associations
+       FROM ${schema}.orchestration_analysis_checkpoints checkpoint WHERE checkpoint.tenant_id=$1`, [tenantId],
+    );
+    expect(state.rows[0]).toEqual({ generation: "1", jobs: "1", associations: "1" });
+    expect(await worker.claimJobs(workerIdentity, { limit: 1 })).toEqual([]);
+  } finally { await database.cleanup(); }
+});
+
+test("a different digest for the same immutable target conflicts and rolls back every completion write", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const revision = "3".repeat(40);
+    const baseline = await preparedAnalysis(revision);
+    const changed = await preparedAnalysis(revision, "changed");
+    expect(changed.result.source.source_digest).not.toBe(baseline.result.source.source_digest);
+    const { repository, worker } = await activate(database, baseline.result);
+    const access = createAccessPolicyStore(database.pool, { schema: database.schema });
+    for (const scopeId of contractSnapshotFromAnalyzerResult(changed.result, configuration.fingerprint).requiredScopeIds) {
+      await access.putScope({ tenantId }, { scopeId, active: true });
+    }
+    await repository.ingestEvent(context, baselineEvent(revision));
+    const [first] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    await worker.runJob(workerIdentity, first!.lease, {
+      resolver: { resolve: async () => ({ request: baseline.request, changedPaths: [], changedPathsComplete: false }) },
+      analyzer: { analyze: async () => baseline.result },
+    });
+    await repository.ingestEvent(context, branchEvent("same-target-other-content", "2", revision));
+    const [second] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    await expect(worker.runJob(workerIdentity, second!.lease, {
+      resolver: { resolve: async () => ({ request: changed.request, changedPaths: [], changedPathsComplete: false }) },
+      analyzer: { analyze: async () => changed.result },
+    })).rejects.toMatchObject({ code: "REVISION_ASSOCIATION_CONFLICT" });
+    const schema = quoteCatalogTestSchema(database.schema);
+    const stored = await database.pool.query<{ associations: string; snapshots: string; results: string;
+      branch_state: string; branch_pointer_count: string; success_outbox_count: string }>(
+      `SELECT (SELECT count(*)::text FROM ${schema}.orchestration_revision_snapshots WHERE tenant_id=$1) AS associations,
+         (SELECT count(*)::text FROM ${schema}.catalog_snapshots WHERE tenant_id=$1) AS snapshots,
+         (SELECT count(*)::text FROM ${schema}.orchestration_job_results WHERE tenant_id=$1) AS results,
+         (SELECT state FROM ${schema}.orchestration_jobs WHERE tenant_id=$1 AND job_id=$2) AS branch_state,
+         (SELECT count(*)::text FROM ${schema}.catalog_branch_pointers WHERE tenant_id=$1) AS branch_pointer_count,
+         (SELECT count(*)::text FROM ${schema}.orchestration_outbox WHERE tenant_id=$1 AND job_id=$2
+            AND payload->>'state'='succeeded') AS success_outbox_count`, [tenantId, second!.jobId],
+    );
+    expect(stored.rows[0]).toEqual({ associations: "1", snapshots: "1", results: "1",
+      branch_state: "leased", branch_pointer_count: "0", success_outbox_count: "0" });
+  } finally { await database.cleanup(); }
+});
+
+for (const scenario of ["same", "different"] as const) {
+  test(`concurrent baseline and branch completions with ${scenario} digest serialize to one immutable association`, async () => {
+    const database = await createCatalogTestDatabase();
+    try {
+      const revision = scenario === "same" ? "0".repeat(40) : "5".repeat(40);
+      const baseline = await preparedAnalysis(revision);
+      const branch = scenario === "same" ? baseline : await preparedAnalysis(revision, "changed");
+      const { repository, worker } = await activate(database, baseline.result);
+      const access = createAccessPolicyStore(database.pool, { schema: database.schema });
+      for (const scopeId of contractSnapshotFromAnalyzerResult(branch.result, configuration.fingerprint).requiredScopeIds) {
+        await access.putScope({ tenantId }, { scopeId, active: true });
+      }
+      await worker.putConcurrencyPolicy(admin, { globalLimit: 16, repositoryLimit: 4, serviceLimit: 2 });
+      await repository.ingestEvent(context, baselineEvent(revision));
+      await repository.ingestEvent(context, branchEvent(`concurrent-${scenario}`, "2", revision));
+      const claims = await worker.claimJobs(workerIdentity, { limit: 2 });
+      expect(claims).toHaveLength(2);
+      const outcomes = await Promise.allSettled(claims.map((claim) => {
+        const prepared = claim.kind === "baseline_analysis" ? baseline : branch;
+        return worker.runJob(workerIdentity, claim.lease, {
+          resolver: { resolve: async () => ({ request: prepared.request,
+            changedPaths: [], changedPathsComplete: false }) },
+          analyzer: { analyze: async () => prepared.result },
+        });
+      }));
+      const successful = outcomes.filter((outcome) => outcome.status === "fulfilled");
+      const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+      expect(successful).toHaveLength(scenario === "same" ? 2 : 1);
+      expect(failures).toHaveLength(scenario === "same" ? 0 : 1);
+      if (scenario === "different") expect(failures[0]?.reason).toMatchObject({
+        code: "REVISION_ASSOCIATION_CONFLICT" });
+      const schema = quoteCatalogTestSchema(database.schema);
+      const stored = await database.pool.query<{ associations: string; snapshots: string; results: string;
+        success_outboxes: string }>(
+        `SELECT (SELECT count(*)::text FROM ${schema}.orchestration_revision_snapshots WHERE tenant_id=$1) AS associations,
+           (SELECT count(*)::text FROM ${schema}.catalog_snapshots WHERE tenant_id=$1) AS snapshots,
+           (SELECT count(*)::text FROM ${schema}.orchestration_job_results WHERE tenant_id=$1) AS results,
+           (SELECT count(*)::text FROM ${schema}.orchestration_outbox WHERE tenant_id=$1
+              AND payload->>'state'='succeeded') AS success_outboxes`, [tenantId],
+      );
+      expect(stored.rows[0]).toEqual({ associations: "1", snapshots: "1",
+        results: scenario === "same" ? "2" : "1",
+        success_outboxes: scenario === "same" ? "2" : "1" });
+    } finally { await database.cleanup(); }
+  });
+}
 
 test("a later same-revision confirmation is promoted with its newer checkpoint evidence", async () => {
   const database = await createCatalogTestDatabase();
