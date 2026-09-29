@@ -6,6 +6,7 @@ import {
   canonicalOrchestrationHash,
   classifyProviderUpdate,
   computeRetryDelayMs,
+  createOrchestrationRepository,
   eventSha256,
   isConfiguredBranch,
   parseAuthenticatedEventContext,
@@ -90,11 +91,14 @@ describe("D08 orchestration contracts", () => {
       "OutboxStatusSchema",
       "ProviderEvidenceSchema",
       "WorkerIdentitySchema",
+      "applyOrchestrationMigrationManifest",
+      "applyOrchestrationMigrations",
       "authorizeNormalizedEvent",
       "calculateConfigurationImpact",
       "canonicalOrchestrationHash",
       "classifyProviderUpdate",
       "computeRetryDelayMs",
+      "createOrchestrationRepository",
       "eventSha256",
       "isConfiguredBranch",
       "normalizedEventIdentityProjection",
@@ -148,6 +152,24 @@ describe("D08 orchestration contracts", () => {
       config(),
     )).toThrowError(expect.objectContaining({ code: "EVENT_UNAUTHORIZED" }));
     expect(touched).not.toHaveBeenCalled();
+  });
+
+  test("denies configuration events without configuration.admin before database access", async () => {
+    const connect = vi.fn();
+    const repository = createOrchestrationRepository({ connect } as never, { schema: "api_truth_test_unit" });
+    const event = {
+      ...branchEvent(),
+      event_type: "configuration.changed",
+      subjects: { service_ids: ["orders"] },
+      payload: {
+        config_version: "1.0.0", config_fingerprint: "candidate",
+        affected_service_ids: ["orders"], affected_scope: "installation",
+      },
+    };
+    await expect(repository.ingestEvent({
+      ...context(), allowedEventTypes: ["configuration.changed"], capabilities: ["event.ingest"],
+    }, event)).rejects.toMatchObject({ code: "EVENT_UNAUTHORIZED" });
+    expect(connect).not.toHaveBeenCalled();
   });
 
   test("authorizes exact repository/service scope and rejects widening", () => {

@@ -1,0 +1,273 @@
+import { expect, test } from "vitest";
+
+import {
+  applyOrchestrationMigrationManifest,
+  applyOrchestrationMigrations,
+  createOrchestrationRepository,
+} from "../../packages/orchestration/src/index.js";
+import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
+
+const configuration = (fingerprint = "config-a") => ({
+  fingerprint,
+  document: {
+    config_version: "1.0.0",
+    access_scopes: [{ access_scope_id: "engineering", label: "Engineering" }],
+    repositories: [{
+      repository_id: "commerce", provider: "github", locator: "acme/commerce", access_scope_id: "engineering",
+      services: [
+        {
+          service_id: "orders", root: "services/orders",
+          analyzer: { adapter_id: "typescript", adapter_version: "1" },
+          intended_branches: ["main"],
+          environments: [{ name: "uat", intended_branch: "main", deployment_authority: { adapter_id: "deploy", access_scope_id: "engineering" } }],
+        },
+        {
+          service_id: "payments", root: "services/payments",
+          analyzer: { adapter_id: "typescript", adapter_version: "1" },
+          intended_branches: [], environments: [],
+        },
+      ],
+    }],
+    inference: { enabled: false }, logs: { enabled: false },
+  },
+});
+
+const admin = (tenantId = "tenant-a") => ({
+  tenantId, principalId: "admin", capabilities: ["configuration.admin", "orchestration.status.read"],
+});
+const eventContext = (tenantId = "tenant-a") => ({
+  tenantId, principalId: "connector", producerId: "github-adapter",
+  allowedEventTypes: ["branch.updated", "configuration.changed", "deployment.changed", "source_document.changed"],
+  allowedRepositories: ["commerce"], allowedServices: ["orders", "payments"],
+  deploymentAuthorityGrants: [], capabilities: ["configuration.admin", "event.ingest"],
+});
+const branchEvent = (overrides: Record<string, unknown> = {}) => ({
+  event_version: "1.0.0", event_id: "event-1", event_type: "branch.updated",
+  producer: { producer_id: "github-adapter", adapter_version: "1" },
+  occurred_at: "2026-01-01T00:00:00.000Z", received_at: "2026-01-01T00:00:01.000Z",
+  subjects: { repository_id: "commerce", service_ids: ["orders", "payments"] },
+  provider_evidence: { provider: "github", provider_reference: "delivery-1", order: { kind: "sequence", value: "1" } },
+  payload: { branch: "main", prior_revision: null, new_revision: "a".repeat(40), reference_state: "created" },
+  ...overrides,
+});
+
+test("requires compatible D06 objects before creating any D08 ledger", async () => {
+  const database = await createCatalogTestDatabase({ migrate: false });
+  try {
+    await expect(applyOrchestrationMigrations(database.pool, { schema: database.schema }))
+      .rejects.toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+    const result = await database.pool.query<{ name: string | null }>("SELECT to_regclass($1)::text AS name", [
+      `${database.schema}.orchestration_schema_migrations`,
+    ]);
+    expect(result.rows).toEqual([{ name: null }]);
+  } finally { await database.cleanup(); }
+});
+
+test("applies D08 independently, replays idempotently, and rejects checksum drift", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const rows = await database.pool.query<{ version: string }>(
+      `SELECT version FROM ${schemaSql}.orchestration_schema_migrations`,
+    );
+    expect(rows.rows).toEqual([{ version: "0001_orchestration_core" }]);
+    await expect(applyOrchestrationMigrationManifest(database.pool, { schema: database.schema }, [
+      { version: "0001_orchestration_core", sql: "SELECT 'private migration body'" },
+    ])).rejects.toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+  } finally { await database.cleanup(); }
+});
+
+test("registers immutable configurations idempotently and isolates tenants", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await expect(repository.registerConfiguration(admin(), configuration())).resolves.toMatchObject({ outcome: "inserted" });
+    await expect(repository.registerConfiguration(admin(), configuration())).resolves.toMatchObject({ outcome: "existing" });
+    const changed = configuration();
+    changed.document.logs = {
+      enabled: true, adapter_id: "logs", credential: { secret_ref: { scheme: "env", locator: "LOG_TOKEN" } },
+    } as never;
+    await expect(repository.registerConfiguration(admin(), changed)).rejects.toMatchObject({ code: "CONFIGURATION_CONFLICT" });
+    await expect(repository.registerConfiguration(admin("tenant-b"), configuration())).resolves.toMatchObject({ outcome: "inserted" });
+    await expect(repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" })).resolves.toMatchObject({ checkpointVersion: "1" });
+    await expect(repository.getActiveConfigurationSummary(admin("tenant-b"))).rejects.toMatchObject({ code: "CONFIGURATION_NOT_FOUND" });
+  } finally { await database.cleanup(); }
+});
+
+test("stores mixed targets, equivalent deliveries, and conflicts atomically", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await repository.registerConfiguration(admin(), configuration());
+    await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await expect(repository.ingestEvent(eventContext(), branchEvent())).resolves.toEqual({
+      outcome: "accepted", disposition: "mixed",
+      dispositionCounts: { scheduled: 1, ignored_unconfigured_branch: 1 },
+    });
+    await expect(repository.ingestEvent(eventContext(), branchEvent({ received_at: "2026-01-02T00:00:00.000Z" })))
+      .resolves.toMatchObject({ outcome: "duplicate", disposition: "mixed" });
+    await expect(repository.ingestEvent(eventContext(), branchEvent({
+      payload: { branch: "main", prior_revision: null, new_revision: "b".repeat(40), reference_state: "created" },
+    }))).rejects.toMatchObject({ code: "EVENT_ID_CONFLICT" });
+    await expect(repository.ingestEvent(eventContext(), branchEvent({
+      provider_evidence: {
+        provider: "github", provider_reference: "different-delivery", order: { kind: "sequence", value: "1" },
+      },
+    }))).rejects.toMatchObject({ code: "EVENT_ID_CONFLICT" });
+    const counts = await database.pool.query<{ events: string; deliveries: string; targets: string; outbox: string }>(
+      `SELECT (SELECT count(*) FROM ${schemaSql}.orchestration_events)::text AS events,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_event_deliveries)::text AS deliveries,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets)::text AS targets,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_outbox)::text AS outbox`,
+    );
+    expect(counts.rows).toEqual([{ events: "1", deliveries: "2", targets: "2", outbox: "2" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("concurrent equivalent deliveries create one event and one target/outbox set", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await repository.registerConfiguration(admin(), configuration());
+    await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const receipts = await Promise.all([
+      repository.ingestEvent(eventContext(), branchEvent()),
+      repository.ingestEvent(eventContext(), branchEvent({ received_at: "2026-01-01T00:00:02.000Z" })),
+    ]);
+    expect(receipts.map((receipt) => receipt.outcome).sort()).toEqual(["accepted", "duplicate"]);
+    const rows = await database.pool.query<{ events: string; deliveries: string; targets: string; outbox: string }>(
+      `SELECT (SELECT count(*) FROM ${schemaSql}.orchestration_events)::text AS events,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_event_deliveries)::text AS deliveries,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets)::text AS targets,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_outbox)::text AS outbox`,
+    );
+    expect(rows.rows).toEqual([{ events: "1", deliveries: "2", targets: "2", outbox: "2" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("denies event input before touching it or PostgreSQL", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    const hostile = new Proxy({}, { ownKeys: () => { throw new Error("private-event-value"); } });
+    await expect(repository.ingestEvent({ ...eventContext(), capabilities: [] }, hostile))
+      .rejects.toMatchObject({ code: "EVENT_UNAUTHORIZED" });
+    const result = await database.pool.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_events`);
+    expect(result.rows).toEqual([{ count: "0" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("activates a registered candidate by CAS and computes external-fingerprint impact for every service", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await repository.registerConfiguration(admin(), configuration("config-a"));
+    await repository.registerConfiguration(admin(), configuration("config-b"));
+    await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await expect(repository.activateConfigurationByCas(admin(), {
+      fingerprint: "config-b", expectedCheckpointVersion: "1",
+      providerEvidence: { provider: "control-plane", provider_reference: "approval-1" },
+    })).resolves.toEqual({
+      outcome: "activated", fingerprint: "config-b", checkpointVersion: "2",
+      affectedServiceIds: ["orders", "payments"],
+    });
+    await expect(repository.getActiveConfigurationSummary(admin())).resolves.toMatchObject({
+      fingerprint: "config-b", configVersion: "1.0.0", checkpointVersion: "2",
+    });
+    await expect(repository.activateConfigurationByCas(admin(), {
+      fingerprint: "config-a", expectedCheckpointVersion: "1",
+      providerEvidence: { provider: "control-plane", provider_reference: "approval-2" },
+    })).rejects.toMatchObject({ code: "CONFIGURATION_CONFLICT" });
+  } finally { await database.cleanup(); }
+});
+
+test("configuration events require exact registered candidate authority and activate all impacted services", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await repository.registerConfiguration(admin(), configuration("config-a"));
+    await repository.registerConfiguration(admin(), configuration("config-b"));
+    await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const event = {
+      event_version: "1.0.0", event_id: "config-event", event_type: "configuration.changed",
+      producer: { producer_id: "github-adapter", adapter_version: "1" },
+      occurred_at: "2026-01-01T00:00:00.000Z", received_at: "2026-01-01T00:00:01.000Z",
+      subjects: { service_ids: ["orders", "payments"] },
+      provider_evidence: { provider: "github", provider_reference: "config-delivery", order: { kind: "sequence", value: "1" } },
+      payload: {
+        config_version: "1.0.0", config_fingerprint: "config-b",
+        affected_service_ids: ["orders", "payments"], affected_scope: "installation",
+      },
+    };
+    await expect(repository.ingestEvent(eventContext(), event)).resolves.toEqual({
+      outcome: "accepted", disposition: "scheduled", dispositionCounts: { scheduled: 2 },
+    });
+    await expect(repository.getActiveConfigurationSummary(admin())).resolves.toMatchObject({
+      fingerprint: "config-b", checkpointVersion: "2",
+    });
+    const counts = await database.pool.query<{ targets: string; outbox: string }>(
+      `SELECT (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets)::text AS targets,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_outbox)::text AS outbox`,
+    );
+    expect(counts.rows).toEqual([{ targets: "2", outbox: "2" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("persists deferred events without jobs and protects immutable evidence rows", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await repository.registerConfiguration(admin(), configuration());
+    await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const event = {
+      event_version: "1.0.0", event_id: "document-event", event_type: "source_document.changed",
+      producer: { producer_id: "github-adapter", adapter_version: "1" },
+      occurred_at: "2026-01-01T00:00:00.000Z", received_at: "2026-01-01T00:00:01.000Z",
+      subjects: { repository_id: "commerce", service_ids: ["orders"] },
+      provider_evidence: { provider: "confluence", provider_reference: "page-1" },
+      payload: { document_id: "architecture", source_version: "7", state: "updated", access_label: "engineering" },
+    };
+    await expect(repository.ingestEvent(eventContext(), event)).resolves.toEqual({
+      outcome: "accepted", disposition: "deferred_handler", dispositionCounts: { deferred_handler: 1 },
+    });
+    const jobs = await database.pool.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_jobs`);
+    expect(jobs.rows).toEqual([{ count: "0" }]);
+    await expect(database.pool.query(`UPDATE ${schemaSql}.orchestration_events SET event_type = 'branch.updated'`))
+      .rejects.toMatchObject({ code: "55000" });
+    await expect(database.pool.query(`DELETE FROM ${schemaSql}.orchestration_configurations`))
+      .rejects.toMatchObject({ code: "55000" });
+  } finally { await database.cleanup(); }
+});
+
+test("rolls back later D08 migration failure without leaking objects or SQL details", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const failure = await applyOrchestrationMigrationManifest(database.pool, { schema: database.schema }, [
+      { version: "0002_broken", sql: "CREATE TABLE private_partial (id text); SELECT private syntax" },
+    ]).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+    expect(JSON.stringify(failure)).not.toContain("private syntax");
+    const result = await database.pool.query<{ table_name: string | null; count: string }>(
+      `SELECT to_regclass($1)::text AS table_name,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_schema_migrations)::text AS count`,
+      [`${database.schema}.private_partial`],
+    );
+    expect(result.rows).toEqual([{ table_name: null, count: "1" }]);
+  } finally { await database.cleanup(); }
+});

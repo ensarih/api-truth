@@ -20,6 +20,20 @@ export {
 } from "./hashing.js";
 export { classifyProviderUpdate } from "./ordering.js";
 export {
+  applyOrchestrationMigrationManifest,
+  applyOrchestrationMigrations,
+} from "./migrations.js";
+export type { OrchestrationMigration } from "./migrations.js";
+export { createOrchestrationRepository } from "./repository.js";
+export type {
+  ConfigurationActivation,
+  ConfigurationRegistration,
+  EventDisposition,
+  EventReceipt,
+  OrchestrationRepository,
+  TrustedConfiguration,
+} from "./repository.js";
+export {
   ActiveConfigurationSummarySchema,
   AuthenticatedEventContextSchema,
   ControlContextSchema,
