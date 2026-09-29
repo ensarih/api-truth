@@ -1,7 +1,7 @@
 # API Truth — Implementation Plan
 
-**Status:** development; D01–D07 complete and D08 slices 0–5 implemented.
-**Updated:** 2026-09-29
+**Status:** development; D01–D07 and D08 slices 0–6 complete.
+**Updated:** 2026-09-30
 **Project name:** API Truth (`api-truth`).
 **License:** Apache-2.0; see [LICENSE](LICENSE).
 
@@ -88,7 +88,7 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 | D05 | **Complete:** baseline read-only TypeScript/Express extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
 | D06 | **Complete:** immutable catalog snapshots, current access scopes/grants, and atomic selected-branch pointers | Real PostgreSQL round-trip; unauthorized and revoked reads denied; provider ordering/CAS verified |
 | D07 | **Complete:** add dependency-aware updates and structured differences | Shared changes reach every affected API; safe full-service fallback and deterministic differences demonstrated |
-| D08 | **In progress (slices 0–5 of 0–7 complete):** add events, durable jobs, deduplication, and reconciliation | Duplicate, stale, missed-event cases pass; Slice 6 reconciliation and Slice 7 release gates remain |
+| D08 | **In progress (slices 0–6 of 0–7 complete):** events, durable jobs, isolated PR previews, and exact reconciliation | Duplicate, stale, missed-event, absence, closed-PR, and configuration-change cases pass; Slice 7 final gate remains |
 | D09 | Add deployment/configuration and environment resolution | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
 | D10 | Build OpenAPI compiler and publication manifests | Valid exports, faithful route-variant aggregation/scoping, strict rejection of representation gaps, recovery |
 | D11 | Build query layer, minimal portal, initial MCP tools | Same pinned contract/environment across surfaces |
@@ -210,4 +210,4 @@ Provider-neutral interfaces must remain usable from enterprise CI/CD systems ind
 
 ## 11. Next action
 
-Complete [D08-S6](docs/BACKLOG.md#now--finish-event-orchestration): isolated PR previews and exact reconciliation, followed by D08-S7 validation and documentation. Continue through the Phase 1 gates in the maintained backlog.
+Complete [D08-S7](docs/BACKLOG.md#now--finish-event-orchestration): local workflow, documentation, and final validation. Then continue through the Phase 1 gates in the maintained backlog.

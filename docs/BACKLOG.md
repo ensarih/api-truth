@@ -1,6 +1,6 @@
 # API Truth — Development backlog
 
-**Updated:** 2026-09-29
+**Updated:** 2026-09-30
 **Source of truth for work status:** this file
 **Scope:** public synthetic-fixture development; an enterprise pilot requires separately authorized inputs.
 
@@ -28,7 +28,7 @@ yet. `main` may lag `development` while a task is under review.
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
 | D08-S6 | Complete | Isolated PR previews; exact branch and PR reconciliation; missed-event repair; confirmed branch absence; configuration-change reconciliation. | Exact branch/PR scope validation, closed-PR protection, base prerequisite, absence, no-work replay, durable scheduler duplicate/conflict, stale-generation and configuration-change races pass PostgreSQL lifecycle tests; 307 offline and 141 PostgreSQL tests pass. |
-| D08-S7 | Open | Local round trip, truthful package and architecture docs, status/observer projections, privacy and failure hardening. | Clean install, full offline/PostgreSQL suites, required repeated race gates, teardown, safe status visibility, and independent review pass. |
+| D08-S7 | In progress | Local round trip, truthful package and architecture docs, status/observer projections, privacy and failure hardening. | Local workflow and status projections implemented; clean install and dependency audit pass; 307 offline, 142 PostgreSQL, 84 focused orchestration, and three repeated 7-test race runs pass; teardown and privacy scan pass. Independent adversarial review remains before closure. |
 
 The detailed D08 implementation brief is a local working document. These two
 rows remain in this tracked backlog so the outstanding work survives outside

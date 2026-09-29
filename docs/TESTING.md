@@ -1,7 +1,7 @@
 # Testing and Local Validation
 
-**Status:** offline TypeScript, D07 update/difference, and isolated PostgreSQL catalog suites implemented; Java implementation and later end-to-end surfaces pending.
-**Date:** 2026-09-25
+**Status:** offline TypeScript/D07 and isolated PostgreSQL D06/D08 lifecycle suites implemented; Java and D09–D11 end-to-end surfaces pending.
+**Date:** 2026-09-30
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
 ## 1. Purpose
@@ -34,7 +34,7 @@ No database, application server, API key, integration environment, or Java analy
 |---|---|---|
 | Unit | Function outputs, failure behavior, state transitions, pure schema/identity logic | Native runtime; no network or Docker |
 | Contract | IR/event schemas, plugin output, actual semantic-adapter request/response normalization | Synthetic fixtures and mocked provider transports; no API keys |
-| Integration | PostgreSQL connectivity/isolation plus D06 migrations, immutable snapshots, current access policy, branch ordering/concurrency, and the ephemeral catalog round-trip | Isolated local PostgreSQL plus real implemented components |
+| Integration | PostgreSQL connectivity/isolation; D06 snapshots, access and branch pointers; D08 durable events/jobs, branch analysis, PR previews, exact reconciliation, configuration races and the ephemeral catalog round-trip | Isolated local PostgreSQL plus real implemented components |
 | End-to-end | CLI/event → catalog → OpenAPI/portal/MCP lifecycle | Local application and fixture services, as implemented |
 | Java | Java extractor behavior and common plugin conformance | Pinned JDK/build wrapper when the Java adapter is added |
 
@@ -77,17 +77,18 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
 | `npm run test:updates` | **Available:** run the D07 planner, difference, execution, contract, and local CLI suites without Docker or provider credentials |
+| `npm run test:orchestration` | **Available:** require the fixed PostgreSQL test service, then run the focused D08 event, worker, analysis, PR, reconciliation, and configuration lifecycle suites |
 | `npm run --silent extract -- --source fixtures/typescript/orders/baseline/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | **Available:** emit a validated fixture `AnalyzerResult` as stdout JSON and diagnostics on stderr |
 | `npm run --silent changes -- --base-source fixtures/typescript/orders/baseline/src --changed-source fixtures/typescript/orders/changed/src --service orders --base-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --changed-revision bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb` | **Available:** compare two source trees and emit one safe validated `ContractChangesOutput` document |
 | `npm run --silent catalog:roundtrip -- --input <file> --tenant <id> --principal <id> --branch <configured-branch>` | **Available:** use only the fixed local test database, create/migrate/drop one random schema, seed synthetic policy, ingest/promote/read, and emit a safe JSON-only summary |
-| `npm run test:coverage` | **Available:** report coverage for implemented source behavior; there is no product source yet |
+| `npm run test:coverage` | **Available:** report coverage for implemented source behavior |
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
 | `npm run test:env:up` | **Available:** start the pinned disposable PostgreSQL service and wait up to 60 seconds for health |
 | `npm run test:env:ready` | **Available:** verify Docker, `pg_isready`, and a real SQL query |
 | `npm run test:integration` | **Available:** require the running fixed database, then run real isolation and rollback tests with up to two workers |
 | `npm run test:env:down` | **Available:** remove only the fixed Compose project's containers, network, and volumes |
 
-The integration suite fails nonzero with a distinct dependency message when Docker or PostgreSQL is unavailable. Its schemas use a random `api_truth_test_` prefix per run/worker and its `finally` cleanup drops only those schemas. The Compose service publishes only on loopback, stores PostgreSQL data on tmpfs, and uses synthetic test-only credentials. The catalog command accepts no database target or reset option. It requires the ready fixed service and stores only the explicitly supplied branch pointer; it does not enumerate branches. The v0.1 `intended_branches` array is the exact per-service scan allowlist for later orchestration, and empty means scan none. End-to-end publication/query and Java commands will be added with their implementations rather than as empty successful placeholders.
+The integration suite fails nonzero with a distinct dependency message when Docker or PostgreSQL is unavailable. Its schemas use a random `api_truth_test_` prefix per run/worker and its `finally` cleanup drops only those schemas. The Compose service publishes only on loopback, stores PostgreSQL data on a 512 MiB tmpfs, and uses synthetic test-only credentials. Run `test:env:down` between repeated complete suites to reset this disposable storage. The catalog command accepts no database target or reset option. It requires the ready fixed service and stores only the explicitly supplied branch pointer; it does not enumerate branches. D08 uses the v0.1 `intended_branches` array as the exact per-service scan allowlist; empty means scan none. End-to-end publication/query and Java commands will be added with their implementations rather than as empty successful placeholders.
 
 ### D05-to-D06 developer round-trip
 
@@ -109,6 +110,21 @@ reads, reparses the returned D03 snapshot, and drops the schema in `finally`.
 Its complete stdout contains only snapshot ID, branch, pointer version, and
 `round_trip_valid`. Npm's silent mode suppresses the lifecycle banner and keeps
 the input path, tenant, and principal out of stdout.
+
+### D08 local event-to-catalog round-trip
+
+```sh
+npm run test:env:up
+npm run test:orchestration
+npm run test:env:down
+```
+
+This focused integration suite drives synthetic authenticated events through
+PostgreSQL scheduling, worker leases, the TypeScript analyzer, immutable D06
+snapshots, and guarded branch promotion. It also checks PR previews against
+their declared base, exact branch/PR reconciliation, duplicate scheduler
+requests, confirmed branch absence, and configuration-change races. This is
+an executable test workflow, not a deployed CI connector or API portal.
 
 ### D07 source-revision comparison
 
@@ -171,4 +187,4 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The D04a offline scaffold, D04b PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, and D07 dependency-aware update/difference core are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and D08–D11 application behavior remain pending their phases. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, and update contracts and limitations in `packages/updates/README.md`.
+The D04a offline scaffold, D04b PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, D07 dependency-aware update/difference core, and D08 event/worker orchestration through slice 6 are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and D09–D11 application behavior remain pending their phases. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, update contracts and limitations in `packages/updates/README.md`, and orchestration capabilities in `packages/orchestration/README.md`.

@@ -1,7 +1,7 @@
 # API Truth — Phases and Release Gates
 
-**Status:** all phases unstarted; planning documents are the current deliverable.  
-**Date:** 2026-09-15  
+**Status:** Phase 0 complete; Phase 1 implementation in progress through D08-S6, with no v0.1 release yet.
+**Date:** 2026-09-30
 **References:** [specification](SPECIFICATION.md), [architecture](ARCHITECTURE.md), [implementation plan](../PROJECT%20PLAN.md).
 
 Phases are acceptance-gated. Version numbers below are proposed milestones, not published releases or time estimates. Continuous updates and environment support are mandatory in Phase 1; later phases deepen them rather than introduce them.

@@ -35,7 +35,7 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development is underway. D01–D07 are complete. D08 has implemented event persistence, ordered scheduling, durable workers, and guarded baseline/branch execution; PR preview and reconciliation execution remain. The TypeScript/Express analyzer covers a published bounded subset. Environment resolution, OpenAPI publication, the portal, and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
+Development is underway. D01–D07 and D08 slices 0–6 are complete. D08 now runs durable branch analysis, isolated PR previews, exact branch/PR reconciliation, and configuration-change repair against the local PostgreSQL test environment. Its final validation and documentation slice remains. The TypeScript/Express analyzer covers a published bounded subset. Environment resolution, OpenAPI publication, the portal, and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
 
 Start with:
 
@@ -47,6 +47,7 @@ Start with:
 - [Testing and local validation](docs/TESTING.md)
 - [TypeScript/Express analyzer and support matrix](analyzers/typescript/README.md)
 - [Catalog package and local round-trip](packages/catalog/README.md)
+- [Orchestration package and local lifecycle test](packages/orchestration/README.md)
 
 ## Development direction
 

@@ -1,38 +1,72 @@
 # `@api-truth/orchestration`
 
-Private application-layer contracts and pure policy for durable API Truth
-event and job orchestration. This package treats normalized events and all
-identity contexts as untrusted input, selects only explicitly configured
-branches, and exposes privacy-safe operational projections.
+Durable PostgreSQL event and job orchestration for the supported API Truth
+TypeScript/Express path. This package is the deterministic maintenance core;
+it does not connect to an SCM provider, deploy services, publish OpenAPI, or
+serve portal/MCP requests.
 
-The package persists immutable configurations and normalized events in
-PostgreSQL. It advances branch and pull-request checkpoints only from
-comparable provider evidence, schedules generation-keyed analysis and exact
-reconciliation jobs, and records transactional outbox notifications.
+## Implemented flow
 
-Every scheduling transaction acquires its complete, canonically ordered
-advisory-lock set before locking rows. It stages work so checkpoint rows are
-written before immutable events and targets, jobs and dependencies follow,
-and outbox records are last. Branch selection is exact and case-sensitive.
-Incomparable evidence preserves the current desired state and requests
-exact-scope reconciliation; stale evidence is retained without changing a
-checkpoint. Workers can now claim and heartbeat durable jobs, recover expired
-leases, apply bounded retries and concurrency limits, propagate dependency
-failure, and deliver the transactional outbox with independent permissions.
-Analyzer execution and reconciliation result application follow in later D08
-slices.
+1. Register and activate a validated installation configuration. Each
+   service's `intended_branches` is an exact, case-sensitive allowlist. An
+   empty list scans no branches.
+2. Ingest authenticated D03 events. Immutable event identities, provider
+   ordering, checkpoints, job dependencies, and outbox records survive process
+   restart. A scheduled reconciliation submits the same durable event through
+   `createReconciliationScheduler`; retries reuse its idempotency key and
+   occurrence time.
+3. Claim jobs with a worker carrying `jobs.execute`. `runJob` accepts an
+   immutable source resolver and D05 analyzer for baseline, branch, and PR
+   preview jobs. Exact branch and PR reconcilers observe one literal subject
+   each; neither lists branches or PRs.
+4. Branch analysis pins the desired revision and generation. Eligible success
+   or partial snapshots are stored through D06 and promoted only while the
+   branch checkpoint, configuration, lease, and provider evidence still agree.
+   An unchanged target may reuse an existing snapshot through a separate
+   immutable revision association.
+5. PR previews compare the declared base revision from the revision association
+   index with the head revision. A missing base creates a shared baseline
+   prerequisite. Preview results have `pr_preview` scope and never promote a
+   branch or change environment state. Close and merge cancel outstanding
+   previews.
+6. Exact reconciliation repairs missed branch updates, records confirmed
+   absence without deleting the last D06 pointer, and resolves opaque PR
+   observations. A closed PR cannot reopen from a stale or incomparable open
+   observation. Configuration changes cancel obsolete work and queue exact
+   reconciliation for configured branches.
 
-PR checkpoints keep authoritative state and evidence separate from a pending
-opaque reconciliation request. A first opaque PR observation creates an
-explicit `pending` checkpoint with no authoritative base, head, or state; a
-later opaque observation can only replace that request generation. It cannot
-open, close, or otherwise rewrite the authoritative PR fields before exact-PR
-reconciliation confirms them.
+Workers use database-time leases, bounded retries, dependency propagation,
+capacity limits, and a transactional outbox. The package uses canonically
+ordered advisory locks before checkpoint/job rows. Operational projections
+expose safe states and error codes; raw source, provider responses, and
+credentials are not returned in status records.
 
-A newer comparable observation of the same branch revision advances the
-checkpoint evidence without creating a new generation or retrying terminal
-failed work. Worker completion must therefore validate the job's full key,
-revision, and generation against the current checkpoint, use
-`isMonotoneProviderConfirmation` to accept its newer comparable confirmation,
-and promote with the checkpoint evidence instead of requiring byte equality
-with the job's originating event.
+`getEventStatus`, `getJobStatus`, `getOutboxStatus`, and
+`getActiveConfigurationSummary` require `orchestration.status.read`. Event
+status uses an opaque hashed identity. Missing and cross-tenant records share
+one denial code, and status reads never return stored event documents or job
+result payloads. The transactional outbox is the durable observer boundary;
+its delivery requires a separate worker capability.
+
+## Local validation
+
+From the repository root:
+
+```sh
+npm run test:env:up
+npm run test:orchestration
+npm run test:env:down
+```
+
+`test:orchestration` runs the real PostgreSQL event → job → analyzer → D06
+snapshot/pointer lifecycle plus PR preview, reconciliation, retry, ordering,
+and configuration races against synthetic fixtures. It requires the fixed
+loopback-only test service. Its disposable schemas are dropped by the tests;
+`test:env:down` removes the Compose test service and its tmpfs data. The
+complete offline suite is `npm run check`, and the full PostgreSQL suite is
+`npm run test:integration`.
+
+The application host must implement the resolver and exact provider ports.
+No GitHub adapter, production scheduler, deployment binding, OpenAPI compiler,
+portal, or MCP endpoint is shipped by this package. The maintained
+[backlog](../../docs/BACKLOG.md) tracks those later gates.

@@ -1,8 +1,8 @@
 # API Truth — Product Specification
 
 **Version:** 0.1 draft  
-**Date:** 2026-09-15  
-**Implementation status:** not started  
+**Date:** 2026-09-30
+**Implementation status:** D01–D07 and D08 slices 0–6 implemented; the Phase 1 product gate remains open
 **Related documents:** [architecture](ARCHITECTURE.md), [project plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md)
 
 This document defines the intended product. “Must” denotes a release requirement for the phase assigned in the roadmap. “Should” denotes a preference that may change with evidence. Requirements are not claims about implemented functionality.

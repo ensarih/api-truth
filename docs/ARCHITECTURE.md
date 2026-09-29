@@ -1,10 +1,10 @@
 # API Truth — Architecture and Interface Design
 
-**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog persistence, and the D07 update/difference core implemented; D08–D11 application layers remain design, 2026-09-25.
+**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, and D08 event/worker orchestration through slice 6 implemented; D09–D11 remain design, 2026-09-30.
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 
-Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). Event/job orchestration, environment resolution, publication, and query transports remain Phase 1 deliverables.
+Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). D08 durable event/job orchestration and exact reconciliation are implemented in [`packages/orchestration`](../packages/orchestration/README.md). Environment resolution, publication, and query transports remain Phase 1 deliverables.
 
 ## 1. Components
 
@@ -62,9 +62,9 @@ Branch pointers are tenant/repository/service/branch records promoted through
 locked transactions. Decimal provider sequences use unbounded text ordering;
 opaque provider state uses pointer-version compare-and-swap. D06 stores and
 resolves only a branch explicitly supplied by its caller. The v0.1 service
-configuration's `intended_branches` is the exact scan allowlist: later D08
-orchestration must ignore unlisted branches, and an empty list means scan none.
-D06 does not enumerate repository branches or implement scanning.
+configuration's `intended_branches` is the exact scan allowlist: D08 orchestration
+ignores unlisted branches, and an empty list means scan none. D06 does not
+enumerate repository branches or implement scanning.
 
 ### 2.2 Endpoint identity
 
@@ -222,14 +222,16 @@ snapshots. It never merges a targeted or partial result into the prior
 snapshot. Incomplete target coverage cannot prove endpoint, schema, claim,
 parameter, request-body, or response deletion.
 
-D08 remains responsible for steps 1–2 and job orchestration: event ingestion,
-deduplication, scheduling, retry, supersession, reconciliation, and D06 branch
-pointer promotion. Before it schedules D07, D08 must select only exact branch
-names from `InstallationConfig.repositories[].services[].intended_branches`.
-An empty allowlist schedules no branches; D07 itself accepts one selected
-service/revision and never enumerates branches. Branch patterns require a future
-configuration version. D09–D11 environment resolution, publication/OpenAPI,
-query, portal, and MCP behavior remain unimplemented.
+D08 implements event ingestion, deduplication, durable scheduling, retry,
+supersession, isolated PR previews, exact branch/PR reconciliation, and guarded
+D06 branch-pointer promotion. It selects only exact branch names from
+`InstallationConfig.repositories[].services[].intended_branches`; an empty
+allowlist schedules no branches. A host supplies the immutable source resolver,
+analyzer, and exact provider reconcilers through explicit worker ports. D07
+accepts one selected service/revision and never enumerates branches. Branch
+patterns require a future configuration version. D09–D11 environment
+resolution, publication/OpenAPI, query, portal, and MCP behavior remain
+unimplemented.
 
 1. Validate, persist, and deduplicate the event; create a durable job.
 2. Resolve the immutable source/artifact/configuration scope.
