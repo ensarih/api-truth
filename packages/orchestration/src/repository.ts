@@ -11,6 +11,8 @@ import { eventSha256, semanticOrchestrationId } from "./hashing.js";
 import { classifyProviderUpdate } from "./ordering.js";
 import {
   parseAuthenticatedEventContext,
+  parseActiveConfigurationSummary,
+  parseEventReceipt,
   parseProviderEvidence,
   type ActiveConfigurationSummarySchema,
   type ProviderEvidence,
@@ -102,15 +104,29 @@ const configurationDocument = (input: unknown): InstallationConfig => {
 
 const configDigest = (document: InstallationConfig): `sha256:${string}` => canonicalOrchestrationHash(document);
 
-const configurationFromRow = (row: ConfigurationRow | undefined): TrustedConfiguration["document"] => {
-  if (row === undefined) throw new OrchestrationError("CONFIGURATION_NOT_FOUND");
-  const document = configurationDocument(row.document);
-  if (typeof row.document_sha256 !== "string" || configDigest(document) !== row.document_sha256
-    || typeof row.config_version !== "string" || document.config_version !== row.config_version
-    || typeof row.config_fingerprint !== "string") {
+const storedPositiveDecimal = (value: unknown): string => {
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
     throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
   }
-  return document;
+  return value;
+};
+
+const configurationFromRow = (row: ConfigurationRow | undefined): TrustedConfiguration["document"] => {
+  if (row === undefined) throw new OrchestrationError("CONFIGURATION_NOT_FOUND");
+  try {
+    const parsed = parseConfig(JSON.parse(canonicalOrchestrationJson(row.document)) as unknown);
+    if (!parsed.ok) throw new Error("invalid stored configuration");
+    const document = detachedFrozen(parsed.value);
+    if (typeof row.document_sha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(row.document_sha256)
+      || configDigest(document) !== row.document_sha256
+      || typeof row.config_version !== "string" || document.config_version !== row.config_version
+      || typeof row.config_fingerprint !== "string" || row.config_fingerprint.length === 0) {
+      throw new Error("invalid stored configuration metadata");
+    }
+    return document;
+  } catch {
+    throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+  }
 };
 
 const readConfiguration = async (client: PoolClient, tenantId: string, fingerprint: string): Promise<ConfigurationRow> => {
@@ -146,16 +162,15 @@ const readActive = async (client: PoolClient, tenantId: string, forUpdate = fals
 };
 
 const activeSummary = (row: ActiveRow): Static<typeof ActiveConfigurationSummarySchema> => {
-  if (typeof row.config_fingerprint !== "string" || typeof row.config_version !== "string"
-    || typeof row.checkpoint_version !== "string" || typeof row.activated_at !== "string") {
-    throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
-  }
-  return detachedFrozen({
+  storedPositiveDecimal(row.checkpoint_version);
+  const parsed = parseActiveConfigurationSummary({
     fingerprint: row.config_fingerprint,
     configVersion: row.config_version,
     checkpointVersion: row.checkpoint_version,
     activatedAt: row.activated_at,
   });
+  if (!parsed.ok) throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+  return parsed.value;
 };
 
 const activationInput = (input: unknown, cas: boolean): {
@@ -196,16 +211,17 @@ const insertOutbox = async (
   identity: unknown,
   messageKind: string,
   payload: Record<string, string>,
+  eventProducerId?: string,
   eventId?: string,
 ): Promise<void> => {
   const dedupeKey = canonicalOrchestrationHash(identity);
   const outboxId = semanticOrchestrationId("outbox", identity);
   await client.query(
     `INSERT INTO orchestration_outbox
-       (tenant_id, outbox_id, dedupe_key, message_kind, event_id, payload, state, max_attempts)
-     VALUES ($1, $2, $3, $4, $5, $6, 'pending', 8)
+       (tenant_id, outbox_id, dedupe_key, message_kind, event_producer_id, event_id, payload, state, max_attempts)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 8)
      ON CONFLICT (tenant_id, dedupe_key) DO NOTHING`,
-    [tenantId, outboxId, dedupeKey, messageKind, eventId ?? null, payload],
+    [tenantId, outboxId, dedupeKey, messageKind, eventProducerId ?? null, eventId ?? null, payload],
   );
 };
 
@@ -216,6 +232,7 @@ const activate = async (
   current: ActiveRow,
   evidence: ProviderEvidence,
 ): Promise<ConfigurationActivation> => {
+  activeSummary(current);
   const activeDocument = configurationFromRow(current);
   const candidateDocument = configurationFromRow(candidate);
   const affectedServiceIds = calculateConfigurationImpact(
@@ -249,7 +266,7 @@ const activate = async (
   return detachedFrozen({
     outcome: candidate.config_fingerprint === current.config_fingerprint ? "existing" : "activated",
     fingerprint: String(candidate.config_fingerprint),
-    checkpointVersion: updated.rows[0]!.checkpoint_version,
+    checkpointVersion: storedPositiveDecimal(updated.rows[0]?.checkpoint_version),
     affectedServiceIds,
   });
 };
@@ -295,7 +312,13 @@ const receiptFor = (outcome: "accepted" | "duplicate", dispositions: readonly Ev
   const dispositionCounts: Partial<Record<EventDisposition, number>> = {};
   for (const disposition of dispositions) dispositionCounts[disposition] = (dispositionCounts[disposition] ?? 0) + 1;
   const distinct = Object.keys(dispositionCounts) as EventDisposition[];
-  return detachedFrozen({ outcome, disposition: distinct.length === 1 ? distinct[0]! : "mixed", dispositionCounts });
+  const parsed = parseEventReceipt({
+    outcome,
+    disposition: distinct.length === 1 ? distinct[0]! : "mixed",
+    dispositionCounts,
+  });
+  if (!parsed.ok) throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+  return parsed.value;
 };
 
 export const createOrchestrationRepository = (pool: Pool, options: { schema: string }): OrchestrationRepository => ({
@@ -332,7 +355,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       );
       if (inserted.rows[0] === undefined) throw new OrchestrationError("CONFIGURATION_CONFLICT");
       return detachedFrozen({ outcome: "activated", fingerprint: activation.fingerprint,
-        checkpointVersion: inserted.rows[0].checkpoint_version,
+        checkpointVersion: storedPositiveDecimal(inserted.rows[0].checkpoint_version),
         affectedServiceIds: canonicalStringSet(allTargets(configurationFromRow(candidate)).map((target) => target.serviceId)) });
     });
   },
@@ -357,8 +380,9 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     if (typeof tenantIdInput !== "string" || tenantIdInput.length === 0) throw new OrchestrationError("INVALID_ORCHESTRATION_INPUT");
     return withOrchestrationTransaction(pool, options, async (client) => {
       const row = await readActive(client, tenantIdInput);
+      const summary = activeSummary(row);
       return detachedFrozen({ fingerprint: String(row.config_fingerprint), configVersion: String(row.config_version),
-        documentSha256: row.document_sha256 as `sha256:${string}`, checkpointVersion: String(row.checkpoint_version),
+        documentSha256: row.document_sha256 as `sha256:${string}`, checkpointVersion: summary.checkpointVersion,
         document: configurationFromRow(row) });
     });
   },
@@ -380,7 +404,60 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       && !context.capabilities.includes("configuration.admin")) {
       throw new OrchestrationError("EVENT_UNAUTHORIZED");
     }
+    if (context.producerId !== detachedEvent.producer.producer_id
+      || !context.allowedEventTypes.includes(detachedEvent.event_type as never)
+      || detachedEvent.subjects.repository_id !== undefined
+        && !context.allowedRepositories.includes(detachedEvent.subjects.repository_id)
+      || detachedEvent.subjects.service_ids.some((serviceId) => !context.allowedServices.includes(serviceId))) {
+      throw new OrchestrationError("EVENT_UNAUTHORIZED");
+    }
     return withOrchestrationTransaction(pool, options, async (client) => {
+      await client.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
+        canonicalOrchestrationJson({ tenantId: context.tenantId, producerId: context.producerId, eventId: detachedEvent.event_id }),
+      ]);
+      const existing = await client.query<{ event_sha256: unknown; active_config_fingerprint: unknown }>(
+        `SELECT event_sha256, active_config_fingerprint
+         FROM orchestration_events WHERE tenant_id = $1 AND producer_id = $2 AND event_id = $3`,
+        [context.tenantId, detachedEvent.producer.producer_id, detachedEvent.event_id],
+      );
+      if (existing.rows[0] !== undefined) {
+        const stored = existing.rows[0];
+        const hash = eventSha256(detachedEvent);
+        if (typeof stored.event_sha256 !== "string" || stored.event_sha256 !== hash) {
+          throw new OrchestrationError("EVENT_ID_CONFLICT");
+        }
+        if (typeof stored.active_config_fingerprint !== "string" || stored.active_config_fingerprint.length === 0) {
+          throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
+        }
+        const historical = await readConfiguration(client, context.tenantId, stored.active_config_fingerprint);
+        const historicalDocument = configurationFromRow(historical);
+        let replayCandidate: ConfigurationRow | undefined;
+        if (detachedEvent.event_type === "configuration.changed") {
+          replayCandidate = await readConfiguration(client, context.tenantId,
+            (detachedEvent.payload as { config_fingerprint: string }).config_fingerprint);
+        }
+        authorizeNormalizedEvent(context, detachedEvent, historicalDocument,
+          replayCandidate === undefined ? {} : {
+            activeConfiguration: { fingerprint: historical.config_fingerprint, document: historicalDocument },
+            candidateConfiguration: {
+              fingerprint: replayCandidate.config_fingerprint,
+              document: configurationFromRow(replayCandidate),
+            },
+          });
+        await client.query(
+          `INSERT INTO orchestration_event_deliveries
+             (tenant_id, producer_id, event_id, declared_received_at) VALUES ($1,$2,$3,$4)`,
+          [context.tenantId, detachedEvent.producer.producer_id, detachedEvent.event_id, detachedEvent.received_at],
+        );
+        const targetRows = await client.query<{ disposition: EventDisposition }>(
+          `SELECT disposition FROM orchestration_event_targets
+           WHERE tenant_id = $1 AND producer_id = $2 AND event_id = $3
+           ORDER BY repository_id COLLATE "C", service_id COLLATE "C", scope_key COLLATE "C"`,
+          [context.tenantId, detachedEvent.producer.producer_id, detachedEvent.event_id],
+        );
+        return receiptFor("duplicate", targetRows.rows.map((row) => row.disposition));
+      }
+
       const active = await readActive(client, context.tenantId, true);
       const activeDocument = configurationFromRow(active);
       let candidate: ConfigurationRow | undefined;
@@ -416,15 +493,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
            (tenant_id, producer_id, event_id, declared_received_at) VALUES ($1,$2,$3,$4)`,
         [context.tenantId, authorized.event.producer.producer_id, authorized.event.event_id, authorized.event.received_at],
       );
-      if (inserted.rowCount !== 1) {
-        const targetRows = await client.query<{ disposition: EventDisposition }>(
-          `SELECT disposition FROM orchestration_event_targets
-           WHERE tenant_id = $1 AND producer_id = $2 AND event_id = $3
-           ORDER BY repository_id COLLATE "C", service_id COLLATE "C", scope_key COLLATE "C"`,
-          [context.tenantId, authorized.event.producer.producer_id, authorized.event.event_id],
-        );
-        return receiptFor("duplicate", targetRows.rows.map((row) => row.disposition));
-      }
+      if (inserted.rowCount !== 1) throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
 
       let outcomes: TargetOutcome[] = authorized.event.event_type === "configuration.changed"
         ? authorized.targets.map((target) => ({ ...target, scopeKey: "configuration", disposition: "scheduled" as const }))
@@ -478,7 +547,8 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
           { kind: "event.disposition", producerId: authorized.event.producer.producer_id,
             eventId: authorized.event.event_id, repositoryId: outcome.repositoryId,
             serviceId: outcome.serviceId, scopeKey: outcome.scopeKey, disposition: outcome.disposition },
-          "event.disposition", { eventId: authorized.event.event_id, disposition: outcome.disposition }, authorized.event.event_id);
+          "event.disposition", { eventId: authorized.event.event_id, disposition: outcome.disposition },
+          authorized.event.producer.producer_id, authorized.event.event_id);
       }
       return receiptFor("accepted", outcomes.map((outcome) => outcome.disposition));
     });

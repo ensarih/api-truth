@@ -214,14 +214,24 @@ test("configuration events require exact registered candidate authority and acti
     await expect(repository.ingestEvent(eventContext(), event)).resolves.toEqual({
       outcome: "accepted", disposition: "scheduled", dispositionCounts: { scheduled: 2 },
     });
+    await expect(repository.ingestEvent(eventContext(), {
+      ...event, received_at: "2026-01-02T00:00:01.000Z",
+    })).resolves.toEqual({
+      outcome: "duplicate", disposition: "scheduled", dispositionCounts: { scheduled: 2 },
+    });
+    await expect(repository.ingestEvent(eventContext(), {
+      ...event,
+      payload: { ...event.payload, affected_scope: "different-content" },
+    })).rejects.toMatchObject({ code: "EVENT_ID_CONFLICT" });
     await expect(repository.getActiveConfigurationSummary(admin())).resolves.toMatchObject({
       fingerprint: "config-b", checkpointVersion: "2",
     });
-    const counts = await database.pool.query<{ targets: string; outbox: string }>(
+    const counts = await database.pool.query<{ deliveries: string; targets: string; outbox: string }>(
       `SELECT (SELECT count(*) FROM ${schemaSql}.orchestration_event_targets)::text AS targets,
+              (SELECT count(*) FROM ${schemaSql}.orchestration_event_deliveries)::text AS deliveries,
               (SELECT count(*) FROM ${schemaSql}.orchestration_outbox)::text AS outbox`,
     );
-    expect(counts.rows).toEqual([{ targets: "2", outbox: "2" }]);
+    expect(counts.rows).toEqual([{ deliveries: "2", targets: "2", outbox: "2" }]);
   } finally { await database.cleanup(); }
 });
 
@@ -269,5 +279,146 @@ test("rolls back later D08 migration failure without leaking objects or SQL deta
       [`${database.schema}.private_partial`],
     );
     expect(result.rows).toEqual([{ table_name: null, count: "1" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("rejects catalog lookalike constraints before creating any D08 object", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    const constraints = await database.pool.query<{ table_name: string; constraint_name: string; constraint_type: string }>(
+      `SELECT table_row.relname AS table_name, constraint_row.conname AS constraint_name,
+              constraint_row.contype::text AS constraint_type
+       FROM pg_catalog.pg_constraint constraint_row
+       JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
+       JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+       WHERE namespace_row.nspname = $1 AND table_row.relname IN ('catalog_snapshots', 'catalog_branch_pointers')`,
+      [database.schema],
+    );
+    const uniqueName = constraints.rows.find((row) => row.table_name === "catalog_snapshots" && row.constraint_type === "u")!.constraint_name;
+    const foreignName = constraints.rows.find((row) => row.table_name === "catalog_branch_pointers" && row.constraint_type === "f")!.constraint_name;
+    await database.pool.query(`ALTER TABLE ${schemaSql}.catalog_branch_pointers DROP CONSTRAINT "${foreignName}"`);
+    await database.pool.query(`ALTER TABLE ${schemaSql}.catalog_snapshots DROP CONSTRAINT "${uniqueName}"`);
+    await database.pool.query(`ALTER TABLE ${schemaSql}.catalog_snapshots ADD UNIQUE (tenant_id, repository_id, snapshot_id)`);
+    await database.pool.query(`ALTER TABLE ${schemaSql}.catalog_branch_pointers ADD FOREIGN KEY
+      (tenant_id, repository_id, service_id, branch)
+      REFERENCES ${schemaSql}.catalog_branch_pointers (tenant_id, repository_id, service_id, branch)`);
+    await expect(applyOrchestrationMigrations(database.pool, { schema: database.schema }))
+      .rejects.toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+    const result = await database.pool.query<{ ledger: string | null; configurations: string | null }>(
+      "SELECT to_regclass($1)::text AS ledger, to_regclass($2)::text AS configurations",
+      [`${database.schema}.orchestration_schema_migrations`, `${database.schema}.orchestration_configurations`],
+    );
+    expect(result.rows).toEqual([{ ledger: null, configurations: null }]);
+  } finally { await database.cleanup(); }
+});
+
+test("enforces tenant-scoped result/outbox keys, bounded outcomes, and immutable dependencies", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const config = configuration();
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_configurations
+       (tenant_id, config_fingerprint, config_version, document_sha256, document, registrar_principal_id)
+       VALUES ('tenant-a', 'config-a', '1.0.0', $1, $2, 'admin')`,
+      [`sha256:${"1".repeat(64)}`, config.document],
+    );
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_jobs
+       (tenant_id, job_id, dedupe_key, kind, repository_id, service_id, config_fingerprint,
+        config_document_sha256, subject_generation, state, max_attempts, completed_at)
+       VALUES ('tenant-a', 'job-a', $1, 'baseline_analysis', 'commerce', 'orders', 'config-a', $2, 1, 'succeeded', 1, clock_timestamp()),
+              ('tenant-a', 'job-b', $3, 'baseline_analysis', 'commerce', 'orders', 'config-a', $2, 1, 'queued', 1, NULL)`,
+      [`sha256:${"2".repeat(64)}`, `sha256:${"1".repeat(64)}`, `sha256:${"3".repeat(64)}`],
+    );
+    await expect(database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_job_results
+       (tenant_id, job_id, repository_id, service_id, scope_kind, target_snapshot_id, coverage_status)
+       VALUES ('tenant-a', 'job-a', 'commerce', 'orders', 'baseline', 'missing', 'complete')`,
+    )).rejects.toMatchObject({ code: "23503" });
+    await expect(database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_analysis_checkpoints
+       (tenant_id, repository_id, service_id, service_root, immutable_revision, analyzer_adapter_id,
+        analyzer_adapter_version, exchange_version, ir_version, identity_version, config_version,
+        config_fingerprint, attempt_generation, last_terminal_outcome)
+       VALUES ('tenant-a','commerce','orders','services/orders','rev','typescript','1','1.0.0','1.0.0','1.0.0','1.0.0','config-a',1,'invented')`,
+    )).rejects.toMatchObject({ code: "23514" });
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_job_dependencies (tenant_id, job_id, prerequisite_job_id)
+       VALUES ('tenant-a', 'job-b', 'job-a')`,
+    );
+    await expect(database.pool.query(
+      `UPDATE ${schemaSql}.orchestration_job_dependencies SET prerequisite_job_id = 'job-b'`,
+    )).rejects.toMatchObject({ code: "55000" });
+
+    await database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_events
+       (tenant_id, producer_id, event_id, event_sha256, event_type, service_ids, document, adapter_version,
+        provider, provider_reference, active_config_fingerprint)
+       VALUES ('tenant-a','producer-a','event-a',$1,'source_document.changed',ARRAY['orders'],'{}','1','source','ref','config-a')`,
+      [`sha256:${"4".repeat(64)}`],
+    );
+    await expect(database.pool.query(
+      `INSERT INTO ${schemaSql}.orchestration_outbox
+       (tenant_id, outbox_id, dedupe_key, message_kind, event_producer_id, event_id, payload, state, max_attempts)
+       VALUES ('tenant-a','outbox-a',$1,'event.disposition','producer-b','event-a','{}','pending',1)`,
+      [`sha256:${"5".repeat(64)}`],
+    )).rejects.toMatchObject({ code: "23503" });
+  } finally { await database.cleanup(); }
+});
+
+test("contains corrupt public database projections behind safe storage errors", async () => {
+  const database = await createCatalogTestDatabase();
+  const schemaSql = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await repository.registerConfiguration(admin(), configuration());
+    await repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const checkpointConstraint = await database.pool.query<{ constraint_name: string }>(
+      `SELECT constraint_row.conname AS constraint_name
+       FROM pg_catalog.pg_constraint constraint_row
+       JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
+       JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+       WHERE namespace_row.nspname = $1 AND table_row.relname = 'orchestration_active_configurations'
+         AND pg_get_constraintdef(constraint_row.oid) LIKE '%checkpoint_version > 0%'`,
+      [database.schema],
+    );
+    await database.pool.query(
+      `ALTER TABLE ${schemaSql}.orchestration_active_configurations DROP CONSTRAINT "${checkpointConstraint.rows[0]!.constraint_name}"`,
+    );
+    await database.pool.query(`UPDATE ${schemaSql}.orchestration_active_configurations SET checkpoint_version = 0`);
+    const summaryFailure = await repository.getActiveConfigurationSummary(admin()).catch((error: unknown) => error);
+    expect(summaryFailure).toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+    expect(JSON.stringify(summaryFailure)).not.toContain("config-a");
+
+    await database.pool.query(`UPDATE ${schemaSql}.orchestration_active_configurations SET checkpoint_version = 1`);
+    await repository.ingestEvent(eventContext(), branchEvent());
+    const dispositionConstraint = await database.pool.query<{ constraint_name: string }>(
+      `SELECT constraint_row.conname AS constraint_name
+       FROM pg_catalog.pg_constraint constraint_row
+       JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
+       JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+       WHERE namespace_row.nspname = $1 AND table_row.relname = 'orchestration_event_targets'
+         AND constraint_row.conname LIKE '%disposition%check'`,
+      [database.schema],
+    );
+    await database.pool.query(
+      `ALTER TABLE ${schemaSql}.orchestration_event_targets DROP CONSTRAINT "${dispositionConstraint.rows[0]!.constraint_name}"`,
+    );
+    await database.pool.query(`ALTER TABLE ${schemaSql}.orchestration_event_targets DISABLE TRIGGER orchestration_event_targets_immutable`);
+    await database.pool.query(`UPDATE ${schemaSql}.orchestration_event_targets SET disposition = 'private-corrupt-marker'`);
+    await database.pool.query(`ALTER TABLE ${schemaSql}.orchestration_event_targets ENABLE TRIGGER orchestration_event_targets_immutable`);
+    const receiptFailure = await repository.ingestEvent(eventContext(), {
+      ...branchEvent(), received_at: "2026-01-02T00:00:00.000Z",
+    }).catch((error: unknown) => error);
+    expect(receiptFailure).toMatchObject({ code: "ORCHESTRATION_STORAGE_ERROR" });
+    expect(JSON.stringify(receiptFailure)).not.toContain("private-corrupt-marker");
+    const deliveries = await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schemaSql}.orchestration_event_deliveries`,
+    );
+    expect(deliveries.rows).toEqual([{ count: "1" }]);
   } finally { await database.cleanup(); }
 });

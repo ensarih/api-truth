@@ -40,17 +40,62 @@ const verifyCatalogPrerequisite = async (pool: Pool, schema: string): Promise<vo
     if (row?.checksum_sha256 !== checksum(catalogSql) || row.snapshot_table === null || row.pointer_table === null) {
       throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
     }
-    const constraints = await pool.query<{ count: string }>(
-      `SELECT count(*)::text AS count
+    const constraints = await pool.query<{
+      constraint_name: string;
+      constraint_type: string;
+      table_name: string;
+      columns: string[];
+      referenced_table: string | null;
+      referenced_columns: string[] | null;
+    }>(
+      `SELECT constraint_row.conname AS constraint_name,
+              constraint_row.contype::text AS constraint_type,
+              table_row.relname AS table_name,
+              ARRAY(
+                SELECT attribute.attname::text
+                FROM unnest(constraint_row.conkey) WITH ORDINALITY AS key_column(attribute_number, position)
+                JOIN pg_catalog.pg_attribute attribute
+                  ON attribute.attrelid = constraint_row.conrelid AND attribute.attnum = key_column.attribute_number
+                ORDER BY key_column.position
+              ) AS columns,
+              referenced_table.relname AS referenced_table,
+              CASE WHEN constraint_row.contype = 'f' THEN ARRAY(
+                SELECT attribute.attname::text
+                FROM unnest(constraint_row.confkey) WITH ORDINALITY AS key_column(attribute_number, position)
+                JOIN pg_catalog.pg_attribute attribute
+                  ON attribute.attrelid = constraint_row.confrelid AND attribute.attnum = key_column.attribute_number
+                ORDER BY key_column.position
+              ) ELSE NULL END AS referenced_columns
        FROM pg_catalog.pg_constraint constraint_row
        JOIN pg_catalog.pg_class table_row ON table_row.oid = constraint_row.conrelid
        JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+       LEFT JOIN pg_catalog.pg_class referenced_table ON referenced_table.oid = constraint_row.confrelid
        WHERE namespace_row.nspname = $1
          AND table_row.relname IN ('catalog_snapshots', 'catalog_branch_pointers')
-         AND constraint_row.contype IN ('p', 'f')`,
+         AND constraint_row.contype IN ('p', 'u', 'f')`,
       [schema],
     );
-    if (Number(constraints.rows[0]?.count ?? "0") < 3) {
+    const exactConstraint = (
+      tableName: string,
+      type: string,
+      columns: readonly string[],
+      referencedTable?: string,
+      referencedColumns?: readonly string[],
+    ): boolean => constraints.rows.some((candidate) =>
+      candidate.table_name === tableName
+      && candidate.constraint_type === type
+      && candidate.constraint_name.startsWith(`${tableName}_`)
+      && candidate.columns.join("\u0000") === columns.join("\u0000")
+      && (referencedTable === undefined || candidate.referenced_table === referencedTable)
+      && (referencedColumns === undefined
+        || candidate.referenced_columns?.join("\u0000") === referencedColumns.join("\u0000")));
+    if (!exactConstraint("catalog_snapshots", "p", ["tenant_id", "snapshot_id"])
+      || !exactConstraint("catalog_snapshots", "u", ["tenant_id", "repository_id", "service_id", "snapshot_id"])
+      || !exactConstraint("catalog_branch_pointers", "p", ["tenant_id", "repository_id", "service_id", "branch"])
+      || !exactConstraint(
+        "catalog_branch_pointers", "f", ["tenant_id", "repository_id", "service_id", "snapshot_id"],
+        "catalog_snapshots", ["tenant_id", "repository_id", "service_id", "snapshot_id"],
+      )) {
       throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
     }
   } catch (error) {

@@ -20,6 +20,26 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION orchestration_safe_error_code(value text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+STRICT
+AS $$
+  SELECT value IN (
+    'INVALID_ORCHESTRATION_INPUT', 'EVENT_UNAUTHORIZED', 'EVENT_ID_CONFLICT', 'EVENT_SUBJECT_MISMATCH',
+    'CONFIGURATION_NOT_FOUND', 'CONFIGURATION_CONFLICT', 'CONFIGURATION_UNAUTHORIZED', 'EVENT_ORDER_CONFLICT',
+    'REVISION_ASSOCIATION_CONFLICT', 'JOB_NOT_FOUND_OR_DENIED', 'WORKER_UNAUTHORIZED', 'JOB_LEASE_CONFLICT',
+    'JOB_CANCELLED', 'JOB_SUPERSEDED', 'JOB_DEPENDENCY_FAILED', 'JOB_EXECUTION_FAILED',
+    'RECONCILIATION_FAILED', 'OUTBOX_LEASE_CONFLICT', 'OUTBOX_DELIVERY_FAILED', 'PROMOTION_INELIGIBLE',
+    'ORCHESTRATION_STORAGE_ERROR'
+  );
+$$;
+
+CREATE TRIGGER orchestration_schema_migrations_immutable
+BEFORE UPDATE OR DELETE ON orchestration_schema_migrations
+FOR EACH ROW EXECUTE FUNCTION orchestration_immutable_row();
+
 CREATE TABLE orchestration_configurations (
   tenant_id text NOT NULL,
   config_fingerprint text NOT NULL,
@@ -29,6 +49,8 @@ CREATE TABLE orchestration_configurations (
   registered_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   registrar_principal_id text NOT NULL,
   PRIMARY KEY (tenant_id, config_fingerprint),
+  UNIQUE (tenant_id, config_fingerprint, document_sha256),
+  UNIQUE (tenant_id, config_fingerprint, config_version),
   CHECK (tenant_id <> '' AND config_fingerprint <> '' AND config_version <> '' AND registrar_principal_id <> '')
 );
 
@@ -59,6 +81,7 @@ CREATE TABLE orchestration_events (
   FOREIGN KEY (tenant_id, active_config_fingerprint)
     REFERENCES orchestration_configurations (tenant_id, config_fingerprint) ON DELETE RESTRICT,
   CHECK (orchestration_text_array_is_canonical(service_ids)),
+  CHECK (cardinality(service_ids) > 0),
   CHECK ((order_kind IS NULL) = (order_value IS NULL)),
   CHECK (tenant_id <> '' AND producer_id <> '' AND event_id <> '' AND adapter_version <> ''
     AND provider <> '' AND provider_reference <> '' AND (repository_id IS NULL OR repository_id <> '')
@@ -89,6 +112,7 @@ CREATE TABLE orchestration_active_configurations (
     REFERENCES orchestration_events (tenant_id, producer_id, event_id) ON DELETE RESTRICT,
   CHECK ((provider IS NULL) = (provider_reference IS NULL)),
   CHECK ((order_kind IS NULL) = (order_value IS NULL)),
+  CHECK (order_kind IS NULL OR provider IS NOT NULL),
   CHECK ((activation_producer_id IS NULL) = (activation_event_id IS NULL)),
   CHECK (tenant_id <> '' AND (provider IS NULL OR provider <> '') AND (provider_reference IS NULL OR provider_reference <> '')
     AND (order_value IS NULL OR order_value <> ''))
@@ -143,7 +167,7 @@ CREATE TABLE orchestration_jobs (
   lease_expires_at timestamptz,
   cancellation_requested boolean NOT NULL DEFAULT false,
   superseding_job_id text,
-  safe_last_error_code text,
+  safe_last_error_code text CHECK (orchestration_safe_error_code(safe_last_error_code)),
   result_snapshot_id text,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -154,17 +178,30 @@ CREATE TABLE orchestration_jobs (
   UNIQUE (tenant_id, dedupe_key),
   FOREIGN KEY (tenant_id, event_producer_id, event_id)
     REFERENCES orchestration_events (tenant_id, producer_id, event_id) ON DELETE RESTRICT,
-  FOREIGN KEY (tenant_id, config_fingerprint)
-    REFERENCES orchestration_configurations (tenant_id, config_fingerprint) ON DELETE RESTRICT,
+  FOREIGN KEY (tenant_id, config_fingerprint, config_document_sha256)
+    REFERENCES orchestration_configurations (tenant_id, config_fingerprint, document_sha256) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, superseding_job_id)
     REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, repository_id, service_id, result_snapshot_id)
     REFERENCES catalog_snapshots (tenant_id, repository_id, service_id, snapshot_id) ON DELETE RESTRICT,
   CHECK ((event_producer_id IS NULL) = (event_id IS NULL)),
+  CHECK ((provider IS NULL) = (provider_reference IS NULL)),
   CHECK ((order_kind IS NULL) = (order_value IS NULL)),
+  CHECK (order_kind IS NULL OR provider IS NOT NULL),
   CHECK ((lease_worker_id IS NULL) = (lease_instance_id IS NULL)
     AND (lease_worker_id IS NULL) = (lease_token IS NULL)
     AND (lease_worker_id IS NULL) = (lease_expires_at IS NULL)),
+  CHECK ((state = 'leased') = (lease_worker_id IS NOT NULL)),
+  CHECK ((state IN ('succeeded', 'failed', 'cancelled', 'superseded')) = (completed_at IS NOT NULL)),
+  CHECK (attempt_count <= max_attempts),
+  CHECK (result_snapshot_id IS NULL OR state = 'succeeded'),
+  CHECK (superseding_job_id IS NULL OR state = 'superseded'),
+  CHECK (safe_last_error_code IS NULL OR state IN ('retry_wait', 'failed')),
+  CHECK (
+    (kind = 'baseline_analysis' AND branch IS NULL AND pull_request_id IS NULL)
+    OR (kind IN ('branch_analysis', 'branch_reconciliation') AND branch IS NOT NULL AND pull_request_id IS NULL)
+    OR (kind IN ('pr_preview_analysis', 'pr_reconciliation') AND pull_request_id IS NOT NULL)
+  ),
   CHECK (tenant_id <> '' AND job_id <> '' AND repository_id <> '' AND service_id <> '' AND config_fingerprint <> ''
     AND (branch IS NULL OR branch <> '') AND (pull_request_id IS NULL OR pull_request_id <> '')
     AND (base_revision IS NULL OR base_revision <> '') AND (target_revision IS NULL OR target_revision <> '')
@@ -197,7 +234,13 @@ CREATE TABLE orchestration_event_targets (
   FOREIGN KEY (tenant_id, producer_id, event_id)
     REFERENCES orchestration_events (tenant_id, producer_id, event_id) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
+  FOREIGN KEY (tenant_id, reconciliation_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
   CHECK (tenant_id <> '' AND producer_id <> '' AND event_id <> '' AND repository_id <> '' AND service_id <> '' AND scope_key <> '')
+  ,CHECK (reconciliation_id IS NULL OR reconciliation_id <> '')
+  ,CHECK (safe_reason IS NULL OR safe_reason IN (
+    'unconfigured_branch', 'stale', 'reconciliation_required', 'deferred_handler', 'no_work'
+  ))
+  ,CHECK (disposition = 'scheduled' OR (job_id IS NULL AND reconciliation_id IS NULL))
 );
 
 CREATE INDEX orchestration_event_targets_event_idx
@@ -218,21 +261,28 @@ CREATE TABLE orchestration_job_dependencies (
   CHECK (job_id <> prerequisite_job_id)
 );
 
+CREATE TRIGGER orchestration_job_dependencies_immutable
+BEFORE UPDATE OR DELETE ON orchestration_job_dependencies
+FOR EACH ROW EXECUTE FUNCTION orchestration_immutable_row();
+
 CREATE TABLE orchestration_analysis_checkpoints (
   tenant_id text NOT NULL, repository_id text NOT NULL, service_id text NOT NULL, service_root text NOT NULL,
   immutable_revision text NOT NULL, analyzer_adapter_id text NOT NULL, analyzer_adapter_version text NOT NULL,
   exchange_version text NOT NULL, ir_version text NOT NULL, identity_version text NOT NULL,
   config_version text NOT NULL, config_fingerprint text NOT NULL,
   attempt_generation bigint NOT NULL CHECK (attempt_generation > 0),
-  current_job_id text, last_terminal_outcome text,
+  current_job_id text,
+  last_terminal_outcome text CHECK (last_terminal_outcome IN ('succeeded', 'failed', 'cancelled', 'superseded')),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(), updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (tenant_id, repository_id, service_id, service_root, immutable_revision, analyzer_adapter_id,
     analyzer_adapter_version, exchange_version, ir_version, identity_version, config_version, config_fingerprint),
   FOREIGN KEY (tenant_id, current_job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
-  FOREIGN KEY (tenant_id, config_fingerprint) REFERENCES orchestration_configurations (tenant_id, config_fingerprint) ON DELETE RESTRICT
+  FOREIGN KEY (tenant_id, config_fingerprint, config_version)
+    REFERENCES orchestration_configurations (tenant_id, config_fingerprint, config_version) ON DELETE RESTRICT
   ,CHECK (tenant_id <> '' AND repository_id <> '' AND service_id <> '' AND service_root <> ''
     AND immutable_revision <> '' AND analyzer_adapter_id <> '' AND analyzer_adapter_version <> ''
     AND exchange_version <> '' AND ir_version <> '' AND identity_version <> '' AND config_version <> '' AND config_fingerprint <> '')
+  ,CHECK (current_job_id IS NULL OR attempt_generation > 0)
 );
 
 CREATE TABLE orchestration_branch_checkpoints (
@@ -242,7 +292,11 @@ CREATE TABLE orchestration_branch_checkpoints (
   order_kind text CHECK (order_kind IN ('sequence', 'cursor', 'effective_version')), order_value text,
   checkpoint_version bigint NOT NULL CHECK (checkpoint_version > 0), analysis_generation bigint NOT NULL CHECK (analysis_generation >= 0),
   current_job_id text, last_successful_job_id text, last_successful_snapshot_id text,
-  last_successful_selected_revision text, last_successful_association_key text, latest_outcome text,
+  last_successful_selected_revision text, last_successful_association_key text,
+  latest_outcome text CHECK (latest_outcome IN (
+    'queued', 'leased', 'retry_wait', 'succeeded', 'failed', 'cancelled', 'superseded',
+    'no_work', 'reconciliation_required', 'absent'
+  )),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(), updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (tenant_id, repository_id, service_id, branch),
   FOREIGN KEY (tenant_id, current_job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
@@ -250,7 +304,11 @@ CREATE TABLE orchestration_branch_checkpoints (
   FOREIGN KEY (tenant_id, repository_id, service_id, last_successful_snapshot_id)
     REFERENCES catalog_snapshots (tenant_id, repository_id, service_id, snapshot_id) ON DELETE RESTRICT,
   CHECK ((order_kind IS NULL) = (order_value IS NULL)),
+  CHECK (current_job_id IS NULL OR analysis_generation > 0),
   CHECK ((desired_state = 'present' AND desired_revision IS NOT NULL) OR (desired_state = 'absent' AND desired_revision IS NULL AND current_job_id IS NULL)),
+  CHECK ((last_successful_job_id IS NULL) = (last_successful_snapshot_id IS NULL)
+    AND (last_successful_job_id IS NULL) = (last_successful_selected_revision IS NULL)
+    AND (last_successful_job_id IS NULL) = (last_successful_association_key IS NULL)),
   CHECK (tenant_id <> '' AND repository_id <> '' AND service_id <> '' AND branch <> ''
     AND provider <> '' AND provider_reference <> '' AND (desired_revision IS NULL OR desired_revision <> '')
     AND (order_value IS NULL OR order_value <> ''))
@@ -269,6 +327,7 @@ CREATE TABLE orchestration_pr_checkpoints (
   FOREIGN KEY (tenant_id, current_job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, last_preview_result_job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
   CHECK ((order_kind IS NULL) = (order_value IS NULL)),
+  CHECK (current_job_id IS NULL OR analysis_generation > 0),
   CHECK (tenant_id <> '' AND repository_id <> '' AND service_id <> '' AND pull_request_id <> ''
     AND base_branch <> '' AND base_revision <> '' AND head_branch <> '' AND head_revision <> ''
     AND provider <> '' AND provider_reference <> '' AND (order_value IS NULL OR order_value <> ''))
@@ -277,10 +336,14 @@ CREATE TABLE orchestration_pr_checkpoints (
 CREATE TABLE orchestration_reconciliation_checkpoints (
   tenant_id text NOT NULL, repository_id text NOT NULL, service_id text NOT NULL, branch text NOT NULL,
   requested_provider_snapshot_reference text NOT NULL, generation bigint NOT NULL CHECK (generation > 0),
-  current_job_id text, last_completed_reference text, last_outcome text, safe_last_error_code text,
+  current_job_id text, last_completed_reference text,
+  last_outcome text CHECK (last_outcome IN ('no_work', 'repaired', 'absent', 'obsolete', 'failed')),
+  safe_last_error_code text CHECK (orchestration_safe_error_code(safe_last_error_code)),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(), updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (tenant_id, repository_id, service_id, branch),
   FOREIGN KEY (tenant_id, current_job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
+  CHECK ((last_outcome = 'failed' AND safe_last_error_code IS NOT NULL)
+    OR (last_outcome IS DISTINCT FROM 'failed' AND safe_last_error_code IS NULL)),
   CHECK (tenant_id <> '' AND repository_id <> '' AND service_id <> '' AND branch <> ''
     AND requested_provider_snapshot_reference <> '')
 );
@@ -298,6 +361,8 @@ CREATE TABLE orchestration_revision_snapshots (
   FOREIGN KEY (tenant_id, repository_id, service_id, snapshot_id)
     REFERENCES catalog_snapshots (tenant_id, repository_id, service_id, snapshot_id) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, producing_job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT
+  ,FOREIGN KEY (tenant_id, config_fingerprint, config_version)
+    REFERENCES orchestration_configurations (tenant_id, config_fingerprint, config_version) ON DELETE RESTRICT
   ,CHECK (tenant_id <> '' AND repository_id <> '' AND service_id <> '' AND service_root <> ''
     AND immutable_revision <> '' AND analyzer_adapter_id <> '' AND analyzer_adapter_version <> ''
     AND exchange_version <> '' AND ir_version <> '' AND identity_version <> '' AND config_version <> ''
@@ -310,13 +375,18 @@ FOR EACH ROW EXECUTE FUNCTION orchestration_immutable_row();
 
 CREATE TABLE orchestration_job_results (
   tenant_id text NOT NULL, job_id text NOT NULL,
+  repository_id text NOT NULL, service_id text NOT NULL,
   scope_kind text NOT NULL CHECK (scope_kind IN ('baseline', 'branch', 'pr_preview')),
   plan_version text, difference_version text, plan_document jsonb, difference_document jsonb,
   target_snapshot_id text NOT NULL, coverage_status text NOT NULL CHECK (coverage_status IN ('complete', 'incomplete', 'unknown')),
   completed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (tenant_id, job_id),
   FOREIGN KEY (tenant_id, job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
-  CHECK (tenant_id <> '' AND job_id <> '' AND target_snapshot_id <> '')
+  FOREIGN KEY (tenant_id, repository_id, service_id, target_snapshot_id)
+    REFERENCES catalog_snapshots (tenant_id, repository_id, service_id, snapshot_id) ON DELETE RESTRICT,
+  CHECK ((plan_version IS NULL) = (plan_document IS NULL)),
+  CHECK ((difference_version IS NULL) = (difference_document IS NULL)),
+  CHECK (tenant_id <> '' AND job_id <> '' AND repository_id <> '' AND service_id <> '' AND target_snapshot_id <> '')
 );
 
 CREATE TRIGGER orchestration_job_results_immutable
@@ -326,19 +396,32 @@ FOR EACH ROW EXECUTE FUNCTION orchestration_immutable_row();
 CREATE TABLE orchestration_outbox (
   tenant_id text NOT NULL, outbox_id text NOT NULL,
   dedupe_key text NOT NULL CHECK (dedupe_key ~ '^sha256:[0-9a-f]{64}$'),
-  message_kind text NOT NULL, event_id text, job_id text,
+  message_kind text NOT NULL CHECK (message_kind IN (
+    'event.disposition', 'configuration.activated', 'job.state_changed', 'reconciliation.state_changed'
+  )),
+  event_producer_id text, event_id text, job_id text,
   payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
   state text NOT NULL CHECK (state IN ('pending', 'leased', 'retry_wait', 'delivered', 'exhausted')),
   attempt_count bigint NOT NULL DEFAULT 0 CHECK (attempt_count >= 0), max_attempts bigint NOT NULL CHECK (max_attempts > 0),
   available_at timestamptz NOT NULL DEFAULT clock_timestamp(), lease_worker_id text, lease_instance_id text,
-  lease_token text, lease_expires_at timestamptz, safe_last_error_code text,
+  lease_token text, lease_expires_at timestamptz,
+  safe_last_error_code text CHECK (orchestration_safe_error_code(safe_last_error_code)),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(), updated_at timestamptz NOT NULL DEFAULT clock_timestamp(), delivered_at timestamptz,
   PRIMARY KEY (tenant_id, outbox_id), UNIQUE (tenant_id, dedupe_key),
+  FOREIGN KEY (tenant_id, event_producer_id, event_id)
+    REFERENCES orchestration_events (tenant_id, producer_id, event_id) ON DELETE RESTRICT,
   FOREIGN KEY (tenant_id, job_id) REFERENCES orchestration_jobs (tenant_id, job_id) ON DELETE RESTRICT,
+  CHECK ((event_producer_id IS NULL) = (event_id IS NULL)),
+  CHECK (message_kind <> 'event.disposition' OR event_id IS NOT NULL),
+  CHECK (message_kind NOT IN ('job.state_changed', 'reconciliation.state_changed') OR job_id IS NOT NULL),
   CHECK ((lease_worker_id IS NULL) = (lease_instance_id IS NULL)
     AND (lease_worker_id IS NULL) = (lease_token IS NULL)
     AND (lease_worker_id IS NULL) = (lease_expires_at IS NULL)),
-  CHECK (tenant_id <> '' AND outbox_id <> '' AND message_kind <> '')
+  CHECK ((state = 'leased') = (lease_worker_id IS NOT NULL)),
+  CHECK ((state = 'delivered') = (delivered_at IS NOT NULL)),
+  CHECK (attempt_count <= max_attempts),
+  CHECK (safe_last_error_code IS NULL OR state IN ('retry_wait', 'exhausted')),
+  CHECK (tenant_id <> '' AND outbox_id <> '')
 );
 
 CREATE INDEX orchestration_outbox_claim_idx
