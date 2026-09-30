@@ -39,12 +39,16 @@ transaction that switches a publication pointer.
 `applyOpenApiMigrations(pool, { schema })` creates tenant-scoped immutable
 artifact and publication tables plus versioned current pointers in the same
 PostgreSQL schema as the catalog. `createOpenApiPublicationStore(pool,
-{ schema })` currently supports revision selectors through `prepareRevision`,
-`publish`, `readCurrent`, and `readPublication`. Publication rechecks the
-snapshot, access grants, canonical bytes, and expected pointer version inside
-one transaction. A replay of the current publication is idempotent. Reads
-recheck grants and content integrity. Branch/environment authority checks and
-external OpenAPI validation remain D10-S3/S4 work.
+{ schema })` prepares revision, branch, and environment selectors through
+`prepareRevision`, `prepareBranch`, or `prepareEnvironment`; all use `publish`,
+`readCurrent`, and `readPublication`. Publication rechecks the authoritative
+branch pointer or resolved serving checkpoint, snapshot, access grants,
+canonical bytes, and expected publication-pointer version inside one
+transaction. A replay of the current publication is idempotent. Current reads
+withhold stale branch/environment selections; all reads recheck grants and
+content integrity. Environment publications retain their source and deployment
+access scopes so historical reads also respect revocation. External OpenAPI
+validation and the local round-trip gate remain D10-S4 work.
 
 Run `npx vitest run tests/unit/openapi-projection.test.ts
 tests/unit/openapi-compiler.test.ts tests/unit/openapi-preparation.test.ts` from

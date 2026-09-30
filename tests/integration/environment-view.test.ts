@@ -12,7 +12,9 @@ import { applyOrchestrationMigrations, createOrchestrationRepository }
 import { applyEnvironmentMigrations, createEnvironmentInboxWorker, createEnvironmentReconciler,
   createEnvironmentReconciliationWorker, createEnvironmentRepository, createEnvironmentViewRepository }
   from "../../packages/environment/src/index.js";
-import { createCatalogTestDatabase } from "./support/database.js";
+import { checkEnvironmentPin } from "../../packages/openapi/src/environment-pin.js";
+import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
+import type { CatalogTestDatabase } from "./support/database.js";
 
 const revisionA = "a".repeat(40);
 const revisionB = "b".repeat(40);
@@ -68,6 +70,19 @@ const attempt = (eventId: string, artifactId: string, revision: string, order = 
     revision: { state: "known", revision } },
 });
 const key = { repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+const verifyPin = async (database: CatalogTestDatabase, checkpointVersion: string,
+  snapshotId: string, configFingerprint = "config-a") => {
+  const client = await database.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL search_path TO ${quoteCatalogTestSchema(database.schema)}, pg_catalog`);
+    const result = await checkEnvironmentPin(client, { tenantId: "tenant-a", principalId: "architect" },
+      { kind: "environment", ...key, snapshotId, revision: revisionA, configFingerprint,
+        checkpointVersion, resolvedSnapshotIds: [snapshotId] });
+    await client.query("COMMIT");
+    return result.status;
+  } finally { client.release(); }
+};
 let sourceRoot: string;
 let result: AnalyzerResult;
 
@@ -115,21 +130,27 @@ test("an authorized UAT view binds only the observed artifact to an exact analyz
       latestAttempt: { deploymentId: "failed-b", state: "failed" } });
     const catalog = createCatalogStore(database.pool, { schema: database.schema });
     await catalog.ingestAnalyzerResult({ tenantId: "tenant-a", result, configFingerprint: "config-a" });
-    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed",
+    const resolvedView = await view.getEnvironment(reader, key);
+    expect(resolvedView).toMatchObject({ deployment: "deployed",
       contract: "resolved", snapshotId: result.snapshot_id });
+    expect(await verifyPin(database, resolvedView.checkpointVersion!, result.snapshot_id)).toBe("match");
     await orchestration.ingestEvent(repairContext, repairRequest("verify-current"));
     const pendingView = await view.getEnvironment(reader, key);
     expect(pendingView).toMatchObject({ deployment: "unknown", contract: "unavailable",
       active: [], reconciliationRequired: true });
     expect(pendingView).not.toHaveProperty("snapshotId");
+    expect(await verifyPin(database, resolvedView.checkpointVersion!, result.snapshot_id)).toBe("stale");
     const exact = createEnvironmentReconciler({ environment, orchestration,
       provider: { observe: async () => serving("verified-current", "2", [artA]) },
       workerIdentity: worker, eventContext: context });
     await createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact).drain(worker);
-    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed",
+    const repairedView = await view.getEnvironment(reader, key);
+    expect(repairedView).toMatchObject({ deployment: "deployed",
       contract: "resolved", snapshotId: result.snapshot_id, reconciliationRequired: false });
+    expect(await verifyPin(database, repairedView.checkpointVersion!, result.snapshot_id)).toBe("match");
     await access.putGrant({ tenantId: "tenant-a" }, { principalId: "architect", scopeId: "contract-read", active: false });
     expect(await view.getEnvironment(reader, key)).toMatchObject({ contract: "pending_analysis" });
+    expect(await verifyPin(database, repairedView.checkpointVersion!, result.snapshot_id)).toBe("denied");
     await access.putGrant({ tenantId: "tenant-a" }, { principalId: "architect", scopeId: "contract-read", active: true });
     await orchestration.ingestEvent(context, serving("confirmed-absent", "3", []));
     await environment.recordServingObservation(worker,
@@ -156,6 +177,7 @@ test("an authorized UAT view binds only the observed artifact to an exact analyz
       providerEvidence: { provider: "control-plane", provider_reference: "config-b-active" } });
     expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "unknown",
       contract: "unavailable", reconciliationRequired: true, configFingerprint: "config-b" });
+    expect(await verifyPin(database, repairedView.checkpointVersion!, result.snapshot_id)).toBe("stale");
   } finally { await database.cleanup(); }
 });
 

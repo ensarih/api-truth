@@ -12,7 +12,7 @@ services:
     ports:
       - "127.0.0.1:55432:5432"
     tmpfs:
-      - /var/lib/postgresql:rw,noexec,nosuid,size=512m
+      - /var/lib/postgresql:rw,noexec,nosuid,size=2g
     healthcheck:
       test:
         - CMD-SHELL
