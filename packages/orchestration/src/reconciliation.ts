@@ -4,6 +4,9 @@ import { parseConfig, parseEvent, type EventEnvelope, type InstallationConfig } 
 import { canonicalOrchestrationHash, canonicalOrchestrationJson, detachedFrozen } from "./canonical.js";
 import { withOrchestrationTransaction, withRestartingOrchestrationTransaction } from "./database.js";
 import { OrchestrationError } from "./errors.js";
+import {
+  emitOrchestrationObservation, orchestrationObserver, type OrchestrationObserver,
+} from "./observer.js";
 import { semanticOrchestrationId } from "./hashing.js";
 import { acquireAdvisoryLocks, requireDiscoveredLocks } from "./locking.js";
 import { classifyProviderUpdate } from "./ordering.js";
@@ -146,7 +149,8 @@ const finishReconciliation = async (client: PoolClient, worker: WorkerIdentity, 
 };
 
 export const executeLeasedReconciliationJob = async (pool: Pool, options: { schema: string },
-  worker: WorkerIdentity, lease: JobLease, portsInput: unknown): Promise<JobOutcome> => {
+  worker: WorkerIdentity, lease: JobLease, portsInput: unknown,
+  observer: OrchestrationObserver = orchestrationObserver({})): Promise<JobOutcome> => {
   const kind = await withOrchestrationTransaction(pool, options, async (client) => {
     const selected = await client.query<{ kind: string }>(
       `SELECT kind FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
@@ -154,7 +158,7 @@ export const executeLeasedReconciliationJob = async (pool: Pool, options: { sche
     return selected.rows[0]?.kind;
   });
   if (kind === "pr_reconciliation") return executeLeasedPullRequestReconciliationJob(pool, options,
-    worker, lease, portsInput);
+    worker, lease, portsInput, observer);
   const prepared = await withOrchestrationTransaction(pool, options, async (client) => {
     const selected = await client.query<Job>(
       `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
@@ -221,7 +225,7 @@ export const executeLeasedReconciliationJob = async (pool: Pool, options: { sche
       { fingerprint: prepared.job.config_fingerprint, documentSha256: prepared.job.config_document_sha256,
         document: prepared.configuration }))];
 
-  return withRestartingOrchestrationTransaction(pool, options, initialLocks, async (client, carriedLocks) => {
+  const completed = await withRestartingOrchestrationTransaction(pool, options, initialLocks, async (client, carriedLocks) => {
     const current = await client.query<Job>(
       `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
     );
@@ -304,20 +308,39 @@ export const executeLeasedReconciliationJob = async (pool: Pool, options: { sche
     );
     if (locked.rows[0]?.generation !== job!.subject_generation
       || locked.rows[0]?.current_job_id !== job!.job_id) fail("JOB_SUPERSEDED");
-    const outcome = observation.state === "absent" ? "absent" : forceRepair ? "repaired" : "no_work";
+    const outcome: "absent" | "repaired" | "no_work" = observation.state === "absent"
+      ? "absent" : forceRepair ? "repaired" : "no_work";
     await client.query(
       `UPDATE orchestration_reconciliation_checkpoints SET last_outcome=$5,last_completed_reference=$6,
          safe_last_error_code=NULL,updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND branch=$4`,
       [job!.tenant_id, job!.repository_id, job!.service_id, job!.branch, outcome, prepared.reference],
     );
-    await persistScheduledJobs(client, job!.tenant_id, plan, staged);
-    return finishReconciliation(client, worker, lease);
+    const persisted = await persistScheduledJobs(client, job!.tenant_id, plan, staged);
+    return {
+      outcome: await finishReconciliation(client, worker, lease), reconciliationOutcome: outcome,
+      queuedKinds: persisted.queuedKinds, terminalOutcomes: persisted.terminalOutcomes,
+      pendingOutboxes: persisted.outboxCount + 1,
+    };
   });
+  emitOrchestrationObservation(observer, {
+    name: "reconciliation.lifecycle", kind: "branch", outcome: completed.reconciliationOutcome, count: 1,
+  });
+  for (const queuedKind of completed.queuedKinds) emitOrchestrationObservation(observer, {
+    name: "job.lifecycle", kind: queuedKind, outcome: "queued", count: 1,
+  });
+  for (const terminal of completed.terminalOutcomes) emitOrchestrationObservation(observer, {
+    name: "job.lifecycle", kind: terminal.kind, outcome: terminal.outcome, count: 1,
+  });
+  emitOrchestrationObservation(observer, {
+    name: "outbox.lifecycle", outcome: "pending", count: completed.pendingOutboxes,
+  });
+  return completed.outcome;
 };
 
 const executeLeasedPullRequestReconciliationJob = async (pool: Pool, options: { schema: string },
-  worker: WorkerIdentity, lease: JobLease, portsInput: unknown): Promise<JobOutcome> => {
+  worker: WorkerIdentity, lease: JobLease, portsInput: unknown,
+  observer: OrchestrationObserver = orchestrationObserver({})): Promise<JobOutcome> => {
   const prepared = await withOrchestrationTransaction(pool, options, async (client) => {
     const selected = await client.query<Job>(
       `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
@@ -383,7 +406,7 @@ const executeLeasedPullRequestReconciliationJob = async (pool: Pool, options: { 
       fingerprint: prepared.job.config_fingerprint, documentSha256: prepared.job.config_document_sha256,
       document: prepared.configuration,
     })];
-  return withRestartingOrchestrationTransaction(pool, options, initialLocks, async (client, carriedLocks) => {
+  const completed = await withRestartingOrchestrationTransaction(pool, options, initialLocks, async (client, carriedLocks) => {
     await acquireAdvisoryLocks(client, [...carriedLocks, ...initialLocks]);
     const selected = await client.query<Job>(
       `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
@@ -427,7 +450,26 @@ const executeLeasedPullRequestReconciliationJob = async (pool: Pool, options: { 
         headRevision: observation.headRevision, evidence: observation.providerEvidence,
         reconciliationJobId: job.job_id });
     const staged = await stageScheduledJobCheckpoints(client, job.tenant_id, plan);
-    await persistScheduledJobs(client, job.tenant_id, plan, staged);
-    return finishReconciliation(client, worker, lease);
+    const persisted = await persistScheduledJobs(client, job.tenant_id, plan, staged);
+    return {
+      outcome: await finishReconciliation(client, worker, lease),
+      reconciliationOutcome: observation.state === "closed" || observation.state === "merged"
+        ? "obsolete" as const : plan.jobs.length === 0 ? "no_work" as const : "repaired" as const,
+      queuedKinds: persisted.queuedKinds, terminalOutcomes: persisted.terminalOutcomes,
+      pendingOutboxes: persisted.outboxCount + 1,
+    };
   });
+  emitOrchestrationObservation(observer, {
+    name: "reconciliation.lifecycle", kind: "pull_request", outcome: completed.reconciliationOutcome, count: 1,
+  });
+  for (const queuedKind of completed.queuedKinds) emitOrchestrationObservation(observer, {
+    name: "job.lifecycle", kind: queuedKind, outcome: "queued", count: 1,
+  });
+  for (const terminal of completed.terminalOutcomes) emitOrchestrationObservation(observer, {
+    name: "job.lifecycle", kind: terminal.kind, outcome: terminal.outcome, count: 1,
+  });
+  emitOrchestrationObservation(observer, {
+    name: "outbox.lifecycle", outcome: "pending", count: completed.pendingOutboxes,
+  });
+  return completed.outcome;
 };

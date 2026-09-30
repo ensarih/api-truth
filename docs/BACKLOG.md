@@ -15,7 +15,7 @@ reviewed, and validated; it does not imply that a later phase is complete.
 | Work | Status | Evidence or next gate |
 |---|---|---|
 | D01–D07 | Complete | Synthetic constraints/fixtures, executable contracts, local test harness, bounded Express extraction, PostgreSQL catalog, and dependency-aware updates are committed. |
-| D08 | In progress: slices 0–6 of 0–7 complete | PR previews, exact branch/PR reconciliation, durable scheduler requests, and configuration-change races pass the slice 6 gate. Slice 7 remains. |
+| D08 | Complete: slices 0–7 | PR previews, exact reconciliation, durable scheduling, safe status reads, bounded observer signals, and local lifecycle pass the final gate. |
 | D09 | Complete: slices 0–4 | Deployment facts, serving checkpoints, exact-scope repair, authorized views, and the local lifecycle pass 320 offline and 181 PostgreSQL tests. Independent review findings on request races, removed scopes, migration cutover, and stale views are fixed. |
 | D10 | Complete: slices 0–4 | Evidence-gated OpenAPI 3.1 compilation, safe `consumes` variant aggregation, durable revision/branch/environment publication, offline official-schema validation, and a local round trip pass full suites. |
 | D11–D13 | D11 started; D12–D13 open | Shared authorized access, portal/MCP, reference workflow, and release gates remain. |
@@ -30,7 +30,7 @@ yet. `main` may lag `development` while a task is under review.
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
 | D08-S6 | Complete | Isolated PR previews; exact branch and PR reconciliation; missed-event repair; confirmed branch absence; configuration-change reconciliation. | Exact branch/PR scope validation, closed-PR protection, base prerequisite, absence, no-work replay, durable scheduler duplicate/conflict, stale-generation and configuration-change races pass PostgreSQL lifecycle tests; 307 offline and 141 PostgreSQL tests pass. |
-| D08-S7 | In progress | Local round trip, truthful package and architecture docs, status/observer projections, privacy and failure hardening. | Local workflow and status projections implemented; clean install and dependency audit pass; 307 offline, 142 PostgreSQL, 84 focused orchestration, and three repeated 7-test race runs pass; teardown and privacy scan pass. Independent adversarial review remains before closure. |
+| D08-S7 | Complete | Local round trip, truthful package and architecture docs, status/observer projections, privacy and failure hardening. | Independent review found missing observer and active-configuration status disclosure; both were fixed with tests. The observer emits fixed, bounded ingress/job/reconciliation/catalog/outbox signals without scope IDs or error text; denied ingress needs no database write. Missing and denied active-configuration status share one error. Full focused orchestration suite passes 85/85; typecheck and privacy checks pass. |
 
 The detailed D08 implementation brief is a local working document. These two
 rows remain in this tracked backlog so the outstanding work survives outside

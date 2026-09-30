@@ -9,6 +9,7 @@ import { withOrchestrationTransaction, withRestartingOrchestrationTransaction } 
 import { OrchestrationError, orchestrationValidationError } from "./errors.js";
 import { eventSha256, semanticOrchestrationId } from "./hashing.js";
 import { classifyProviderUpdate } from "./ordering.js";
+import { emitOrchestrationObservation, orchestrationObserver, type OrchestrationObserverOptions } from "./observer.js";
 import { readEventStatus, readJobStatus, readOutboxStatus } from "./status.js";
 import {
   checkpointOrder, discoverActiveTransitionJobs, discoverTransitionClosure, lockTransitionCheckpoints, lockTransitionJobs,
@@ -50,6 +51,7 @@ import {
   type OutboxStatus,
   type ProviderEvidence,
 } from "./schemas.js";
+import type { JobKind } from "./types.js";
 import type { Static } from "@sinclair/typebox";
 
 type ConfigurationRow = {
@@ -407,7 +409,12 @@ const receiptFor = (outcome: "accepted" | "duplicate", dispositions: readonly un
   return parsed.value;
 };
 
-export const createOrchestrationRepository = (pool: Pool, options: { schema: string }): OrchestrationRepository => ({
+export const createOrchestrationRepository = (
+  pool: Pool,
+  options: { schema: string } & OrchestrationObserverOptions,
+): OrchestrationRepository => {
+  const observer = orchestrationObserver(options);
+  return ({
   async registerConfiguration(contextInput, input) {
     const context = requireControlCapability(contextInput, "configuration.admin");
     const candidate = safeObject(input, ["fingerprint", "document"]);
@@ -451,7 +458,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
   async activateConfigurationByCas(contextInput, input) {
     const context = requireControlCapability(contextInput, "configuration.admin");
     const activation = activationInput(input, true);
-    return withRestartingOrchestrationTransaction(pool, options, [configurationLock(context.tenantId)], async (client, carriedLocks) => {
+    const committed = await withRestartingOrchestrationTransaction(pool, options, [configurationLock(context.tenantId)], async (client, carriedLocks) => {
       const discoveredCurrent = await readActive(client, context.tenantId);
       const candidate = await readConfiguration(client, context.tenantId, activation.fingerprint);
       const discoveredCurrentConfiguration = schedulingConfiguration(discoveredCurrent);
@@ -481,24 +488,49 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       requireDiscoveredLocks(acquired, transitionAdvisoryLocks(currentTransitionJobs));
       await lockTransitionCheckpoints(client, currentTransitionJobs);
       const result = await activate(client, context.tenantId, candidate, current, activation.providerEvidence!);
+      let queuedKinds: JobKind[] = [];
+      let transitionOutcomes: Array<Readonly<{ kind: JobKind; outcome: "cancelled" | "superseded" }>> = [];
+      let pendingOutboxes = 0;
       if (result.outcome === "activated") {
         const plan = await scheduleConfigurationTransition(
           client, context.tenantId, currentConfiguration, candidateConfiguration,
           affectedServiceIds, activation.providerEvidence!,
         );
-        await persistScheduledJobs(client, context.tenantId, plan);
+        const persisted = await persistScheduledJobs(client, context.tenantId, plan);
         await insertActivationOutboxes(
           client, context.tenantId, result.fingerprint, affectedServiceIds,
           currentConfiguration.document, candidateConfiguration.document,
         );
+        queuedKinds = [...persisted.queuedKinds];
+        transitionOutcomes = persisted.terminalOutcomes.flatMap((outcome) => outcome.outcome === "failed"
+          ? [] : [{ kind: outcome.kind, outcome: outcome.outcome }]);
+        pendingOutboxes = affectedServiceIds.length + persisted.outboxCount;
       }
-      return result;
+      return { result, queuedKinds, transitionOutcomes, pendingOutboxes };
     });
+    for (const kind of committed.queuedKinds) emitOrchestrationObservation(observer, {
+      name: "job.lifecycle", kind, outcome: "queued", count: 1,
+    });
+    for (const transition of committed.transitionOutcomes) emitOrchestrationObservation(observer, {
+      name: "job.lifecycle", kind: transition.kind, outcome: transition.outcome, count: 1,
+    });
+    if (committed.pendingOutboxes > 0) emitOrchestrationObservation(observer, {
+      name: "outbox.lifecycle", outcome: "pending", count: committed.pendingOutboxes,
+    });
+    return committed.result;
   },
 
   async getActiveConfigurationSummary(contextInput) {
     const context = requireControlCapability(contextInput, "orchestration.status.read");
-    return withOrchestrationTransaction(pool, options, async (client) => activeSummary(await readActive(client, context.tenantId)));
+    return withOrchestrationTransaction(pool, options, async (client) => {
+      try {
+        return activeSummary(await readActive(client, context.tenantId));
+      } catch (error) {
+        if (error instanceof OrchestrationError && error.code === "CONFIGURATION_NOT_FOUND")
+          throw new OrchestrationError("JOB_NOT_FOUND_OR_DENIED");
+        throw error;
+      }
+    });
   },
 
   getEventStatus: (context, producerId, eventId) => readEventStatus(pool, options, context, producerId, eventId),
@@ -519,6 +551,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
   async ingestEvent(contextInput, eventInput) {
     const parsedContext = parseAuthenticatedEventContext(contextInput);
     if (!parsedContext.ok || !parsedContext.value.capabilities.includes("event.ingest")) {
+      emitOrchestrationObservation(observer, { name: "event.ingress", outcome: "unauthorized", count: 1 });
       throw new OrchestrationError("EVENT_UNAUTHORIZED");
     }
     const context = parsedContext.value;
@@ -531,6 +564,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     })();
     if (detachedEvent.event_type === "configuration.changed"
       && !context.capabilities.includes("configuration.admin")) {
+      emitOrchestrationObservation(observer, { name: "event.ingress", outcome: "unauthorized", count: 1 });
       throw new OrchestrationError("EVENT_UNAUTHORIZED");
     }
     if (context.producerId !== detachedEvent.producer.producer_id
@@ -538,9 +572,18 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       || detachedEvent.subjects.repository_id !== undefined
         && !context.allowedRepositories.includes(detachedEvent.subjects.repository_id)
       || detachedEvent.subjects.service_ids.some((serviceId) => !context.allowedServices.includes(serviceId))) {
+      emitOrchestrationObservation(observer, { name: "event.ingress", outcome: "unauthorized", count: 1 });
       throw new OrchestrationError("EVENT_UNAUTHORIZED");
     }
-    return withRestartingOrchestrationTransaction(pool, options, [configurationLock(context.tenantId)], async (client, carriedLocks) => {
+    let committed: Readonly<{
+      receipt: EventReceipt;
+      dispositions: readonly EventDisposition[];
+      queuedKinds: readonly JobKind[];
+      transitionOutcomes: readonly Readonly<{ kind: JobKind; outcome: "cancelled" | "superseded" }>[];
+      pendingOutboxes: number;
+    }>;
+    try {
+      committed = await withRestartingOrchestrationTransaction(pool, options, [configurationLock(context.tenantId)], async (client, carriedLocks) => {
       const discoveredActive = await readActive(client, context.tenantId);
       const discoveredConfiguration = {
         fingerprint: String(discoveredActive.config_fingerprint),
@@ -610,7 +653,9 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
            ORDER BY repository_id COLLATE "C", service_id COLLATE "C", scope_key COLLATE "C"`,
           [context.tenantId, detachedEvent.producer.producer_id, detachedEvent.event_id],
         );
-        return receiptFor("duplicate", targetRows.rows.map((row) => row.disposition));
+        const dispositions = targetRows.rows.map((row) => row.disposition);
+        return { receipt: receiptFor("duplicate", dispositions), dispositions,
+          queuedKinds: [], transitionOutcomes: [], pendingOutboxes: 0 };
       }
 
       const active = await readActive(client, context.tenantId, true);
@@ -643,6 +688,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         });
       const hash = eventSha256(authorized.event);
       let schedulingPlan: SchedulingPlan | undefined;
+      let persistedScheduling: Awaited<ReturnType<typeof persistScheduledJobs>> | undefined;
       let activationAffectedServiceIds: readonly string[] = [];
       let outcomes: TargetOutcome[] = authorized.event.event_type === "configuration.changed"
         ? authorized.targets.map((target) => ({ ...target, scopeKey: "configuration", disposition: "scheduled" as const }))
@@ -741,7 +787,9 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
             outcome.jobId ?? null, outcome.reconciliationId ?? null, outcome.safeReason ?? null],
         );
       }
-      if (schedulingPlan !== undefined) await persistScheduledJobs(client, context.tenantId, schedulingPlan, stagedJobs);
+      if (schedulingPlan !== undefined) {
+        persistedScheduling = await persistScheduledJobs(client, context.tenantId, schedulingPlan, stagedJobs);
+      }
       for (const outcome of outcomes) {
         await insertOutbox(client, context.tenantId,
           { kind: "event.disposition", producerId: authorized.event.producer.producer_id,
@@ -756,8 +804,44 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
           activeDocument, configurationFromRow(candidate),
         );
       }
-      return receiptFor("accepted", outcomes.map((outcome) => outcome.disposition));
+      const dispositions = outcomes.map((outcome) => outcome.disposition);
+      return {
+        receipt: receiptFor("accepted", dispositions), dispositions,
+        queuedKinds: persistedScheduling?.queuedKinds ?? [],
+        transitionOutcomes: persistedScheduling?.terminalOutcomes.flatMap((outcome) => outcome.outcome === "failed"
+          ? [] : [{ kind: outcome.kind, outcome: outcome.outcome }]) ?? [],
+        pendingOutboxes: outcomes.length + (persistedScheduling?.outboxCount ?? 0)
+          + activationAffectedServiceIds.length,
+      };
+      });
+    } catch (error) {
+      if (error instanceof OrchestrationError && error.code === "EVENT_UNAUTHORIZED") {
+        emitOrchestrationObservation(observer, { name: "event.ingress", outcome: "unauthorized", count: 1 });
+      }
+      throw error;
+    }
+    emitOrchestrationObservation(observer, {
+      name: "event.ingress", outcome: committed.receipt.outcome, count: 1,
     });
+    const dispositionSignals = [
+      ["ignored_stale", "stale"],
+      ["ignored_unconfigured_branch", "ignored_unconfigured"],
+      ["reconciliation_required", "reconciliation_required"],
+    ] as const;
+    for (const [disposition, outcome] of dispositionSignals) {
+      const count = committed.dispositions.filter((candidate) => candidate === disposition).length;
+      if (count > 0) emitOrchestrationObservation(observer, { name: "event.ingress", outcome, count });
+    }
+    for (const kind of committed.queuedKinds) emitOrchestrationObservation(observer, {
+      name: "job.lifecycle", kind, outcome: "queued", count: 1,
+    });
+    for (const transition of committed.transitionOutcomes) emitOrchestrationObservation(observer, {
+      name: "job.lifecycle", kind: transition.kind, outcome: transition.outcome, count: 1,
+    });
+    if (committed.pendingOutboxes > 0) emitOrchestrationObservation(observer, {
+      name: "outbox.lifecycle", outcome: "pending", count: committed.pendingOutboxes,
+    });
+    return committed.receipt;
   },
 
   async cancelJob(contextInput, jobIdInput) {
@@ -765,7 +849,7 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
     if (typeof jobIdInput !== "string" || jobIdInput.length === 0) {
       throw new OrchestrationError("JOB_NOT_FOUND_OR_DENIED");
     }
-    return withRestartingOrchestrationTransaction(pool, options, [], async (client, carriedLocks) => {
+    const committed = await withRestartingOrchestrationTransaction(pool, options, [], async (client, carriedLocks) => {
       const discovered = await client.query<{
         kind: string; repository_id: string; service_id: string; branch: string | null; pull_request_id: string | null;
         semantic_identity: unknown;
@@ -814,10 +898,13 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
       if (currentState === undefined || !knownStates.includes(currentState as typeof knownStates[number])) {
         throw new OrchestrationError("ORCHESTRATION_STORAGE_ERROR", { retryable: false });
       }
-      if (["succeeded", "failed", "superseded"].includes(currentState)) {
-        return detachedFrozen({ jobId: jobIdInput, state: currentState as typeof knownStates[number] });
+      const validCurrentState = currentState as typeof knownStates[number];
+      if (["succeeded", "failed", "superseded"].includes(validCurrentState)) {
+        return { result: detachedFrozen({ jobId: jobIdInput, state: validCurrentState }),
+          kind: job.kind as JobKind, changed: false,
+          dependentOutcomes: [] as Array<Readonly<{ kind: JobKind; outcome: "cancelled" | "superseded" }>> };
       }
-      const nextState = currentState === "leased" ? "leased" : "cancelled";
+      const nextState: "leased" | "cancelled" = validCurrentState === "leased" ? "leased" : "cancelled";
       const dependents = nextState === "cancelled"
         ? await stageTerminalDependents(client, context.tenantId, [jobIdInput], lockedJobs) : [];
       const checkpoint = checkpointOrder(root!);
@@ -871,7 +958,25 @@ export const createOrchestrationRepository = (pool: Pool, options: { schema: str
         await insertOutbox(client, context.tenantId, { kind: "job.state_changed", jobId: jobIdInput, state: nextState },
           "job.state_changed", { jobId: jobIdInput, state: nextState }, undefined, undefined, jobIdInput);
       }
-      return detachedFrozen({ jobId: jobIdInput, state: nextState });
+      return { result: detachedFrozen({ jobId: jobIdInput, state: nextState }),
+        kind: job.kind as JobKind, changed: currentState !== nextState,
+        dependentOutcomes: dependents.flatMap((change) => change.kind === "terminal"
+          ? [{ kind: change.job.kind as JobKind, outcome: change.state }] : []),
+      };
     });
+    if (committed.changed && committed.result.state === "cancelled") {
+      emitOrchestrationObservation(observer, {
+        name: "job.lifecycle", kind: committed.kind, outcome: "cancelled", count: 1,
+      });
+      emitOrchestrationObservation(observer, { name: "outbox.lifecycle", outcome: "pending", count: 1 });
+    }
+    for (const dependent of committed.dependentOutcomes) emitOrchestrationObservation(observer, {
+      name: "job.lifecycle", kind: dependent.kind, outcome: dependent.outcome, count: 1,
+    });
+    if (committed.dependentOutcomes.length > 0) emitOrchestrationObservation(observer, {
+      name: "outbox.lifecycle", outcome: "pending", count: committed.dependentOutcomes.length,
+    });
+    return committed.result;
   },
-});
+  });
+};

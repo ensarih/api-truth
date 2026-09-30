@@ -1,7 +1,10 @@
 import { expect, test } from "vitest";
 import type { Pool, PoolClient } from "pg";
 
-import { applyOrchestrationMigrations, createOrchestrationRepository, createOrchestrationWorker } from "../../packages/orchestration/src/index.js";
+import {
+  applyOrchestrationMigrations, createOrchestrationRepository, createOrchestrationWorker,
+  type OrchestrationObservation, type OrchestrationObserver,
+} from "../../packages/orchestration/src/index.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 import { acquireAdvisoryLocks, capacityGlobalLock, capacityRepositoryLock, capacityServiceLock,
   configurationLock } from "../../packages/orchestration/src/locking.js";
@@ -47,15 +50,51 @@ const recordingPool = (pool: Pool, statements: Array<{ sql: string; values: unkn
   },
 }) as Pool;
 
-const setup = async (configInput = config) => {
+const setup = async (configInput = config, observer?: OrchestrationObserver) => {
   const database = await createCatalogTestDatabase();
   await applyOrchestrationMigrations(database.pool, { schema: database.schema });
-  const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+  const repository = createOrchestrationRepository(database.pool, {
+    schema: database.schema, ...(observer === undefined ? {} : { observer }),
+  });
   await repository.registerConfiguration(admin, configInput);
   await repository.activateInitialConfiguration(admin, { fingerprint: "workers-config" });
-  return { database, repository, worker: createOrchestrationWorker(database.pool, { schema: database.schema }),
+  return { database, repository, worker: createOrchestrationWorker(database.pool, {
+    schema: database.schema, ...(observer === undefined ? {} : { observer }),
+  }),
     schemaSql: quoteCatalogTestSchema(database.schema) };
 };
+
+test("observer reports bounded ingress, queue, retry, and outbox outcomes without private labels", async () => {
+  const observations: OrchestrationObservation[] = [];
+  const { database, repository, worker } = await setup(config, {
+    observe: (observation) => { observations.push(observation); },
+  });
+  try {
+    await repository.ingestEvent(eventContext, event("observed-branch", "7"));
+    expect(observations).toEqual(expect.arrayContaining([
+      { name: "event.ingress", outcome: "accepted", count: 1 },
+      { name: "job.lifecycle", kind: "branch_analysis", outcome: "queued", count: 1 },
+    ]));
+
+    const [claim] = await worker.claimJobs(jobWorker("observer-worker"), { limit: 1 });
+    expect(claim).toBeDefined();
+    expect(observations).toContainEqual(expect.objectContaining({
+      name: "job.lifecycle", kind: "branch_analysis", outcome: "leased", count: 1,
+      attempt: 1, queueDelayMs: expect.any(Number),
+    }));
+    await worker.failJob(jobWorker("observer-worker"), claim!.lease, new Error("private failure"));
+    expect(observations).toContainEqual(expect.objectContaining({
+      name: "job.lifecycle", kind: "branch_analysis", outcome: "retried", count: 1,
+      attempt: 1, retryDelayMs: expect.any(Number),
+    }));
+
+    const [outbox] = await worker.claimOutbox(outboxWorker, { limit: 1 });
+    expect(outbox).toBeDefined();
+    await worker.acknowledgeOutbox(outboxWorker, outbox!.lease);
+    expect(observations).toContainEqual({ name: "outbox.lifecycle", outcome: "delivered", count: 1 });
+    expect(JSON.stringify(observations)).not.toMatch(/tenant-a|commerce|orders|private failure/);
+  } finally { await database.cleanup(); }
+});
 
 test("concurrent claims respect capacity and emit one leased state record", async () => {
   const { database, repository, worker, schemaSql } = await setup();

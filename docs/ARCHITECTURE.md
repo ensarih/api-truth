@@ -1,6 +1,6 @@
 # API Truth — Architecture and Interface Design
 
-**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration through slice 6, D09 environment resolution/lifecycle, and D10 OpenAPI publication implemented. D11 shared query access is in progress, 2026-09-30.
+**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration, D09 environment resolution/lifecycle, and D10 OpenAPI publication implemented. D11 shared query access is in progress, 2026-09-30.
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 

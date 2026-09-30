@@ -19,6 +19,7 @@ export {
   semanticOrchestrationId,
 } from "./hashing.js";
 export { classifyProviderUpdate, isMonotoneProviderConfirmation } from "./ordering.js";
+export type { OrchestrationObservation, OrchestrationObserver } from "./observer.js";
 export {
   applyOrchestrationMigrationManifest,
   applyOrchestrationMigrations,

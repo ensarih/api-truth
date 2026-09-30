@@ -1,6 +1,6 @@
 # API Truth — Implementation Plan
 
-**Status:** development; D01–D07, D09, and D10 complete; D08 final hardening and D11 shared query access in progress.
+**Status:** development; D01–D10 complete; D11 shared query access in progress.
 **Updated:** 2026-09-30
 **Project name:** API Truth (`api-truth`).
 **License:** Apache-2.0; see [LICENSE](LICENSE).
@@ -88,7 +88,7 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 | D05 | **Complete:** baseline read-only TypeScript/Express extractor and diagnostics | Supported fixture facts correct; unsupported patterns visible |
 | D06 | **Complete:** immutable catalog snapshots, current access scopes/grants, and atomic selected-branch pointers | Real PostgreSQL round-trip; unauthorized and revoked reads denied; provider ordering/CAS verified |
 | D07 | **Complete:** add dependency-aware updates and structured differences | Shared changes reach every affected API; safe full-service fallback and deterministic differences demonstrated |
-| D08 | **In progress (slices 0–6 of 0–7 complete):** events, durable jobs, isolated PR previews, and exact reconciliation | Duplicate, stale, missed-event, absence, closed-PR, and configuration-change cases pass; Slice 7 final gate remains |
+| D08 | **Complete:** events, durable jobs, isolated PR previews, exact reconciliation, safe status reads, and bounded observer signals | Duplicate, stale, missed-event, absence, closed-PR, configuration-change, privacy, and observer failure cases pass |
 | D09 | **Complete:** environment resolution, authorized views, lifecycle facts, and exact-scope repair | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
 | D10 | **Complete:** evidence-gated OpenAPI 3.1 compiler and immutable publication | Strict export, safe variant aggregation, branch/environment guards, validation, and local round trip |
 | D11 | **In progress:** shared query contract, authorized retrieval, minimal portal, initial MCP tools | Same pinned contract/environment across surfaces |

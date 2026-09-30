@@ -99,7 +99,7 @@ test("registers immutable configurations idempotently and isolates tenants", asy
     await expect(repository.registerConfiguration(admin(), changed)).rejects.toMatchObject({ code: "CONFIGURATION_CONFLICT" });
     await expect(repository.registerConfiguration(admin("tenant-b"), configuration())).resolves.toMatchObject({ outcome: "inserted" });
     await expect(repository.activateInitialConfiguration(admin(), { fingerprint: "config-a" })).resolves.toMatchObject({ checkpointVersion: "1" });
-    await expect(repository.getActiveConfigurationSummary(admin("tenant-b"))).rejects.toMatchObject({ code: "CONFIGURATION_NOT_FOUND" });
+    await expect(repository.getActiveConfigurationSummary(admin("tenant-b"))).rejects.toMatchObject({ code: "JOB_NOT_FOUND_OR_DENIED" });
   } finally { await database.cleanup(); }
 });
 

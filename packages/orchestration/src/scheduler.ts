@@ -27,6 +27,7 @@ import {
 } from "./locking.js";
 import { classifyProviderUpdate } from "./ordering.js";
 import type { EventDisposition } from "./repository.js";
+import type { JobKind } from "./types.js";
 
 type RepositoryConfig = InstallationConfig["repositories"][number];
 type ServiceConfig = RepositoryConfig["services"][number];
@@ -935,7 +936,14 @@ export const persistScheduledJobs = async (
   tenantId: string,
   plan: SchedulingPlan,
   staged?: StagedScheduledJobs,
-): Promise<void> => {
+): Promise<Readonly<{
+  queuedKinds: readonly JobKind[];
+  terminalOutcomes: readonly Readonly<{
+    kind: JobKind;
+    outcome: "failed" | "cancelled" | "superseded";
+  }>[];
+  outboxCount: number;
+}>> => {
   const inserted: PreparedJob[] = [];
   const transitioned: Array<Readonly<{ jobId: string; state: "cancelled" | "superseded"; identity: unknown }>> = [];
   const { closure, dependents } = staged ?? await stageScheduledJobCheckpoints(client, tenantId, plan);
@@ -987,6 +995,17 @@ export const persistScheduledJobs = async (
   for (const transition of transitioned) {
     await insertJobStateOutbox(client, tenantId, transition.jobId, transition.state, transition.identity);
   }
+  const kindsById = new Map(closure.map((job) => [job.job_id, job.kind as JobKind]));
+  const transitionOutcomes = transitioned.map((transition) => ({
+    kind: kindsById.get(transition.jobId)!, outcome: transition.state,
+  }));
+  const dependentOutcomes = dependents.flatMap((change) => change.kind === "terminal"
+    ? [{ kind: change.job.kind as JobKind, outcome: change.state }] : []);
+  return {
+    queuedKinds: inserted.map((job) => job.input.kind),
+    terminalOutcomes: [...transitionOutcomes, ...dependentOutcomes],
+    outboxCount: inserted.length + transitioned.length + dependentNotifications.length,
+  };
 };
 
 const serviceTargets = (document: InstallationConfig): Map<string, TargetConfig> => new Map(

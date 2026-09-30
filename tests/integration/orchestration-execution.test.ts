@@ -8,7 +8,7 @@ import type { AnalyzerRequest } from "../../packages/ir/src/index.js";
 import { createAccessPolicyStore, contractSnapshotFromAnalyzerResult } from "../../packages/catalog/src/index.js";
 import { applyOrchestrationMigrations, createOrchestrationRepository, createOrchestrationWorker,
   createReconciliationScheduler } from "../../packages/orchestration/src/index.js";
-import type { ScheduledReconciliationRequest } from "../../packages/orchestration/src/index.js";
+import type { OrchestrationObservation, ScheduledReconciliationRequest } from "../../packages/orchestration/src/index.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 
 const tenantId = "tenant-execution";
@@ -200,9 +200,11 @@ test("a failed analyzer result is reported through failJob for retry and termina
 test("a leased baseline analyzes and commits one immutable association without a branch pointer", async () => {
   const database = await createCatalogTestDatabase();
   try {
+    const observations: OrchestrationObservation[] = [];
+    const observer = { observe: (observation: OrchestrationObservation) => { observations.push(observation); } };
     await applyOrchestrationMigrations(database.pool, { schema: database.schema });
-    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
-    const worker = createOrchestrationWorker(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema, observer });
+    const worker = createOrchestrationWorker(database.pool, { schema: database.schema, observer });
     await repository.registerConfiguration(admin, configuration);
     await repository.activateInitialConfiguration(admin, { fingerprint: configuration.fingerprint });
     const revision = "a".repeat(40);
@@ -222,6 +224,11 @@ test("a leased baseline analyzes and commits one immutable association without a
       analyzer: { analyze: async () => result },
     });
     expect(outcome).toMatchObject({ state: "succeeded" });
+    expect(observations).toContainEqual({ name: "catalog.snapshot", outcome: "inserted", count: 1 });
+    expect(observations).toContainEqual(expect.objectContaining({
+      name: "job.lifecycle", kind: "baseline_analysis", outcome: "succeeded", count: 1,
+      attempt: 1, runDurationMs: expect.any(Number),
+    }));
     const schema = quoteCatalogTestSchema(database.schema);
     const stored = await database.pool.query<{ state: string; snapshot_id: string }>(
       `SELECT job.state,association.snapshot_id FROM ${schema}.orchestration_jobs job

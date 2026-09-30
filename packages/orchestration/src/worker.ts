@@ -16,6 +16,10 @@ import {
 } from "./locking.js";
 import { computeRetryDelayMs } from "./state.js";
 import type { WorkerIdentity } from "./schemas.js";
+import {
+  emitOrchestrationObservation, orchestrationObserver, type OrchestrationObserverOptions,
+} from "./observer.js";
+import type { JobKind } from "./types.js";
 
 const CANDIDATE_LIMIT = 128;
 const GRAPH_PAGE_SIZE = 256;
@@ -773,24 +777,35 @@ const outboxPayload = (input: unknown): Readonly<Record<string, string>> => {
   return detachedFrozen(value as Record<string, string>);
 };
 
-export const createOrchestrationWorker = (pool: Pool, options: { schema: string }): OrchestrationWorker => ({
+export const createOrchestrationWorker = (
+  pool: Pool,
+  options: { schema: string } & OrchestrationObserverOptions,
+): OrchestrationWorker => {
+  const observer = orchestrationObserver(options);
+  return ({
   async runJob(workerInput, leaseInput, ports) {
     const worker = requireWorkerCapability(workerInput, "jobs.execute");
     const lease = parseJobLease(leaseInput);
     const selected = await withOrchestrationTransaction(pool, options, (client) => client.query<{ kind: string }>(
       `SELECT kind FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
     ));
-    if (selected.rows[0]?.kind === "branch_reconciliation" || selected.rows[0]?.kind === "pr_reconciliation") {
-      return executeLeasedReconciliationJob(pool, options, worker, lease, ports);
-    }
-    return executeLeasedAnalysisJob(pool, options, worker, lease, ports);
+    const kind = selected.rows[0]?.kind as JobKind | undefined;
+    const startedAt = Date.now();
+    const outcome = kind === "branch_reconciliation" || kind === "pr_reconciliation"
+      ? await executeLeasedReconciliationJob(pool, options, worker, lease, ports, observer)
+      : await executeLeasedAnalysisJob(pool, options, worker, lease, ports, observer);
+    if (kind !== undefined) emitOrchestrationObservation(observer, {
+      name: "job.lifecycle", kind, outcome: "succeeded", count: 1,
+      attempt: safeCount(outcome.attemptCount), runDurationMs: Math.max(0, Date.now() - startedAt),
+    });
+    return outcome;
   },
   async claimJobs(workerInput, optionsInput) {
     const worker = requireWorkerCapability(workerInput, "jobs.execute");
     const limit = parseClaimLimit(optionsInput);
-    return withRestartingOrchestrationTransaction(pool, options, [], async (client, carriedLocks) => {
+    const committed = await withRestartingOrchestrationTransaction(pool, options, [], async (client, carriedLocks) => {
       const discovered = (await jobDiscovery(client)).rows;
-      if (discovered.length === 0) return [];
+      if (discovered.length === 0) return { claimed: [], changes: [] as PlannedJobChange[] };
       const discoveredClosure = await discoverTransitionClosure(client, discovered);
       const acquired = await acquireAdvisoryLocks(client, [...carriedLocks, ...transitionAdvisoryLocks(discoveredClosure)]);
       const affected = await discoverTransitionClosure(client, discovered);
@@ -863,8 +878,37 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
       }
       const result = await applyPlannedJobChanges(client, [...changes.values()]);
       await flushNotifications(client, result.notifications);
-      return result.claimed;
+      return { claimed: result.claimed, changes: [...changes.values()] };
     });
+    for (const change of committed.changes) {
+      if (change.kind === "request_cancel") continue;
+      const kind = change.job.kind as JobKind;
+      if (change.job.state === "leased") emitOrchestrationObservation(observer, {
+        name: "job.lifecycle", kind, outcome: "lease_expired", count: 1,
+        attempt: safeCount(change.job.attempt_count),
+      });
+      if (change.kind === "claim") emitOrchestrationObservation(observer, {
+        name: "job.lifecycle", kind, outcome: "leased", count: 1,
+        attempt: safeCount(change.job.attempt_count) + 1,
+        queueDelayMs: Math.max(0, Date.now() - change.job.created_at.getTime()),
+      });
+      if (change.kind === "retry") emitOrchestrationObservation(observer, {
+        name: "job.lifecycle", kind, outcome: "retried", count: 1,
+        attempt: safeCount(change.job.attempt_count), retryDelayMs: change.delay,
+      });
+      if (change.kind === "terminal") {
+        emitOrchestrationObservation(observer, {
+          name: "job.lifecycle", kind, outcome: change.state, count: 1,
+          attempt: safeCount(change.job.attempt_count),
+        });
+        if (kind.endsWith("reconciliation")) emitOrchestrationObservation(observer, {
+          name: "reconciliation.lifecycle", kind: kind === "branch_reconciliation" ? "branch" : "pull_request",
+          outcome: change.state === "failed" ? "failed" : "obsolete", count: 1,
+        });
+      }
+      emitOrchestrationObservation(observer, { name: "outbox.lifecycle", outcome: "pending", count: 1 });
+    }
+    return committed.claimed;
   },
 
   async heartbeatJob(workerInput, leaseInput) {
@@ -894,7 +938,7 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
   async failJob(workerInput, leaseInput, _failure) {
     const worker = requireWorkerCapability(workerInput, "jobs.execute");
     const lease = parseJobLease(leaseInput);
-    return withRestartingOrchestrationTransaction(pool, options, [], async (client, carriedLocks) => {
+    const committed = await withRestartingOrchestrationTransaction(pool, options, [], async (client, carriedLocks) => {
       const discovered = await client.query<JobRow>("SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2",
         [lease.tenantId, lease.jobId]);
       if (discovered.rows[0] === undefined) throw new OrchestrationError("JOB_LEASE_CONFLICT");
@@ -916,23 +960,38 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
         await planTerminalDependents(client, job.tenant_id, [job.job_id], locked, changes);
         const result = await applyPlannedJobChanges(client, [...changes.values()]);
         await flushNotifications(client, result.notifications);
-        return jobOutcome(job, state, code);
+        return { outcome: jobOutcome(job, state, code), kind: job.kind as JobKind };
       }
       const code = executionFailureCode(job.kind);
       const delay = computeRetryDelayMs({ attempt: safeCount(job.attempt_count), baseDelayMs: RETRY_BASE_MS,
         maxDelayMs: RETRY_MAX_MS });
       const result = await applyPlannedJobChanges(client, [{ kind: "retry", job, delay, code }]);
       await flushNotifications(client, result.notifications);
-      return jobOutcome(job, "retry_wait", code);
+      return { outcome: jobOutcome(job, "retry_wait", code), kind: job.kind as JobKind, retryDelayMs: delay };
     });
+    const observedOutcome = committed.outcome.state === "retry_wait" ? "retried" : committed.outcome.state;
+    emitOrchestrationObservation(observer, {
+      name: "job.lifecycle", kind: committed.kind, outcome: observedOutcome, count: 1,
+      attempt: safeCount(committed.outcome.attemptCount),
+      ...(committed.retryDelayMs === undefined ? {} : { retryDelayMs: committed.retryDelayMs }),
+    });
+    if (committed.kind.endsWith("reconciliation") && committed.outcome.state === "failed") {
+      emitOrchestrationObservation(observer, {
+        name: "reconciliation.lifecycle",
+        kind: committed.kind === "branch_reconciliation" ? "branch" : "pull_request",
+        outcome: "failed", count: 1,
+      });
+    }
+    emitOrchestrationObservation(observer, { name: "outbox.lifecycle", outcome: "pending", count: 1 });
+    return committed.outcome;
   },
 
   async claimOutbox(workerInput, optionsInput) {
     const worker = requireWorkerCapability(workerInput, "outbox.deliver");
     const limit = parseClaimLimit(optionsInput);
-    return withOrchestrationTransaction(pool, options, async (client) => {
+    const committed = await withOrchestrationTransaction(pool, options, async (client) => {
       const discovered = (await outboxDiscovery(client)).rows;
-      if (discovered.length === 0) return [];
+      if (discovered.length === 0) return { claimed: [], recovered: [] as Array<{ outcome: "retried" | "exhausted"; attempt: number; retryDelayMs?: number }> };
       await acquireAdvisoryLocks(client, discovered.map((row) => configurationLock(row.tenant_id)));
       const byTenant = new Map<string, string[]>();
       for (const row of discovered) byTenant.set(row.tenant_id, [...(byTenant.get(row.tenant_id) ?? []), row.outbox_id]);
@@ -945,6 +1004,7 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
         locked.push(...rows.rows);
       }
       const claimed: LeasedOutboxRecord[] = [];
+      const recovered: Array<{ outcome: "retried" | "exhausted"; attempt: number; retryDelayMs?: number }> = [];
       for (const row of await orderOutboxByDatabaseQueue(client, locked)) {
         if (row.state === "leased" && row.lease_expires_at !== null && !await outboxLeaseIsLive(client, row)) {
           const exhausted = safeCount(row.attempt_count) >= safeCount(row.max_attempts);
@@ -957,6 +1017,8 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
                updated_at=clock_timestamp() WHERE tenant_id=$1 AND outbox_id=$2`,
             [row.tenant_id, row.outbox_id, exhausted ? "exhausted" : "retry_wait", delay],
           );
+          recovered.push({ outcome: exhausted ? "exhausted" : "retried", attempt: safeCount(row.attempt_count),
+            ...(exhausted ? {} : { retryDelayMs: delay }) });
           continue;
         }
         if (claimed.length >= limit || !["pending", "retry_wait"].includes(row.state)
@@ -975,14 +1037,19 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
           leaseExpiresAt: updated.rows[0]!.lease_expires_at.toISOString(),
           lease: { tenantId: row.tenant_id, outboxId: row.outbox_id, leaseToken: token } }));
       }
-      return claimed;
+      return { claimed, recovered };
     });
+    for (const outcome of committed.recovered) emitOrchestrationObservation(observer, {
+      name: "outbox.lifecycle", outcome: outcome.outcome, count: 1, attempt: outcome.attempt,
+      ...(outcome.retryDelayMs === undefined ? {} : { retryDelayMs: outcome.retryDelayMs }),
+    });
+    return committed.claimed;
   },
 
   async acknowledgeOutbox(workerInput, leaseInput) {
     const worker = requireWorkerCapability(workerInput, "outbox.deliver");
     const lease = parseOutboxLease(leaseInput);
-    return withOrchestrationTransaction(pool, options, async (client) => {
+    await withOrchestrationTransaction(pool, options, async (client) => {
       await acquireAdvisoryLocks(client, [configurationLock(lease.tenantId)]);
       const locked = await client.query<OutboxRow>(
         "SELECT * FROM orchestration_outbox WHERE tenant_id=$1 AND outbox_id=$2 FOR UPDATE",
@@ -995,12 +1062,13 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
          WHERE tenant_id=$1 AND outbox_id=$2`, [lease.tenantId, lease.outboxId],
       );
     });
+    emitOrchestrationObservation(observer, { name: "outbox.lifecycle", outcome: "delivered", count: 1 });
   },
 
   async failOutbox(workerInput, leaseInput, _failure) {
     const worker = requireWorkerCapability(workerInput, "outbox.deliver");
     const lease = parseOutboxLease(leaseInput);
-    return withOrchestrationTransaction(pool, options, async (client) => {
+    const committed = await withOrchestrationTransaction(pool, options, async (client) => {
       await acquireAdvisoryLocks(client, [configurationLock(lease.tenantId)]);
       const locked = await client.query<OutboxRow>(
         "SELECT * FROM orchestration_outbox WHERE tenant_id=$1 AND outbox_id=$2 FOR UPDATE",
@@ -1010,16 +1078,22 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
       const exhausted = safeCount(row.attempt_count) >= safeCount(row.max_attempts);
       const delay = exhausted ? 0 : computeRetryDelayMs({ attempt: safeCount(row.attempt_count),
         baseDelayMs: RETRY_BASE_MS, maxDelayMs: RETRY_MAX_MS });
-      const state = exhausted ? "exhausted" : "retry_wait";
+      const state: "exhausted" | "retry_wait" = exhausted ? "exhausted" : "retry_wait";
       await client.query(
         `UPDATE orchestration_outbox SET state=$3,lease_worker_id=NULL,lease_instance_id=NULL,
            lease_token=NULL,lease_expires_at=NULL,safe_last_error_code='OUTBOX_DELIVERY_FAILED',
            available_at=clock_timestamp()+($4::bigint * interval '1 millisecond'),updated_at=clock_timestamp()
          WHERE tenant_id=$1 AND outbox_id=$2`, [lease.tenantId, lease.outboxId, state, delay],
       );
-      return detachedFrozen({ tenantId: lease.tenantId, outboxId: lease.outboxId, state,
-        attemptCount: row.attempt_count, safeErrorCode: "OUTBOX_DELIVERY_FAILED" });
+      return { outcome: detachedFrozen({ tenantId: lease.tenantId, outboxId: lease.outboxId, state,
+        attemptCount: row.attempt_count, safeErrorCode: "OUTBOX_DELIVERY_FAILED" as const }), delay };
     });
+    emitOrchestrationObservation(observer, {
+      name: "outbox.lifecycle", outcome: committed.outcome.state === "exhausted" ? "exhausted" : "retried",
+      count: 1, attempt: safeCount(committed.outcome.attemptCount),
+      ...(committed.outcome.state === "exhausted" ? {} : { retryDelayMs: committed.delay }),
+    });
+    return committed.outcome;
   },
 
   async putConcurrencyPolicy(contextInput, policyInput) {
@@ -1053,4 +1127,5 @@ export const createOrchestrationWorker = (pool: Pool, options: { schema: string 
         globalLimit: policy.globalLimit, repositoryLimit: policy.repositoryLimit, serviceLimit: policy.serviceLimit });
     });
   },
-});
+  });
+};

@@ -45,8 +45,13 @@ credentials are not returned in status records.
 `getActiveConfigurationSummary` require `orchestration.status.read`. Event
 status uses an opaque hashed identity. Missing and cross-tenant records share
 one denial code, and status reads never return stored event documents or job
-result payloads. The transactional outbox is the durable observer boundary;
-its delivery requires a separate worker capability.
+result payloads. An optional `OrchestrationObserver` receives fixed, bounded
+ingress, job, reconciliation, catalog, and outbox signals after durable
+transitions; the default is a no-op. Denied ingress emits a signal without a
+database write. Signals contain no tenant, repository, service, event, or
+error text, and observer failures cannot change orchestration results. The
+transactional outbox separately carries durable integration notifications;
+its delivery requires a worker capability.
 
 ## Local validation
 

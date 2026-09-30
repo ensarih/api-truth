@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import {
-  createCatalogOrchestrationReader, createCatalogTransactionStore, contractSnapshotFromAnalyzerResult,
+  CatalogError, createCatalogOrchestrationReader, createCatalogTransactionStore, contractSnapshotFromAnalyzerResult,
   type StoredSnapshot,
 } from "@api-truth/catalog";
 import {
@@ -12,6 +12,9 @@ import { executeUpdate, planUpdate, parseUpdatePlan, type UpdateExecutionResult 
 import { canonicalOrchestrationHash, canonicalOrchestrationJson, detachedFrozen } from "./canonical.js";
 import { withOrchestrationTransaction } from "./database.js";
 import { OrchestrationError } from "./errors.js";
+import {
+  emitOrchestrationObservation, orchestrationObserver, type OrchestrationObserver,
+} from "./observer.js";
 import { semanticOrchestrationId } from "./hashing.js";
 import { acquireAdvisoryLocks, catalogBranchLock } from "./locking.js";
 import { isMonotoneProviderConfirmation } from "./ordering.js";
@@ -364,8 +367,14 @@ const provider = (row: { provider: string; provider_reference: string;
   }),
 });
 
+type AnalysisCompletion = Readonly<{
+  outcome: JobOutcome;
+  snapshotOutcome: "inserted" | "existing";
+  branchOutcome?: "promoted" | "existing";
+}>;
+
 const completion = async (pool: Pool, options: { schema: string }, worker: WorkerIdentity,
-  lease: JobLease, material: Materialized): Promise<JobOutcome> => withOrchestrationTransaction(pool, options, async (client) => {
+  lease: JobLease, material: Materialized): Promise<AnalysisCompletion> => withOrchestrationTransaction(pool, options, async (client) => {
   const discovery = await client.query<Job>(
     `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
   );
@@ -574,10 +583,13 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
       job.job_id, { jobId: job.job_id, state: "succeeded" }],
   );
   const catalog = createCatalogTransactionStore(client, options);
+  let snapshotOutcome: "inserted" | "existing" = "existing";
   if (material.associationKind === "analyzed") {
-    await catalog.ingestAnalyzerResult({ tenantId: job.tenant_id, result: material.result!,
+    const ingested = await catalog.ingestAnalyzerResult({ tenantId: job.tenant_id, result: material.result!,
       configFingerprint: job.config_fingerprint });
+    snapshotOutcome = ingested.outcome;
   }
+  let branchOutcome: "promoted" | "existing" | undefined;
   if (job.kind === "branch_analysis") {
     const pointer = await client.query<{ pointer_version: string; snapshot_id: string }>(
       `SELECT pointer_version::text,snapshot_id FROM catalog_branch_pointers
@@ -587,17 +599,21 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
     if (material.baseSelection !== undefined && (pointer.rows[0]?.snapshot_id
       !== material.baseSelection.snapshotId || pointer.rows[0]?.pointer_version
       !== material.baseSelection.pointerVersion)) fail("PROMOTION_INELIGIBLE");
-    await catalog.promoteBranch({ tenantId: job.tenant_id, repositoryId: job.repository_id,
+    const promoted = await catalog.promoteBranch({ tenantId: job.tenant_id, repositoryId: job.repository_id,
       serviceId: job.service_id, branch: job.branch!, snapshotId: snapshot.snapshot_id,
       provider: provider(branch!), expected: pointer.rows[0] === undefined
         ? { state: "absent" } : { state: "present", pointerVersion: pointer.rows[0].pointer_version } });
+    branchOutcome = promoted.outcome;
   }
-  return detachedFrozen({ tenantId: job.tenant_id, jobId: job.job_id, state: "succeeded",
-    attemptCount: job.attempt_count });
+  return detachedFrozen({
+    outcome: { tenantId: job.tenant_id, jobId: job.job_id, state: "succeeded", attemptCount: job.attempt_count },
+    snapshotOutcome, ...(branchOutcome === undefined ? {} : { branchOutcome }),
+  });
 });
 
 export const executeLeasedAnalysisJob = async (pool: Pool, options: { schema: string },
-  worker: WorkerIdentity, lease: JobLease, portsInput: unknown): Promise<JobOutcome> => {
+  worker: WorkerIdentity, lease: JobLease, portsInput: unknown,
+  observer: OrchestrationObserver = orchestrationObserver({})): Promise<JobOutcome> => {
   const ports = validatedPorts(portsInput);
   const prepared = await withOrchestrationTransaction(pool, options, (client) => readPrepared(client, worker, lease));
   await confirmLive(pool, options, worker, lease);
@@ -610,5 +626,22 @@ export const executeLeasedAnalysisJob = async (pool: Pool, options: { schema: st
   const material = await materialize(prepared, resolved, ports, baseSelection,
     () => confirmLive(pool, options, worker, lease));
   await confirmLive(pool, options, worker, lease);
-  return completion(pool, options, worker, lease, material);
+  let completed: AnalysisCompletion;
+  try {
+    completed = await completion(pool, options, worker, lease, material);
+  } catch (error) {
+    if (error instanceof CatalogError
+      && (error.code === "BRANCH_POINTER_STALE" || error.code === "BRANCH_POINTER_CONFLICT")) {
+      emitOrchestrationObservation(observer, { name: "catalog.branch", outcome: "conflict", count: 1 });
+    }
+    throw error;
+  }
+  emitOrchestrationObservation(observer, {
+    name: "catalog.snapshot", outcome: completed.snapshotOutcome, count: 1,
+  });
+  if (completed.branchOutcome !== undefined) emitOrchestrationObservation(observer, {
+    name: "catalog.branch", outcome: completed.branchOutcome, count: 1,
+  });
+  emitOrchestrationObservation(observer, { name: "outbox.lifecycle", outcome: "pending", count: 1 });
+  return completed.outcome;
 };
