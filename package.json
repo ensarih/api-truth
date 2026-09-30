@@ -14,6 +14,7 @@
     "test:unit": "vitest run --project unit",
     "test:contract": "vitest run --project contract",
     "test:updates": "vitest run tests/unit/update-input.test.ts tests/unit/update-planner.test.ts tests/unit/contract-differences.test.ts tests/unit/update-execution.test.ts tests/contract/update-contracts.test.ts tests/contract/contract-changes-cli.test.ts",
+    "test:environment": "vitest run tests/unit/environment-resolution.test.ts",
     "test:orchestration": "node scripts/test-environment.ts ready && vitest run --config vitest.integration.config.ts tests/integration/orchestration-execution.test.ts tests/integration/orchestration-persistence.test.ts tests/integration/orchestration-scheduling.test.ts tests/integration/orchestration-workers.test.ts --maxWorkers=2",
     "test:extractor": "vitest run tests/unit/extractor.test.ts tests/contract/extractor-cli.test.ts",
     "extract": "node scripts/extract.mjs",
