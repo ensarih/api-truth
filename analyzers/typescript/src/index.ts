@@ -79,14 +79,17 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (sym && (sym.flags & ts.SymbolFlags.Alias)) sym = checker.getAliasedSymbol(sym);
     return sym;
   };
-  const evidence = (node: ts.Node, method: Evidence["method"] = "deterministic_analysis", limitations: string[] = []): string => {
+  const evidence = (node: ts.Node, method: Evidence["method"] = "deterministic_analysis", limitations: string[] = [],
+    endpointId?: string): string => {
     const path = relative(root, node.getSourceFile().fileName).replaceAll("\\", "/");
     const span = `${node.getStart()}:${node.getEnd()}`;
-    const id = `ev-${hash(`${path}:${span}:${method}`).slice(0, 24)}`;
+    const id = `ev-${hash(`${path}:${span}:${method}${endpointId === undefined ? "" : `:${endpointId}`}`).slice(0, 24)}`;
     if (!result.evidence.some(e => e.evidence_id === id)) result.evidence.push({
       evidence_id: id, source: { kind: "source_code", source_id: request.source.repository_id }, source_version: request.source.immutable_revision,
       location: { path, line: node.getSourceFile().getLineAndCharacterOfPosition(node.getStart()).line + 1, pointer: `span:${span}` }, method,
-      scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id, revision: request.source.immutable_revision }, limitations, access_label: request.source.access_label,
+      scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+        revision: request.source.immutable_revision, ...(endpointId === undefined ? {} : { endpoint_id: endpointId }) },
+      limitations, access_label: request.source.access_label,
     });
     return id;
   };
@@ -186,8 +189,9 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (!factory) return undefined;
     return [...factoryScopes].find(([, scope]) => scope === factory)?.[0];
   };
-  const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], node: ts.Node, method: Evidence["method"], pointer?: string) => {
-    const ev = evidence(node, method);
+  const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], node: ts.Node,
+    method: Evidence["method"], pointer?: string, evidenceId?: string) => {
+    const ev = evidenceId ?? evidence(node, method);
     const id = `claim-${hash(`${endpoint.endpoint_id}:${predicate}:${pointer ?? ""}:${ev}:${JSON.stringify(value)}`).slice(0, 24)}`;
     if (!result.claims.some(c => c.claim_id === id)) result.claims.push({ claim_id: id,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id, ...(pointer ? { schema_pointer: pointer } : {}) },
@@ -348,7 +352,12 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       const schema = expressionSchema(node.arguments[0], endpoint);
       const response = { status: state.status, content: state.media ? [{ media_type: state.media, schema, serialization: { format: node.expression.name.text } }] : [] };
       if (!endpoint.responses.some(item => JSON.stringify(item) === JSON.stringify(response))) endpoint.responses.push(response);
-      claim(endpoint, "response.serialization", { status: state.status, media_type: state.media ?? null, schema }, node, "deterministic_analysis");
+      const responseEvidenceId = state.status.kind === "unknown" ? undefined
+        : evidence(node, "deterministic_analysis", [], endpoint.endpoint_id);
+      if (responseEvidenceId !== undefined) endpoint.evidence_ids = [...new Set([
+        ...endpoint.evidence_ids, responseEvidenceId])].sort();
+      claim(endpoint, "response.serialization", { status: state.status, media_type: state.media ?? null, schema },
+        node, "deterministic_analysis", undefined, responseEvidenceId);
       if (!state.media) diagnostic("response_media_type_unknown", node, endpoint);
       if (state.status.kind === "unknown") diagnostic("response_status_unknown", node, endpoint);
     });

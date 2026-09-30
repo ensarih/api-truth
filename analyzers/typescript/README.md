@@ -47,7 +47,7 @@ Run the focused suite with `npm run test:extractor`.
 | Runtime validation | Rejecting top-level guards for property presence, `Array.isArray`, and literal-array enumeration, including optional enumeration guards | Other boolean/control-flow conditions; no guessed requiredness |
 | Responses | Explicit 100–599 status calls and media types in fluent chains or preceding linear statements on the same response identifier; JSON/send/end serialization shapes; middleware error responses | Missing/dynamic/invalid statuses, branch-dependent state, aliases, missing media types, and unresolved values or spreads |
 | Security | Declared middleware is recorded with an unknown guarantee | No inferred scheme, credential semantics, or authorization guarantee |
-| Evidence and impact | Source spans, declaration/handler/validator dependencies, and shared/transitive schema dependencies | Any unresolved construct makes coverage incomplete and permits downstream full-service fallback |
+| Evidence and impact | Source spans, endpoint-scoped response serialization evidence, declaration/handler/validator dependencies, and shared/transitive schema dependencies | Any unresolved construct makes coverage incomplete and permits downstream full-service fallback |
 
 Endpoint identity uses service, HTTP method, normalized path shape, and route
 selectors. Parameter names remain on endpoint parameters and do not affect the
