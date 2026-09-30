@@ -102,6 +102,18 @@ it into an all-branches scan.
 | D12-S1 | Complete | Reference GitHub Actions workflow and synthetic fixture driver. | The synthetic-only workflow pins actions and Node, uses a read-only token and no persisted checkout credentials, skips forked PRs, applies exact branch selection, and uploads seven validated baseline/PR/merge/UAT/reconciliation envelopes. The local driver and security tests pass; it does not ingest events or deploy. |
 | D12-S2 | Open | Automatic lifecycle and repair verification. | A local runner proves PR preview isolation, merged branch update, UAT-only deployment, failed mixed rollout, authoritative rollback, duplicate event, and missed-event repair without a manual rescan after baseline. PostgreSQL state and published/query views agree at each step. |
 
+### D13 slices
+
+Phase 1 closes only when the complete path works from a fresh checkout and its
+limitations are stated plainly. A local synthetic run proves the mechanics;
+it does not substitute for a protected enterprise pilot.
+
+| ID | Status | Work | Acceptance gate |
+|---|---|---|---|
+| D13-S0 | Open | Fresh-checkout setup and operator guide. | Pinned runtime, disposable PostgreSQL startup/teardown, initial configuration, authentication ports, supported framework constructs, and local demo commands work without undocumented manual steps or API keys. |
+| D13-S1 | Open | Full Phase 1 scenario and cross-surface conformance. | The nine-step [Phase 1 scenario](ROADMAP.md#exit-gate-1) passes from baseline through PR, merge, UAT, failure, rollback, replay/repair, publication failure, and same-pin portal/MCP/export reads. Denied and revoked access fail on every surface. |
+| D13-S2 | Open | Public release hygiene and v0.1 readiness review. | Synthetic-only fixtures/artifacts, license/governance/security reporting, supported/unsupported matrix, privacy scan, clean install, all offline/PostgreSQL/protocol/browser tests, and known limits are documented. Publish a release only after the gate passes. |
+
 ## Later phases and analyzer coverage
 
 | ID | Phase | Work | Gate |
