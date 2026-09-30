@@ -232,9 +232,14 @@ accepts one selected service/revision and never enumerates branches. Branch
 patterns require a future configuration version. D09's pure projection,
 durable attempt/artifact facts, ordered serving observations, exact-scope
 provider reconciliation port, authorized environment resolution, an event inbox,
-and workers for consumption and periodic exact-scope repair are implemented;
-immediate environment reconciliation requests, publication/OpenAPI, query
-transport, portal, and MCP behavior remain unimplemented.
+and workers for consumption and periodic exact-scope repair are implemented.
+D08 environment-specific repair requests schedule the same exact provider check
+immediately. A request survives delivery of an older queued observation and is
+cleared only by a complete provider confirmation; scopes inactive at worker
+claim time are retired without provider access. A view with pending
+reconciliation does not offer a previously resolved snapshot or confirmed
+absence as current. Publication/OpenAPI, query transport,
+portal, and MCP behavior remain unimplemented.
 
 1. Validate, persist, and deduplicate the event; create a durable job.
 2. Resolve the immutable source/artifact/configuration scope.

@@ -12,7 +12,8 @@ export const quoteEnvironmentSchema = (schema: unknown): string => {
 };
 
 const migrationVersions = ["0001_deployment_attempts", "0002_serving_observations",
-  "0003_deployment_inbox", "0004_reconciliation_tasks", "0005_unobserved_reconciliation"] as const;
+  "0003_deployment_inbox", "0004_reconciliation_tasks", "0005_unobserved_reconciliation",
+  "0006_environment_requests"] as const;
 const checksum = (body: string): string => `sha256:${createHash("sha256").update(body).digest("hex")}`;
 
 export const applyEnvironmentMigrations = async (pool: Pool, options: { schema: string }): Promise<void> => {

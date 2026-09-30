@@ -22,6 +22,18 @@ const context = { tenantId: "tenant-a", principalId: "deploy-connector", produce
   allowedEventTypes: ["deployment.changed"], allowedRepositories: ["commerce"], allowedServices: ["orders"],
   deploymentAuthorityGrants: [{ repositoryId: "commerce", serviceId: "orders", environment: "uat",
     adapterId: "deploy", sourceAuthorityIds: ["inventory"] }], capabilities: ["event.ingest"] };
+const repairContext = { tenantId: "tenant-a", principalId: "repair-connector", producerId: "repair",
+  allowedEventTypes: ["reconciliation.requested"], allowedRepositories: ["commerce"],
+  allowedServices: ["orders"], deploymentAuthorityGrants: [], capabilities: ["event.ingest"] };
+const repairRequest = (eventId: string) => ({
+  event_version: "1.0.0", event_id: eventId, event_type: "reconciliation.requested",
+  producer: { producer_id: "repair", adapter_version: "1" },
+  occurred_at: "2026-01-01T00:00:00.000Z", received_at: "2026-01-01T00:00:01.000Z",
+  subjects: { repository_id: "commerce", service_ids: ["orders"] },
+  provider_evidence: { provider: "control-plane", provider_reference: eventId },
+  payload: { scope: { service_ids: ["orders"], environments: ["uat"] },
+    provider_snapshot_reference: eventId },
+});
 const config = { fingerprint: "config-a", document: {
   config_version: "1.0.0", access_scopes: [
     { access_scope_id: "engineering", label: "Engineering" },
@@ -105,14 +117,28 @@ test("an authorized UAT view binds only the observed artifact to an exact analyz
     await catalog.ingestAnalyzerResult({ tenantId: "tenant-a", result, configFingerprint: "config-a" });
     expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed",
       contract: "resolved", snapshotId: result.snapshot_id });
+    await orchestration.ingestEvent(repairContext, repairRequest("verify-current"));
+    const pendingView = await view.getEnvironment(reader, key);
+    expect(pendingView).toMatchObject({ deployment: "unknown", contract: "unavailable",
+      active: [], reconciliationRequired: true });
+    expect(pendingView).not.toHaveProperty("snapshotId");
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => serving("verified-current", "2", [artA]) },
+      workerIdentity: worker, eventContext: context });
+    await createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact).drain(worker);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed",
+      contract: "resolved", snapshotId: result.snapshot_id, reconciliationRequired: false });
     await access.putGrant({ tenantId: "tenant-a" }, { principalId: "architect", scopeId: "contract-read", active: false });
     expect(await view.getEnvironment(reader, key)).toMatchObject({ contract: "pending_analysis" });
     await access.putGrant({ tenantId: "tenant-a" }, { principalId: "architect", scopeId: "contract-read", active: true });
-    await orchestration.ingestEvent(context, serving("confirmed-absent", "2", []));
+    await orchestration.ingestEvent(context, serving("confirmed-absent", "3", []));
     await environment.recordServingObservation(worker,
       { tenantId: "tenant-a", producerId: "deploy", eventId: "confirmed-absent" });
     expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "confirmed_not_deployed",
       contract: "unavailable", active: [] });
+    await orchestration.ingestEvent(repairContext, repairRequest("verify-absence"));
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "unknown",
+      contract: "unavailable", active: [], reconciliationRequired: true });
     await expect(view.getEnvironment(reader, { ...key, environment: "staging" }))
       .rejects.toMatchObject({ code: "ENVIRONMENT_NOT_FOUND_OR_DENIED" });
     await expect(view.getEnvironment({ tenantId: "tenant-b", principalId: "architect" }, key))

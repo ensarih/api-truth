@@ -273,7 +273,8 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
              ON CONFLICT (tenant_id,repository_id,service_id,environment) DO UPDATE SET
                current_producer_id=EXCLUDED.current_producer_id,current_event_id=EXCLUDED.current_event_id,
                pending_producer_id=EXCLUDED.pending_producer_id,pending_event_id=EXCLUDED.pending_event_id,
-               reconciliation_required=EXCLUDED.reconciliation_required,
+               reconciliation_required=EXCLUDED.reconciliation_required
+                 OR checkpoint.explicit_reconciliation_requested,
                version=checkpoint.version+1,updated_at=clock_timestamp()`,
             [...scope, identity.producerId, identity.eventId,
               needsReconciliation ? identity.producerId : null,
@@ -312,8 +313,18 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
                   active.config_fingerprint
            FROM environment_serving_checkpoints checkpoint
            JOIN orchestration_active_configurations active ON active.tenant_id=checkpoint.tenant_id
+           JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+             AND configuration.config_fingerprint=active.config_fingerprint
            WHERE checkpoint.tenant_id=$1 AND checkpoint.repository_id=$2 AND checkpoint.service_id=$3
-             AND checkpoint.environment=$4 AND checkpoint.reconciliation_required=true`,
+             AND checkpoint.environment=$4 AND checkpoint.reconciliation_required=true
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements(configuration.document->'repositories') repository(document)
+               CROSS JOIN LATERAL jsonb_array_elements(repository.document->'services') service(document)
+               CROSS JOIN LATERAL jsonb_array_elements(service.document->'environments') environment(document)
+               WHERE repository.document->>'repository_id'=checkpoint.repository_id
+                 AND service.document->>'service_id'=checkpoint.service_id
+                 AND environment.document->>'name'=checkpoint.environment
+             )`,
           [scope.tenantId, scope.repositoryId, scope.serviceId, scope.environment],
         );
         await client.query("COMMIT");
@@ -382,6 +393,7 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
           `UPDATE environment_serving_checkpoints SET
              current_producer_id=$5,current_event_id=$6,
              pending_producer_id=$7,pending_event_id=$8,reconciliation_required=$9,
+             explicit_reconciliation_requested=false,
              version=version+1,updated_at=clock_timestamp()
            WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND environment=$4`,
           [...scope, identity.producerId, identity.eventId,

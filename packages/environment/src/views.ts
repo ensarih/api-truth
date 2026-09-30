@@ -184,9 +184,16 @@ export const createEnvironmentViewRepository = (pool: Pool, options: { schema: s
         const resolution = resolveEnvironment({ ...(observation === undefined ? {} : { observation }),
           ...(latestAttempt === undefined ? {} : { latestAttempt }),
           artifactBindings: bindings, revisionSnapshots: snapshots });
-        const view = Object.freeze({ ...resolution, ...key, configFingerprint: current.config_fingerprint,
+        const reconciliationRequired = state?.reconciliation_required === true
+          || state !== undefined && !observationCurrent;
+        const safeResolution: EnvironmentResolution = reconciliationRequired
+          && (resolution.deployment === "deployed" || resolution.deployment === "confirmed_not_deployed")
+          ? Object.freeze({ deployment: "unknown", contract: "unavailable", active: Object.freeze([]),
+            ...(resolution.latestAttempt === undefined ? {} : { latestAttempt: resolution.latestAttempt }) })
+          : resolution;
+        const view = Object.freeze({ ...safeResolution, ...key, configFingerprint: current.config_fingerprint,
           ...(state === undefined ? {} : { checkpointVersion: state.version }),
-          reconciliationRequired: state?.reconciliation_required === true || state !== undefined && !observationCurrent });
+          reconciliationRequired });
         await client.query("COMMIT");
         return view;
       } catch (error) {

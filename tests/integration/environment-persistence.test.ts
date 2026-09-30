@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { setTimeout } from "node:timers/promises";
+
+import type { PoolClient } from "pg";
 import { expect, test, vi } from "vitest";
 
-import { applyOrchestrationMigrations, createOrchestrationRepository }
+import { applyOrchestrationMigrations, createOrchestrationRepository, eventSha256 }
   from "../../packages/orchestration/src/index.js";
 import { applyEnvironmentMigrations, createEnvironmentInboxWorker, createEnvironmentReconciler,
   createEnvironmentReconciliationWorker, createEnvironmentRepository }
@@ -27,6 +32,19 @@ const eventContext = (tenantId = "tenant-a", authorized = true) => ({
   deploymentAuthorityGrants: authorized ? [{ repositoryId: "commerce", serviceId: "orders", environment: "uat",
     adapterId: "deploy", sourceAuthorityIds: ["inventory"] }] : [],
   capabilities: ["event.ingest"],
+});
+const reconciliationContext = () => ({
+  tenantId: "tenant-a", principalId: "repair-connector", producerId: "repair",
+  allowedEventTypes: ["reconciliation.requested"], allowedRepositories: ["commerce"],
+  allowedServices: ["orders"], deploymentAuthorityGrants: [], capabilities: ["event.ingest"],
+});
+const reconciliationRequest = (eventId: string, environments = ["uat"]) => ({
+  event_version: "1.0.0", event_id: eventId, event_type: "reconciliation.requested",
+  producer: { producer_id: "repair", adapter_version: "1" },
+  occurred_at: "2026-01-01T00:00:00.000Z", received_at: "2026-01-01T00:00:01.000Z",
+  subjects: { repository_id: "commerce", service_ids: ["orders"] },
+  provider_evidence: { provider: "control-plane", provider_reference: eventId },
+  payload: { scope: { service_ids: ["orders"], environments }, provider_snapshot_reference: eventId },
 });
 const attempt = (eventId: string, revision: { state: "known"; revision: string } | { state: "unknown"; reason: string },
   artifactId = "artifact-a") => ({
@@ -70,7 +88,8 @@ test("D09 migrations require D08 and replay without changing the ledger", async 
     );
     expect(after.rows).toEqual([{ version: "0001_deployment_attempts" },
       { version: "0002_serving_observations" }, { version: "0003_deployment_inbox" },
-      { version: "0004_reconciliation_tasks" }, { version: "0005_unobserved_reconciliation" }]);
+      { version: "0004_reconciliation_tasks" }, { version: "0005_unobserved_reconciliation" },
+      { version: "0006_environment_requests" }]);
     await database.pool.query(`UPDATE ${schema}.environment_schema_migrations SET checksum_sha256=$1`,
       [`sha256:${"0".repeat(64)}`]);
     await expect(applyEnvironmentMigrations(database.pool, { schema: database.schema }))
@@ -324,6 +343,226 @@ test("a periodic exact check repairs a lost event without replaying repository c
       `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
     );
     expect(checkpoint.rows).toEqual([{ current_event_id: "recovered-after-loss", reconciliation_required: false }]);
+  } finally { await database.cleanup(); }
+});
+
+test("an authenticated D08 environment request prompts exact repair once without waiting for the periodic interval", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const artA = { artifact_id: "artifact-a", revision: { state: "known" as const, revision: revisionA } };
+    const artB = { artifact_id: "artifact-b", revision: { state: "known" as const, revision: revisionB } };
+    await orchestration.ingestEvent(eventContext(), serving("current-before-request", "1", [artA]));
+    await environment.recordServingObservation(worker,
+      { tenantId: "tenant-a", producerId: "deploy", eventId: "current-before-request" });
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    const observed = vi.fn(async () => serving("confirmed-after-request", "cursor-new", [artB]));
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: observed }, workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact);
+    await expect(scheduling.drain(worker)).resolves.toEqual([]);
+    await orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("repair-now"));
+    const before = await database.pool.query<{ version: string; reconciliation_required: boolean }>(
+      `SELECT version::text,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(before.rows[0]?.reconciliation_required).toBe(true);
+    await orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("repair-now"));
+    const repeated = await database.pool.query<{ version: string }>(
+      `SELECT version::text FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(repeated.rows[0]?.version).toBe(before.rows[0]?.version);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ scope, state: "resolved" }]);
+    expect(observed).toHaveBeenCalledExactlyOnceWith(scope);
+    expect((await database.pool.query<{ current_event_id: string }>(
+      `SELECT current_event_id FROM ${schema}.environment_serving_checkpoints`,
+    )).rows).toEqual([{ current_event_id: "confirmed-after-request" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("historical D08 environment requests backfill on upgrade and unconfigured scopes cannot schedule D09 work", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("historical-request"));
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const backfilled = await database.pool.query<{ environment: string; reconciliation_required: boolean }>(
+      `SELECT environment,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(backfilled.rows).toEqual([{ environment: "uat", reconciliation_required: true }]);
+    await expect(orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("bad-environment", ["prod"])))
+      .rejects.toMatchObject({ code: "EVENT_SUBJECT_MISMATCH" });
+    await orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("branch-only", []));
+    const scopes = await database.pool.query<{ environment: string; version: string }>(
+      `SELECT environment,version::text FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(scopes.rows).toEqual([{ environment: "uat", version: "1" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("a request committing during the D09 upgrade crosses the trigger/backfill cutover", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  let writer: PoolClient | undefined;
+  let migration: Promise<void> | undefined;
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    // Recreate an installation at D09 migration 0005 so only the 0006 cutover is under test.
+    const setup = await database.pool.connect();
+    try {
+      await setup.query("BEGIN");
+      await setup.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
+      await setup.query(`CREATE TABLE environment_schema_migrations (
+        version text PRIMARY KEY,checksum_sha256 text NOT NULL,applied_at timestamptz DEFAULT clock_timestamp())`);
+      for (const version of ["0001_deployment_attempts", "0002_serving_observations",
+        "0003_deployment_inbox", "0004_reconciliation_tasks", "0005_unobserved_reconciliation"]) {
+        const body = await readFile(new URL(`../../packages/environment/migrations/${version}.sql`, import.meta.url),
+          "utf8");
+        await setup.query(body);
+        await setup.query(`INSERT INTO environment_schema_migrations (version,checksum_sha256) VALUES ($1,$2)`,
+          [version, `sha256:${createHash("sha256").update(body).digest("hex")}`]);
+      }
+      await setup.query("COMMIT");
+    } catch (error) {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally { setup.release(); }
+
+    writer = await database.pool.connect();
+    await writer.query("BEGIN");
+    await writer.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
+    const event = reconciliationRequest("cutover-request");
+    await writer.query(`INSERT INTO orchestration_events
+      (tenant_id,producer_id,event_id,event_sha256,event_type,repository_id,service_ids,
+       document,adapter_version,provider,provider_reference,active_config_fingerprint)
+      VALUES ('tenant-a','repair',$1,$2,'reconciliation.requested','commerce',ARRAY['orders'],
+        $3::jsonb,'1','control-plane',$1,'config-a')`,
+    [event.event_id, eventSha256(event), JSON.stringify(event)]);
+    migration = applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    let waiting = false;
+    for (let poll = 0; poll < 100; poll += 1) {
+      const locks = await database.pool.query<{ waiting: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_locks
+         WHERE relation=$1::regclass AND NOT granted) AS waiting`,
+        [`${schema}.orchestration_events`],
+      );
+      if (locks.rows[0]?.waiting) { waiting = true; break; }
+      await setTimeout(20);
+    }
+    expect(waiting).toBe(true);
+    await writer.query("COMMIT");
+    await migration;
+    expect((await database.pool.query<{ reconciliation_required: boolean; request_generation: string }>(
+      `SELECT reconciliation_required,request_generation::text
+       FROM ${schema}.environment_serving_checkpoints`,
+    )).rows).toEqual([{ reconciliation_required: true, request_generation: "1" }]);
+  } finally {
+    if (writer !== undefined) {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+    }
+    await migration?.catch(() => undefined);
+    await database.cleanup();
+  }
+});
+
+test("an older queued serving event cannot erase a later exact repair request", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await orchestration.ingestEvent(eventContext(), serving("queued-before-request", "1", []));
+    await orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("request-after-queue"));
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    await createEnvironmentInboxWorker(database.pool, { schema: database.schema }, environment).drain(worker);
+    const pending = await database.pool.query<{ reconciliation_required: boolean }>(
+      `SELECT reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(pending.rows).toEqual([{ reconciliation_required: true }]);
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => serving("exact-after-request", "2", []) },
+      workerIdentity: worker, eventContext: eventContext() });
+    await expect(createEnvironmentReconciliationWorker(database.pool,
+      { schema: database.schema }, exact).drain(worker)).resolves.toMatchObject([{ state: "resolved" }]);
+    expect((await database.pool.query<{ current_event_id: string; reconciliation_required: boolean }>(
+      `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    )).rows).toEqual([{ current_event_id: "exact-after-request", reconciliation_required: false }]);
+  } finally { await database.cleanup(); }
+});
+
+test("a repair request during an incomplete check starts a fresh immediate attempt", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    let calls = 0;
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, {
+      reconcile: async () => {
+        calls += 1;
+        if (calls === 1) {
+          await orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("while-checking"));
+          return { outcome: "pending" };
+        }
+        return { outcome: "no_pending" };
+      },
+    });
+    await expect(scheduling.drain(worker, 1)).resolves.toMatchObject([{ state: "retry_wait" }]);
+    await expect(scheduling.drain(worker, 1)).resolves.toMatchObject([{ state: "resolved" }]);
+    expect(calls).toBe(2);
+  } finally { await database.cleanup(); }
+});
+
+test("a removed environment retires its pending task before any provider access", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    const removed = configuration();
+    removed.document.repositories[0]!.services[0]!.environments = [];
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.registerConfiguration(admin(), { ...removed, fingerprint: "config-b" });
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await orchestration.ingestEvent(reconciliationContext(), reconciliationRequest("before-removal"));
+    await database.pool.query(`INSERT INTO ${schema}.environment_reconciliation_tasks
+      (tenant_id,repository_id,service_id,environment,checkpoint_version)
+      SELECT tenant_id,repository_id,service_id,environment,version
+      FROM ${schema}.environment_serving_checkpoints`);
+    await orchestration.activateConfigurationByCas(admin(), { fingerprint: "config-b", expectedCheckpointVersion: "1",
+      providerEvidence: { provider: "control-plane", provider_reference: "removed-uat" } });
+    const observed = vi.fn(async () => ({ outcome: "no_pending" as const }));
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema },
+      { reconcile: observed });
+    await expect(scheduling.drain(worker)).resolves.toEqual([]);
+    expect(observed).not.toHaveBeenCalled();
+    expect((await database.pool.query<{ state: string }>(
+      `SELECT state FROM ${schema}.environment_reconciliation_tasks`,
+    )).rows).toEqual([{ state: "resolved" }]);
+    await orchestration.activateConfigurationByCas(admin(), { fingerprint: "config-a", expectedCheckpointVersion: "2",
+      providerEvidence: { provider: "control-plane", provider_reference: "restored-uat" } });
+    await expect(scheduling.drain(worker, 1)).resolves.toMatchObject([{ state: "resolved" }]);
+    expect(observed).toHaveBeenCalledTimes(1);
   } finally { await database.cleanup(); }
 });
 

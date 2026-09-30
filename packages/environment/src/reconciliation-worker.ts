@@ -21,7 +21,7 @@ export type EnvironmentReconciliationWorker = Readonly<{
   drain(workerIdentity: unknown, limit?: number): Promise<readonly EnvironmentReconciliationOutcome[]>;
 }>;
 type Claimed = EnvironmentReconciliationScope & Readonly<{
-  leaseToken: string; attemptCount: number; maxAttempts: number;
+  leaseToken: string; attemptCount: number; maxAttempts: number; requestGeneration: string;
 }>;
 
 const withClient = async <T>(pool: Pool, schema: string,
@@ -106,7 +106,19 @@ export const createEnvironmentReconciliationWorker = (pool: Pool,
          ON existing.tenant_id=checkpoint.tenant_id AND existing.repository_id=checkpoint.repository_id
          AND existing.service_id=checkpoint.service_id AND existing.environment=checkpoint.environment
        WHERE checkpoint.reconciliation_required
-         AND existing.checkpoint_version IS DISTINCT FROM checkpoint.version
+         AND (existing.checkpoint_version IS DISTINCT FROM checkpoint.version OR existing.state='resolved')
+         AND EXISTS (
+           SELECT 1 FROM orchestration_active_configurations active
+           JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+             AND configuration.config_fingerprint=active.config_fingerprint
+           CROSS JOIN LATERAL jsonb_array_elements(configuration.document->'repositories') repository(document)
+           CROSS JOIN LATERAL jsonb_array_elements(repository.document->'services') service(document)
+           CROSS JOIN LATERAL jsonb_array_elements(service.document->'environments') environment(document)
+           WHERE active.tenant_id=checkpoint.tenant_id
+             AND repository.document->>'repository_id'=checkpoint.repository_id
+             AND service.document->>'service_id'=checkpoint.service_id
+             AND environment.document->>'name'=checkpoint.environment
+         )
        ORDER BY checkpoint.tenant_id COLLATE "C",checkpoint.repository_id COLLATE "C",
                 checkpoint.service_id COLLATE "C",checkpoint.environment COLLATE "C"
        LIMIT 128
@@ -114,7 +126,23 @@ export const createEnvironmentReconciliationWorker = (pool: Pool,
          checkpoint_version=EXCLUDED.checkpoint_version,state='queued',attempt_count=0,
          available_at=clock_timestamp(),lease_token=NULL,lease_expires_at=NULL,
          safe_last_error_code=NULL,resolved_at=NULL
-       WHERE task.checkpoint_version IS DISTINCT FROM EXCLUDED.checkpoint_version`,
+       WHERE task.checkpoint_version IS DISTINCT FROM EXCLUDED.checkpoint_version OR task.state='resolved'`,
+    );
+    await client.query(
+      `UPDATE environment_reconciliation_tasks task SET state='resolved',resolved_at=clock_timestamp(),
+         lease_token=NULL,lease_expires_at=NULL,safe_last_error_code=NULL
+       WHERE task.state<>'resolved' AND NOT EXISTS (
+         SELECT 1 FROM orchestration_active_configurations active
+         JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+           AND configuration.config_fingerprint=active.config_fingerprint
+         CROSS JOIN LATERAL jsonb_array_elements(configuration.document->'repositories') repository(document)
+         CROSS JOIN LATERAL jsonb_array_elements(repository.document->'services') service(document)
+         CROSS JOIN LATERAL jsonb_array_elements(service.document->'environments') environment(document)
+         WHERE active.tenant_id=task.tenant_id
+           AND repository.document->>'repository_id'=task.repository_id
+           AND service.document->>'service_id'=task.service_id
+           AND environment.document->>'name'=task.environment
+       )`,
     );
     await client.query(
       `UPDATE environment_reconciliation_tasks task SET state='resolved',resolved_at=clock_timestamp(),
@@ -130,14 +158,27 @@ export const createEnvironmentReconciliationWorker = (pool: Pool,
        WHERE state='leased' AND lease_expires_at<=clock_timestamp() AND attempt_count>=max_attempts`,
     );
     const selected = await client.query<{ tenant_id: string; repository_id: string;
-      service_id: string; environment: string; attempt_count: string; max_attempts: string }>(
+      service_id: string; environment: string; attempt_count: string; max_attempts: string;
+      request_generation: string }>(
       `SELECT task.tenant_id,task.repository_id,task.service_id,task.environment,
-              task.attempt_count::text,task.max_attempts::text
+              task.attempt_count::text,task.max_attempts::text,checkpoint.request_generation::text
        FROM environment_reconciliation_tasks task
        JOIN environment_serving_checkpoints checkpoint ON checkpoint.tenant_id=task.tenant_id
          AND checkpoint.repository_id=task.repository_id AND checkpoint.service_id=task.service_id
          AND checkpoint.environment=task.environment
        WHERE checkpoint.reconciliation_required AND task.checkpoint_version=checkpoint.version
+         AND EXISTS (
+           SELECT 1 FROM orchestration_active_configurations active
+           JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+             AND configuration.config_fingerprint=active.config_fingerprint
+           CROSS JOIN LATERAL jsonb_array_elements(configuration.document->'repositories') repository(document)
+           CROSS JOIN LATERAL jsonb_array_elements(repository.document->'services') service(document)
+           CROSS JOIN LATERAL jsonb_array_elements(service.document->'environments') environment(document)
+           WHERE active.tenant_id=task.tenant_id
+             AND repository.document->>'repository_id'=task.repository_id
+             AND service.document->>'service_id'=task.service_id
+             AND environment.document->>'name'=task.environment
+         )
          AND ((task.state IN ('queued','retry_wait') AND task.available_at<=clock_timestamp())
            OR (task.state='leased' AND task.lease_expires_at<=clock_timestamp()
              AND task.attempt_count<task.max_attempts))
@@ -157,7 +198,8 @@ export const createEnvironmentReconciliationWorker = (pool: Pool,
     );
     return Object.freeze({ tenantId: row.tenant_id, repositoryId: row.repository_id,
       serviceId: row.service_id, environment: row.environment, leaseToken,
-      attemptCount: Number(row.attempt_count) + 1, maxAttempts: Number(row.max_attempts) });
+      attemptCount: Number(row.attempt_count) + 1, maxAttempts: Number(row.max_attempts),
+      requestGeneration: row.request_generation });
   });
 
   const finish = async (claimed: Claimed, result: "no_pending" | "applied" | "pending" | "superseded" | undefined,
@@ -174,6 +216,7 @@ export const createEnvironmentReconciliationWorker = (pool: Pool,
              (LEAST(60000,1000*power(2,LEAST(attempt_count-1,6)))::bigint*interval '1 millisecond')
              ELSE task.available_at END,
            checkpoint_version=CASE WHEN $6='retry_wait' AND $7='pending'
+             AND checkpoint.request_generation=$9::bigint
              THEN checkpoint.version ELSE task.checkpoint_version END,
            safe_last_error_code=$8
          FROM environment_serving_checkpoints checkpoint
@@ -181,7 +224,7 @@ export const createEnvironmentReconciliationWorker = (pool: Pool,
            AND task.environment=$4 AND task.lease_token=$5 AND task.state='leased'
            AND checkpoint.tenant_id=task.tenant_id AND checkpoint.repository_id=task.repository_id
            AND checkpoint.service_id=task.service_id AND checkpoint.environment=task.environment`,
-        [...scope, claimed.leaseToken, state, result ?? null, code ?? null],
+        [...scope, claimed.leaseToken, state, result ?? null, code ?? null, claimed.requestGeneration],
       );
       return Object.freeze({ scope: Object.freeze({ tenantId: claimed.tenantId,
         repositoryId: claimed.repositoryId, serviceId: claimed.serviceId, environment: claimed.environment }),

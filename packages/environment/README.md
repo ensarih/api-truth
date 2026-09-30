@@ -48,9 +48,8 @@ requests one literal tenant/repository/service/environment from a provider port,
 ingests that response through D08 authorization, then confirms it using the
 checkpoint version and active configuration. A stale provider response cannot
 replace a newer checkpoint. Complete known inventory can resolve opaque order;
-unknown or incomplete inventory remains pending. The host must invoke this
-explicit operation; automatic provider reconciliation delivery remains open work. A pending
-flag alone is not evidence that reconciliation ran.
+unknown or incomplete inventory remains pending. A pending flag alone is not
+evidence that reconciliation ran.
 
 `createEnvironmentReconciliationWorker.drain` discovers configured environments
 without a serving checkpoint, stale configurations, and pending checkpoints.
@@ -59,9 +58,14 @@ by default), so a missed deployment event is eventually repaired without
 rescanning code. It leases one exact scope at a time and calls a trusted
 reconciliation port. A host can supply `createEnvironmentReconciler` with its
 authenticated deployment adapter. Transient errors and incomplete provider
-responses back off; new checkpoint versions supersede old leases. Wiring an
-explicit D08 environment reconciliation request to prompt immediate repair
-remains open work.
+responses back off; new checkpoint versions supersede old leases. A D08
+environment-specific `reconciliation.requested` event schedules an immediate
+exact check in the same ingestion transaction. Replays do not schedule twice.
+An explicit request survives delivery of an older queued serving event and is
+cleared only after a complete exact provider confirmation. A request arriving
+during an incomplete check starts a fresh attempt rather than inheriting its
+backoff. Scopes already removed before a worker claim are retired without provider access;
+if reactivated while still pending, they are scheduled again.
 
 `createEnvironmentViewRepository.getEnvironment` reads one tenant, repository,
 service, and environment under a consistent database snapshot. It checks the
@@ -72,11 +76,13 @@ observed revision and active configuration to match. A missing binding or
 analysis remains pending. Confirmed empty inventory, mixed serving, and unknown
 serving stay distinct; the latest attempt is shown only when its order is
 unambiguous. Revocation takes effect on the next query. The view returns a
-resolution and snapshot ID, not the full contract document.
+resolution and snapshot ID, not the full contract document. While an exact
+reconciliation is pending, a previously resolved snapshot is withheld rather
+than presented as current.
 
 From the repository root, run `npm run test:environment` for the focused offline
 suite. Start the fixed local PostgreSQL test service with `npm run test:env:up`,
 run `npm run test:environment:integration`, then stop it with
 `npm run test:env:down`. `npm run check` covers all offline suites. A concrete
-deployment-provider adapter, provider reconciliation scheduling, and query transports are
-later work in the [backlog](../../docs/BACKLOG.md).
+deployment-provider adapter and query transports are later work in the
+[backlog](../../docs/BACKLOG.md).
