@@ -1,6 +1,6 @@
 # Testing and Local Validation
 
-**Status:** offline TypeScript and isolated PostgreSQL suites cover D03–D10, including environment lifecycle and OpenAPI publication; D11 query/portal/MCP and Java execution remain in progress or planned.
+**Status:** offline TypeScript and isolated PostgreSQL suites cover D03–D10, including environment lifecycle and OpenAPI publication; D11 query, portal HTTP, and MCP protocol slices are implemented, with browser and full environment cross-surface gates in progress. Java execution remains planned.
 **Date:** 2026-09-30
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
@@ -33,9 +33,9 @@ No database, application server, API key, integration environment, or Java analy
 | Suite | What it validates | Dependencies |
 |---|---|---|
 | Unit | Function outputs, failure behavior, state transitions, pure schema/identity logic | Native runtime; no network or Docker |
-| Contract | IR/event schemas, plugin output, actual semantic-adapter request/response normalization | Synthetic fixtures and mocked provider transports; no API keys |
-| Integration | PostgreSQL connectivity/isolation; D06 snapshots, access and branch pointers; D08 events/jobs and reconciliation; D09 environment lifecycle; D10 publication, revocation, and local round trip | Isolated local PostgreSQL plus real implemented components |
-| End-to-end | CLI/event → catalog → OpenAPI/portal/MCP lifecycle | Local application and fixture services, as implemented |
+| Contract | IR/event schemas, plugin output, and linked MCP client/server tool behavior | Synthetic fixtures and local protocol transport; no API keys |
+| Integration | PostgreSQL connectivity/isolation; D06 snapshots, access and branch pointers; D08 events/jobs and reconciliation; D09 environment lifecycle; D10 publication, revocation, and local round trip; D11 portal/MCP/export same-publication read | Isolated local PostgreSQL plus real implemented components |
+| End-to-end | CLI/event → catalog → OpenAPI/portal/MCP lifecycle | Local application and fixture services; complete Phase 1 scenario remains open |
 | Java | Java extractor behavior and common plugin conformance | Pinned JDK/build wrapper when the Java adapter is added |
 
 Do not mock the function under test. Mock only external boundaries when needed, such as model API transports; assert the actual adapter result or failure. Database tests exercise real database transactions rather than in-memory substitutes.
@@ -74,7 +74,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm test` | **Available:** offline unit and contract suites; no external API calls |
 | `npm run test:unit -- <file>` | **Available:** focus the unit project; missing selections fail |
 | `npm run test:watch` | **Available:** rerun relevant offline tests during development |
-| `npm run test:contract` | **Available:** validate reviewed fixture integrity through the D02 checker |
+| `npm run test:contract` | **Available:** validate reviewed fixture integrity and linked read-only MCP protocol behavior |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
 | `npm run test:updates` | **Available:** run the D07 planner, difference, execution, contract, and local CLI suites without Docker or provider credentials |
 | `npm run test:environment` | **Available:** run D09 pure environment-resolution and serving-order scenarios without Docker or provider credentials |
@@ -91,7 +91,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:integration` | **Available:** require the running fixed database, then run real isolation and rollback tests with up to two workers |
 | `npm run test:env:down` | **Available:** remove only the fixed Compose project's containers, network, and volumes |
 
-The integration suite fails nonzero with a distinct dependency message when Docker or PostgreSQL is unavailable. Its schemas use a random `api_truth_test_` prefix per run/worker and its `finally` cleanup drops only those schemas. The Compose service publishes only on loopback, stores PostgreSQL data on a 2 GiB tmpfs, and uses synthetic test-only credentials. Run `test:env:down` between repeated complete suites to reset this disposable storage. The catalog and OpenAPI round-trip commands accept no database target or reset option. D08 uses the v0.1 `intended_branches` array as the exact per-service scan allowlist; empty means scan none. Query/portal/MCP and Java commands will be added with their implementations rather than as empty successful placeholders.
+The integration suite fails nonzero with a distinct dependency message when Docker or PostgreSQL is unavailable. Its schemas use a random `api_truth_test_` prefix per run/worker and its `finally` cleanup drops only those schemas. The Compose service publishes only on loopback, stores PostgreSQL data on a 2 GiB tmpfs, and uses synthetic test-only credentials. Run `test:env:down` between repeated complete suites to reset this disposable storage. The catalog and OpenAPI round-trip commands accept no database target or reset option. D08 uses the v0.1 `intended_branches` array as the exact per-service scan allowlist; empty means scan none. Query/portal/MCP tests now run in the existing suites; standalone authenticated host and Java analyzer commands will be added with their implementations rather than as empty successful placeholders.
 
 ### D05-to-D06 developer round-trip
 
@@ -190,4 +190,4 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The D04 offline scaffold and PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, D07 update/difference core, D08 event/worker orchestration, D09 environment lifecycle, and D10 validated OpenAPI compilation/publication are implemented. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance and D11 query transports remain pending. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, update contracts and limitations in `packages/updates/README.md`, orchestration capabilities in `packages/orchestration/README.md`, D09 behavior in `packages/environment/README.md`, and D10 behavior in `packages/openapi/README.md`.
+The D04 offline scaffold and PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, D07 update/difference core, D08 event/worker orchestration, D09 environment lifecycle, and D10 validated OpenAPI compilation/publication are implemented. D11 shared query, portal HTTP, and initial MCP transport are also implemented; browser interaction and environment cross-surface gates remain. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance is pending. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, update contracts and limitations in `packages/updates/README.md`, orchestration capabilities in `packages/orchestration/README.md`, D09 behavior in `packages/environment/README.md`, and D10 behavior in `packages/openapi/README.md`.

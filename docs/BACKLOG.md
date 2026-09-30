@@ -110,7 +110,7 @@ it does not substitute for a protected enterprise pilot.
 
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
-| D13-S0 | Open | Fresh-checkout setup and operator guide. | Pinned runtime, disposable PostgreSQL startup/teardown, initial configuration, authentication ports, supported framework constructs, and local demo commands work without undocumented manual steps or API keys. |
+| D13-S0 | In progress | Fresh-checkout setup and operator guide. | The local guide records pinned runtime, disposable PostgreSQL, initial configuration and authentication ports, TypeScript/Express support, synthetic extraction-to-catalog and OpenAPI demos, and known limits. A separate clean checkout passed install, offline checks, database startup/readiness, demos, and integration checks. Shared test database teardown was not executed during parallel work; verify teardown before closing this slice. |
 | D13-S1 | Open | Full Phase 1 scenario and cross-surface conformance. | The nine-step [Phase 1 scenario](ROADMAP.md#exit-gate-1) passes from baseline through PR, merge, UAT, failure, rollback, replay/repair, publication failure, and same-pin portal/MCP/export reads. Denied and revoked access fail on every surface. |
 | D13-S2 | Open | Public release hygiene and v0.1 readiness review. | Synthetic-only fixtures/artifacts, license/governance/security reporting, supported/unsupported matrix, privacy scan, clean install, all offline/PostgreSQL/protocol/browser tests, and known limits are documented. Publish a release only after the gate passes. |
 

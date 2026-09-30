@@ -35,10 +35,11 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development is underway. D01–D07 and D09–D10 are complete. D08 runs durable branch analysis, isolated PR previews, exact branch/PR reconciliation, and configuration-change repair against the local PostgreSQL test environment; its independent final review remains. D09 tracks deployment facts and authoritative serving state. D10 compiles evidence-gated OpenAPI 3.1, validates it offline against a pinned official schema, and publishes revision, branch, and environment contracts atomically. The TypeScript/Express analyzer covers a published bounded subset. The portal and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
+Development is underway. D01–D10 are complete. D08 runs durable branch analysis, isolated PR previews, exact branch/PR reconciliation, and configuration-change repair against the local PostgreSQL test environment. D09 tracks deployment facts and authoritative serving state. D10 compiles evidence-gated OpenAPI 3.1, validates it offline against a pinned official schema, and publishes revision, branch, and environment contracts atomically. D11 now has a shared authorized query layer, a host-authenticated portal, and initial read-only MCP tools. D12 has a bounded synthetic reference workflow and a local host-attested event bridge; provider wiring and the full lifecycle gate remain. The TypeScript/Express analyzer covers a published bounded subset. Java and additional Node.js framework adapters have separate conformance gates.
 
 Start with:
 
+- [Fresh-checkout local setup and operator guide](docs/LOCAL_SETUP.md)
 - [Product specification](docs/SPECIFICATION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Project plan](PROJECT%20PLAN.md)
@@ -50,12 +51,14 @@ Start with:
 - [Orchestration package and local lifecycle test](packages/orchestration/README.md)
 - [Environment-resolution core](packages/environment/README.md)
 - [OpenAPI planner and compiler](packages/openapi/README.md)
+- [Portal host interface](apps/portal/README.md)
+- [Read-only MCP host interface](apps/mcp/README.md)
 
 ## Development direction
 
 Functional development follows test-driven development. `npm run check` uses deterministic fixtures and contract assertions without Docker, databases, network access, or provider credentials. The separate PostgreSQL suite uses a pinned, loopback-only, disposable Compose service. OpenAI, Gemini, and Claude are application providers for semantic API understanding; they are not test runners or test judges.
 
-The current local workflow can extract the synthetic baseline and round-trip it through an ephemeral schema in the fixed Docker-backed test database. Later phases add CI/CD adapters, runtime evidence connectors, the portal, and the read-only MCP server.
+The current local workflow can extract the synthetic baseline and round-trip it through an ephemeral schema in the fixed Docker-backed test database. A synthetic CI fixture formats validated events; the local bridge can deliver host-attested facts to the durable ledger. Production provider authentication and the full CI/deployment lifecycle remain open Phase 1 work. Later phases add runtime evidence, semantic understanding, and related-document connectors.
 
 ## Open-source principles
 

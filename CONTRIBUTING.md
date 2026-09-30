@@ -36,12 +36,10 @@ failure. `npm run test:watch` stays open and reruns affected offline tests until
 you stop it. `npm run check` is the CI gate: strict type checking followed by
 all offline tests.
 
-The unit smoke test proves that the configured runner executes asynchronous
-assertions and cleanup. Contract tests invoke the D02 fixture checker against
-the reviewed fixtures and independently mutated copies. They verify fixture
-JSON, evidence source paths, route expectations, and lifecycle consistency.
-They do not prove endpoint extraction, schema behavior, database integration,
-Java analyzer behavior, or application lifecycles.
+The offline suite checks the TypeScript/Express analyzer, IR and event
+contracts, updates, orchestration decisions, OpenAPI compilation, portal HTTP
+behavior, and linked MCP protocol behavior against synthetic fixtures. It does
+not prove Java extraction, a real provider webhook, or an enterprise install.
 
 ## PostgreSQL integration checks
 
@@ -61,6 +59,10 @@ command removes only resources belonging to the fixed test project; do not repla
 it with broad Docker prune commands. Integration tests create random schemas under
 the `api_truth_test_` prefix and remove only the schemas they created.
 
-The Java analyzer and end-to-end suite commands will be added with their real
-implementations and prerequisites. The analyzer process boundary is documented in
-`analyzers/PLUGIN_API.md`; Phase 1 does not require the system JDK.
+The database suite covers snapshot access, durable events and workers,
+environment resolution, publication, revocation, and a portal/MCP/export
+cross-surface read. The complete nine-step Phase 1 lifecycle remains an open
+release gate. The Java analyzer and end-to-end suite commands will be added
+with their real implementations and prerequisites. The analyzer process
+boundary is documented in `analyzers/PLUGIN_API.md`; Phase 1 does not require
+the system JDK.
