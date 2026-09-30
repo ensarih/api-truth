@@ -88,6 +88,20 @@ current permission check.
 | D11-S3 | Open | Minimal environment-aware portal. | Authenticated service browsing, exact search, endpoint/schema/evidence detail, coverage/freshness, changes, environment comparison, and OpenAPI download use only the shared query layer. Unknown/mixed/UAT-only states and revocation are visible and safe in browser/API tests. |
 | D11-S4 | Open | Read-only MCP tools and cross-surface gate. | Service search, endpoint/schema retrieval, changes, and environment comparison use the same query service and pinned contract as portal/export. MCP has no administrative tools; bounded inputs/results, source permissions, and revocation pass protocol and cross-surface tests. Safe examples wait for Phase 3 evidence. |
 
+### D12 slices
+
+The reference automation connects the already implemented event and deployment
+boundaries to one public, synthetic GitHub Actions workflow. Enterprise CI/CD
+products can use the same provider-neutral envelope later. Branch selection is
+the configured exact `intended_branches` list; a provider event never expands
+it into an all-branches scan.
+
+| ID | Status | Work | Acceptance gate |
+|---|---|---|---|
+| D12-S0 | Open | Provider-neutral local event and deployment adapter. | Versioned, bounded CLI inputs normalize PR, branch, deployment, and reconciliation facts to existing D08/D09 ports. Duplicate, malformed, unauthorized, stale, and unknown-artifact inputs fail safely; no event implies a deployed revision. |
+| D12-S1 | Open | Reference GitHub Actions workflow and synthetic fixture driver. | The workflow pins dependencies, checks the branch allowlist, runs baseline then incremental PR/merge/deployment events, and stores only synthetic nonsecret output. Forked PRs cannot obtain write credentials. |
+| D12-S2 | Open | Automatic lifecycle and repair verification. | A local runner proves PR preview isolation, merged branch update, UAT-only deployment, failed mixed rollout, authoritative rollback, duplicate event, and missed-event repair without a manual rescan after baseline. PostgreSQL state and published/query views agree at each step. |
+
 ## Later phases and analyzer coverage
 
 | ID | Phase | Work | Gate |
