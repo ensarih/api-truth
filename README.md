@@ -35,7 +35,7 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development is underway. D01–D07 and D08 slices 0–6 are complete. D08 now runs durable branch analysis, isolated PR previews, exact branch/PR reconciliation, and configuration-change repair against the local PostgreSQL test environment. Its independent final review remains. D09 has pure environment resolution, durable deployment-attempt/artifact records, ordered serving checkpoints, and an explicit exact-scope provider reconciliation port; automatic consumption and authorized views remain. The TypeScript/Express analyzer covers a published bounded subset. OpenAPI publication, the portal, and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
+Development is underway. D01–D07 and D08 slices 0–6 are complete. D08 now runs durable branch analysis, isolated PR previews, exact branch/PR reconciliation, and configuration-change repair against the local PostgreSQL test environment. Its independent final review remains. D09 has pure environment resolution, durable deployment-attempt/artifact records, ordered serving checkpoints, an exact-scope provider reconciliation port, and authorized environment views; automatic consumption and lifecycle hardening remain. The TypeScript/Express analyzer covers a published bounded subset. OpenAPI publication, the portal, and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
 
 Start with:
 

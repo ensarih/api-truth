@@ -4,7 +4,7 @@ Private D09 environment-resolution core and durable deployment ledger. The pure
 projection consumes facts already authenticated and scoped to one tenant,
 service, and environment. The repository consumes only D08 events that have
 already passed its producer and deployment-authority checks. It records a
-current serving checkpoint but does not yet serve an authorized environment query.
+current serving checkpoint and serves an authorized environment resolution.
 
 `resolveEnvironment` keeps deployment attempts separate from authoritative
 serving observations. A branch tip, succeeded or failed attempt, and requested
@@ -16,9 +16,9 @@ or conflicting bindings and snapshots remain pending. Multiple active artifacts
 or incomplete/transitional inventory remain transitional and do not select one
 contract, even when snapshots are known.
 
-The input associations must be pre-filtered to the same tenant, repository,
-service, and configuration context by the future D09 repository. This package
-does not authorize callers or infer artifact bindings from branch names.
+The pure function's input associations must already be scoped. The view
+repository supplies those associations under current access checks and never
+infers deployment from a branch name.
 
 `applyEnvironmentMigrations` requires the D08 ledger and creates an independent
 checksum-checked migration record. `recordAttempt` requires a `jobs.execute`
@@ -48,9 +48,20 @@ unknown or incomplete inventory remains pending. The host must invoke this
 explicit operation; automatic request delivery remains open work. A pending
 flag alone is not evidence that reconciliation ran.
 
+`createEnvironmentViewRepository.getEnvironment` reads one tenant, repository,
+service, and environment under a consistent database snapshot. It checks the
+active configuration, repository and deployment access scopes, observation
+source label, and current grants for candidate analyzed snapshots. It verifies
+each candidate through D06's stored-snapshot integrity check and requires the
+observed revision and active configuration to match. A missing binding or
+analysis remains pending. Confirmed empty inventory, mixed serving, and unknown
+serving stay distinct; the latest attempt is shown only when its order is
+unambiguous. Revocation takes effect on the next query. The view returns a
+resolution and snapshot ID, not the full contract document.
+
 From the repository root, run `npm run test:environment` for the focused offline
 suite. Start the fixed local PostgreSQL test service with `npm run test:env:up`,
 run `npm run test:environment:integration`, then stop it with
 `npm run test:env:down`. `npm run check` covers all offline suites. A concrete
-deployment-provider adapter, automatic delivery, and authorized environment
-queries are later work in the [backlog](../../docs/BACKLOG.md).
+deployment-provider adapter, automatic delivery, and query transports are
+later work in the [backlog](../../docs/BACKLOG.md).
