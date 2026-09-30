@@ -44,3 +44,13 @@ headers as independently signed. A successful call returns copied bytes and
 fixed metadata, not a parsed or normalized provider event. The host remains
 responsible for safe HTTP body collection, provider semantics, artifact
 provenance, and durable event ingestion.
+
+`normalizeVerifiedGitHubEvent` accepts the verifier's output and a
+host-trusted repository ID/name plus exact configured branches. Supported
+`push` and `pull_request` payloads produce a bounded reconciliation trigger.
+They do not establish a branch revision or PR state by themselves: GitHub's
+delivery ID and event time are not a monotonic branch order. The host must
+query current provider state under its own authority, then produce an ordered
+fact for the durable event bridge. Treat the `VerifiedGitHubWebhookDelivery`
+TypeScript type as an integration contract, not as proof of authenticity if a
+caller constructs it without the verifier.
