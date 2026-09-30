@@ -7,6 +7,7 @@ import { applyOrchestrationMigrations, createOrchestrationRepository } from "../
 import { applyEnvironmentMigrations, createEnvironmentRepository,
   createEnvironmentViewRepository } from "../../packages/environment/src/index.js";
 import { applyOpenApiMigrations, createOpenApiPublicationStore } from "../../packages/openapi/src/index.js";
+import { createQueryReader } from "../../packages/query/src/index.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 
 const revision = "a".repeat(40);
@@ -115,10 +116,20 @@ test("publishes only the currently resolved UAT contract and withdraws current a
     const published = await store.publish(reader, prepared, { state: "absent" });
     expect((await store.readCurrent(reader, key)).bytes).toEqual(published.bytes);
     expect((await store.readPublication(reader, published.publicationId)).bytes).toEqual(published.bytes);
+    const query = createQueryReader(database.pool, { schema: database.schema });
+    const selection = { version: "1", tenantId: reader.tenantId, repositoryId: key.repositoryId,
+      serviceId: key.serviceId, selector: { kind: "environment", environment: key.environment } };
+    expect(await query.readContract(reader, selection)).toMatchObject({ status: "resolved",
+      publication: { status: "current", publicationId: published.publicationId } });
+    const historicalKey = { tenantId: reader.tenantId, repositoryId: key.repositoryId,
+      serviceId: key.serviceId, publicationId: published.publicationId };
+    expect((await query.readPublication(reader, historicalKey)).bytes).toEqual(published.bytes);
     await access.putGrant({ tenantId: reader.tenantId },
       { principalId: reader.principalId, scopeId: deploymentScope, active: false });
     await expect(store.readPublication(reader, published.publicationId))
       .rejects.toMatchObject({ code: "NOT_FOUND_OR_DENIED" });
+    await expect(query.readPublication(reader, historicalKey))
+      .rejects.toMatchObject({ code: "QUERY_NOT_FOUND_OR_DENIED" });
     await expect(store.readCurrent(reader, key))
       .rejects.toMatchObject({ code: "NOT_FOUND_OR_DENIED" });
     await access.putGrant({ tenantId: reader.tenantId },
@@ -136,8 +147,10 @@ test("publishes only the currently resolved UAT contract and withdraws current a
         provider_snapshot_reference: "verify-current" },
     });
     await expect(store.readCurrent(reader, key)).rejects.toMatchObject({ code: "STALE_POINTER" });
+    expect(await query.readContract(reader, selection)).toMatchObject({ status: "unknown" });
     await expect(store.publish(reader, prepared, { state: "absent" }))
       .rejects.toMatchObject({ code: "STALE_POINTER" });
     expect((await store.readPublication(reader, published.publicationId)).bytes).toEqual(published.bytes);
+    expect((await query.readPublication(reader, historicalKey)).bytes).toEqual(published.bytes);
   } finally { await database.cleanup(); }
 });

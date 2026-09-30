@@ -3,6 +3,8 @@ import { parseConfig, parseContractSnapshot, type ContractSnapshot } from "@api-
 import { canonicalOrchestrationHash } from "@api-truth/orchestration";
 import { snapshotContentSha256, snapshotIdentitySha256 } from "../../catalog/src/canonical.js";
 import { compareContractSnapshots, type ContractDifferenceSet } from "@api-truth/updates";
+import { OpenApiStorageError, readCurrentOpenApiWithClient, readPublicationOpenApiWithClient,
+  type OpenApiPublicationSelector, type PublicationKey } from "@api-truth/openapi";
 import { quoteEnvironmentSchema } from "../../environment/src/migrations.js";
 import { parseQuerySelection, type QuerySelection } from "./selector.js";
 
@@ -19,28 +21,40 @@ export type QueryPin = Readonly<{
   snapshotId: string; revision: string; configFingerprint: string;
   pointerVersion?: string; checkpointVersion?: string;
 }>;
+export type QueryPublication = Readonly<{ status: "current"; publicationId: string;
+  contentSha256: string; pointerVersion?: string; selector: OpenApiPublicationSelector }>
+  | Readonly<{ status: "absent" }>;
 export type QueryContractResult =
-  | Readonly<{ status: "resolved"; selector: QuerySelection; pin: QueryPin; snapshot: ContractSnapshot }>
+  | Readonly<{ status: "resolved"; selector: QuerySelection; pin: QueryPin; snapshot: ContractSnapshot;
+      publication: QueryPublication }>
   | Readonly<{ status: "unknown" | "unavailable" | "transitional" | "ambiguous"; selector: QuerySelection }>;
+type QueryCoreResult = Exclude<QueryContractResult, { status: "resolved" }>
+  | Readonly<{ status: "resolved"; selector: QuerySelection; pin: QueryPin; snapshot: ContractSnapshot }>;
 export type QueryDetailResult<Key extends "endpoint" | "schema"> =
-  | Readonly<{ status: "resolved"; selector: QuerySelection; pin: QueryPin } &
+  | Readonly<{ status: "resolved"; selector: QuerySelection; pin: QueryPin; publication: QueryPublication } &
       (Key extends "endpoint" ? { endpoint: ContractSnapshot["endpoints"][number] }
         : { schema: ContractSnapshot["schemas"][string] })>
   | Exclude<QueryContractResult, { status: "resolved" }>;
 export type QueryComparisonResult =
-  | Readonly<{ status: "compared"; before: QueryPin; after: QueryPin; differences: ContractDifferenceSet }>
+  | Readonly<{ status: "compared"; before: QueryPin; after: QueryPin;
+      beforePublication: QueryPublication; afterPublication: QueryPublication;
+      differences: ContractDifferenceSet }>
   | Readonly<{ status: "unavailable"; beforeStatus: QueryContractResult["status"];
       afterStatus: QueryContractResult["status"] }>;
 export type QuerySearchResult = Readonly<{ services: readonly Readonly<{
   repositoryId: string; serviceId: string;
-  environment?: Readonly<{ name: string; status: QueryContractResult["status"]; pin?: QueryPin }>;
+  environment?: Readonly<{ name: string; status: QueryContractResult["status"];
+    pin?: QueryPin; publication?: QueryPublication }>;
 }>[]; truncated: false }>;
+export type QueryHistoricalPublication = Readonly<{ publicationId: string; contentSha256: string;
+  bytes: Uint8Array; selector: OpenApiPublicationSelector; pin: QueryPin }>;
 export type QueryReader = Readonly<{
   readContract(context: unknown, selection: unknown): Promise<QueryContractResult>;
   readEndpoint(context: unknown, selection: unknown, endpointId: unknown): Promise<QueryDetailResult<"endpoint">>;
   readSchema(context: unknown, selection: unknown, schemaId: unknown): Promise<QueryDetailResult<"schema">>;
   compareContracts(context: unknown, before: unknown, after: unknown): Promise<QueryComparisonResult>;
   searchServices(context: unknown, request: unknown): Promise<QuerySearchResult>;
+  readPublication(context: unknown, key: unknown): Promise<QueryHistoricalPublication>;
 }>;
 
 type SnapshotRow = { snapshot_id: string; repository_id: string; service_id: string;
@@ -73,6 +87,24 @@ const parseContext = (input: unknown, tenantId: string): string => {
 };
 
 type SearchRequest = Readonly<{ tenantId: string; query: string; limit: number; environment?: string }>;
+const parsePublicationKey = (input: unknown): Readonly<{ tenantId: string; repositoryId: string;
+  serviceId: string; publicationId: string }> => {
+  try {
+    if (!input || typeof input !== "object" || Array.isArray(input)
+      || Object.getPrototypeOf(input) !== Object.prototype) throw new Error();
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const names = ["tenantId", "repositoryId", "serviceId", "publicationId"];
+    if (Reflect.ownKeys(descriptors).length !== names.length || names.some((name) =>
+      descriptors[name] === undefined || !("value" in descriptors[name]!))) throw new Error();
+    const values = Object.fromEntries(names.map((name) => [name, descriptors[name]!.value]));
+    if (!bounded(values.tenantId) || !bounded(values.repositoryId) || !bounded(values.serviceId)
+      || typeof values.publicationId !== "string"
+      || !/^sha256:[0-9a-f]{64}$/.test(values.publicationId)) throw new Error();
+    return Object.freeze(values) as { tenantId: string; repositoryId: string;
+      serviceId: string; publicationId: string };
+  } catch { throw new QueryReadError("INVALID_QUERY_DETAIL"); }
+};
+
 const parseSearchRequest = (input: unknown): SearchRequest => {
   try {
     if (!input || typeof input !== "object" || Array.isArray(input)
@@ -139,9 +171,9 @@ const selectAuthorized = async (client: PoolClient, selection: QuerySelection,
   return result.rows;
 };
 
-const resultState = (selector: QuerySelection, status: Exclude<QueryContractResult["status"], "resolved">): QueryContractResult =>
+const resultState = (selector: QuerySelection, status: Exclude<QueryContractResult["status"], "resolved">): QueryCoreResult =>
   Object.freeze({ status, selector });
-const resolved = (selector: QuerySelection, row: SnapshotRow, pinExtra: Partial<QueryPin> = {}): QueryContractResult => {
+const resolved = (selector: QuerySelection, row: SnapshotRow, pinExtra: Partial<QueryPin> = {}): QueryCoreResult => {
   const snapshot = verifySnapshot(row, selector);
   return Object.freeze({ status: "resolved", selector,
     pin: Object.freeze({ snapshotId: row.snapshot_id, revision: row.immutable_revision,
@@ -149,7 +181,7 @@ const resolved = (selector: QuerySelection, row: SnapshotRow, pinExtra: Partial<
 };
 
 const readRevision = async (client: PoolClient, selector: QuerySelection,
-  principalId: string): Promise<QueryContractResult> => {
+  principalId: string): Promise<QueryCoreResult> => {
   if (selector.selector.kind !== "revision") return storage();
   const rows = await selectAuthorized(client, selector, principalId,
     "snapshot.immutable_revision=$4", [selector.selector.revision]);
@@ -159,7 +191,7 @@ const readRevision = async (client: PoolClient, selector: QuerySelection,
 };
 
 const readBranch = async (client: PoolClient, selector: QuerySelection,
-  principalId: string): Promise<QueryContractResult> => {
+  principalId: string): Promise<QueryCoreResult> => {
   if (selector.selector.kind !== "branch") return storage();
   const pointer = (await client.query<{ snapshot_id: string; pointer_version: string }>(
     `SELECT snapshot_id,pointer_version::text FROM catalog_branch_pointers
@@ -167,9 +199,6 @@ const readBranch = async (client: PoolClient, selector: QuerySelection,
     [selector.tenantId, selector.repositoryId, selector.serviceId, selector.selector.branch],
   )).rows[0];
   if (!pointer) return denied();
-  if (selector.selector.expectedPointerVersion !== undefined
-    && selector.selector.expectedPointerVersion !== pointer.pointer_version)
-    throw new QueryReadError("QUERY_STALE_SELECTION");
   const checkpoint = (await client.query<{ desired_state: string; desired_revision: string | null;
     last_successful_snapshot_id: string | null; latest_outcome: string | null }>(
     `SELECT desired_state,desired_revision,last_successful_snapshot_id,latest_outcome
@@ -180,6 +209,9 @@ const readBranch = async (client: PoolClient, selector: QuerySelection,
   const rows = await selectAuthorized(client, selector, principalId,
     "snapshot.snapshot_id=$4", [pointer.snapshot_id]);
   if (rows.length !== 1) return denied();
+  if (selector.selector.expectedPointerVersion !== undefined
+    && selector.selector.expectedPointerVersion !== pointer.pointer_version)
+    throw new QueryReadError("QUERY_STALE_SELECTION");
   if (checkpoint && (checkpoint.desired_state !== "present"
     || checkpoint.desired_revision !== rows[0]!.immutable_revision
     || checkpoint.last_successful_snapshot_id !== pointer.snapshot_id
@@ -189,7 +221,7 @@ const readBranch = async (client: PoolClient, selector: QuerySelection,
 };
 
 const readEnvironment = async (client: PoolClient, selector: QuerySelection,
-  principalId: string): Promise<QueryContractResult> => {
+  principalId: string): Promise<QueryCoreResult> => {
   if (selector.selector.kind !== "environment") return storage();
   const active = (await client.query<{ config_fingerprint: string; document_sha256: string; document: unknown }>(
     `SELECT active.config_fingerprint,configuration.document_sha256,configuration.document
@@ -225,9 +257,6 @@ const readEnvironment = async (client: PoolClient, selector: QuerySelection,
   if (checkpoint && checkpoint.active_config_fingerprint === active.config_fingerprint
     && (!checkpoint.source_access_label || !await hasScopes(client, selector.tenantId,
       principalId, [checkpoint.source_access_label]))) return denied();
-  if (checkpoint && selector.selector.expectedCheckpointVersion !== undefined
-    && selector.selector.expectedCheckpointVersion !== checkpoint.version)
-    throw new QueryReadError("QUERY_STALE_SELECTION");
   if (!checkpoint || checkpoint.reconciliation_required
     || checkpoint.active_config_fingerprint !== active.config_fingerprint) return resultState(selector, "unknown");
   if (checkpoint.serving_status !== "known") return resultState(selector, "unknown");
@@ -252,13 +281,47 @@ const readEnvironment = async (client: PoolClient, selector: QuerySelection,
     "snapshot.immutable_revision=$4 AND snapshot.config_fingerprint=$5", [revision.revision, active.config_fingerprint]);
   if (rows.length === 0) return resultState(selector, "unavailable");
   if (rows.length > 1) return resultState(selector, "ambiguous");
+  if (selector.selector.expectedCheckpointVersion !== undefined
+    && selector.selector.expectedCheckpointVersion !== checkpoint.version)
+    throw new QueryReadError("QUERY_STALE_SELECTION");
   return resolved(selector, rows[0]!, { checkpointVersion: checkpoint.version });
 };
 
-const readSelected = (client: PoolClient, selector: QuerySelection, principalId: string): Promise<QueryContractResult> =>
-  selector.selector.kind === "revision" ? readRevision(client, selector, principalId)
-    : selector.selector.kind === "branch" ? readBranch(client, selector, principalId)
-      : readEnvironment(client, selector, principalId);
+const publicationKey = (selection: QuerySelection): PublicationKey => {
+  const base = { repositoryId: selection.repositoryId, serviceId: selection.serviceId };
+  if (selection.selector.kind === "revision") return { ...base, kind: "revision", revision: selection.selector.revision };
+  if (selection.selector.kind === "branch") return { ...base, kind: "branch", branch: selection.selector.branch };
+  return { ...base, kind: "environment", environment: selection.selector.environment };
+};
+
+const readSelected = async (client: PoolClient, selector: QuerySelection,
+  principalId: string): Promise<QueryContractResult> => {
+  const selected = selector.selector.kind === "revision" ? await readRevision(client, selector, principalId)
+    : selector.selector.kind === "branch" ? await readBranch(client, selector, principalId)
+      : await readEnvironment(client, selector, principalId);
+  if (selected.status !== "resolved") return selected;
+  let publication: QueryPublication = Object.freeze({ status: "absent" });
+  try {
+    const validated = await readCurrentOpenApiWithClient(client,
+      { tenantId: selector.tenantId, principalId }, publicationKey(selector));
+    const published = validated.selector;
+    if (published.snapshotId === selected.pin.snapshotId
+      && published.revision === selected.pin.revision
+      && published.configFingerprint === selected.pin.configFingerprint
+      && (published.kind !== "branch" || published.pointerVersion === selected.pin.pointerVersion)
+      && (published.kind !== "environment" || published.checkpointVersion === selected.pin.checkpointVersion)) {
+      publication = Object.freeze({ status: "current", publicationId: validated.publication.publicationId,
+        contentSha256: validated.publication.contentSha256,
+        ...(validated.publication.pointerVersion === undefined ? {}
+          : { pointerVersion: validated.publication.pointerVersion }), selector: published });
+    }
+  } catch (error) {
+    if (!(error instanceof OpenApiStorageError)) throw error;
+    if (error.code !== "NOT_FOUND_OR_DENIED" && error.code !== "STALE_POINTER")
+      throw new QueryReadError("QUERY_STORAGE_ERROR");
+  }
+  return Object.freeze({ ...selected, publication });
+};
 
 const searchConfiguredServices = async (client: PoolClient, principalId: string,
   request: SearchRequest): Promise<QuerySearchResult> => {
@@ -297,13 +360,13 @@ const searchConfiguredServices = async (client: PoolClient, principalId: string,
         repositoryId: repository.repository_id, serviceId: service.service_id,
         selector: { kind: "environment", environment: request.environment } });
       let state: QueryContractResult;
-      try { state = await readEnvironment(client, selection, principalId); }
+      try { state = await readSelected(client, selection, principalId); }
       catch (error) {
         if (error instanceof QueryReadError && error.code === "QUERY_NOT_FOUND_OR_DENIED") continue;
         throw error;
       }
       const environment = Object.freeze({ name: request.environment, status: state.status,
-        ...(state.status === "resolved" ? { pin: state.pin } : {}) });
+        ...(state.status === "resolved" ? { pin: state.pin, publication: state.publication } : {}) });
       services.push(Object.freeze({ repositoryId: repository.repository_id,
         serviceId: service.service_id, environment }));
     }
@@ -318,7 +381,7 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
   const withRead = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
     const client = await pool.connect().catch(() => { throw new QueryReadError("QUERY_STORAGE_ERROR"); });
     try {
-      await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
       const result = await operation(client);
       await client.query("COMMIT");
@@ -336,6 +399,31 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
   };
   return Object.freeze({
     readContract,
+    async readPublication(contextInput: unknown, keyInput: unknown): Promise<QueryHistoricalPublication> {
+      const key = parsePublicationKey(keyInput);
+      const principalId = parseContext(contextInput, key.tenantId);
+      return withRead(async (client) => {
+        let validated;
+        try { validated = await readPublicationOpenApiWithClient(client,
+          { tenantId: key.tenantId, principalId }, key.publicationId); }
+        catch (error) {
+          if (error instanceof OpenApiStorageError && error.code === "NOT_FOUND_OR_DENIED")
+            return denied();
+          throw new QueryReadError("QUERY_STORAGE_ERROR");
+        }
+        if (validated.selector.repositoryId !== key.repositoryId
+          || validated.selector.serviceId !== key.serviceId) return denied();
+        const selector = validated.selector;
+        return Object.freeze({ publicationId: validated.publication.publicationId,
+          contentSha256: validated.publication.contentSha256,
+          bytes: validated.publication.bytes, selector, pin: Object.freeze({
+            snapshotId: selector.snapshotId, revision: selector.revision,
+            configFingerprint: selector.configFingerprint,
+            ...(selector.kind === "branch" ? { pointerVersion: selector.pointerVersion } : {}),
+            ...(selector.kind === "environment" ? { checkpointVersion: selector.checkpointVersion } : {}),
+          }) });
+      });
+    },
     async searchServices(contextInput: unknown, requestInput: unknown): Promise<QuerySearchResult> {
       const request = parseSearchRequest(requestInput);
       const principalId = parseContext(contextInput, request.tenantId);
@@ -348,7 +436,7 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
       if (result.status !== "resolved") return result;
       const endpoint = result.snapshot.endpoints.find((item) => item.endpoint_id === endpointId);
       if (!endpoint) return denied();
-      return Object.freeze({ status: "resolved", selector: result.selector, pin: result.pin, endpoint });
+      return Object.freeze({ status: "resolved", selector: result.selector, pin: result.pin, publication: result.publication, endpoint });
     },
     async readSchema(contextInput: unknown, selectionInput: unknown,
       schemaId: unknown): Promise<QueryDetailResult<"schema">> {
@@ -357,7 +445,7 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
       if (result.status !== "resolved") return result;
       if (!Object.hasOwn(result.snapshot.schemas, schemaId)) return denied();
       const component = result.snapshot.schemas[schemaId]!;
-      return Object.freeze({ status: "resolved", selector: result.selector, pin: result.pin, schema: component });
+      return Object.freeze({ status: "resolved", selector: result.selector, pin: result.pin, publication: result.publication, schema: component });
     },
     async compareContracts(contextInput: unknown, beforeInput: unknown,
       afterInput: unknown): Promise<QueryComparisonResult> {
@@ -375,7 +463,8 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
         try {
           const differences = compareContractSnapshots({ base_snapshot: base.snapshot,
             target_snapshot: target.snapshot });
-          return Object.freeze({ status: "compared", before: base.pin, after: target.pin, differences });
+          return Object.freeze({ status: "compared", before: base.pin, after: target.pin,
+            beforePublication: base.publication, afterPublication: target.publication, differences });
         } catch { throw new QueryReadError("QUERY_COMPARISON_UNAVAILABLE"); }
       });
     },

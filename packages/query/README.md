@@ -1,8 +1,8 @@
 # `@api-truth/query`
 
-The shared read layer for API Truth's portal, MCP, and exports. D11-S0/S1
-implement explicit tenant/repository/service selectors and authorized reads;
-the transport surfaces and OpenAPI publication binding are later D11 slices.
+The shared read layer for API Truth's portal, MCP, and exports. D11-S0–S2
+implement explicit tenant/repository/service selectors, authorized reads, and
+OpenAPI publication binding; the portal and MCP transport surfaces follow.
 
 `parseQuerySelection` requires an explicit environment, branch, or immutable
 revision. `createQueryReader(pool, { schema })` reads the selector, current
@@ -19,10 +19,15 @@ Service search scans configured repository/service IDs, not arbitrary branches.
 It returns no deployment claim unless the caller names an environment. Results
 are capped at 50, and configurations with more than 10,000 services or a result
 set over the requested limit raise an explicit error instead of appearing
-complete. Semantic ranking, pagination, portal/MCP transport, and publication
-ID binding are not yet implemented.
+complete. A resolved contract includes either its validated current OpenAPI
+publication ID or an explicit `absent` status when strict export is unavailable.
+Query and OpenAPI reads share D10's validation in one database transaction.
+Historical publication reads recheck current grants and source scopes; they
+do not claim the historical contract is current. Semantic ranking, pagination,
+and portal/MCP transports are not yet implemented.
 
 From the repository root, run `npm run typecheck`,
 `npx vitest run tests/unit/query-selection.test.ts`, and
 `npx vitest run --config vitest.integration.config.ts tests/integration/query-read.test.ts --maxWorkers=1`
+and `npx vitest run --config vitest.integration.config.ts tests/integration/query-publication.test.ts --maxWorkers=1`
 with the fixed local PostgreSQL test service running.

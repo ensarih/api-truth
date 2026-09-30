@@ -187,7 +187,7 @@ const verifyPublication = (row: PublicationRow, snapshot: ContractSnapshot, cont
     || row.source_digest !== snapshot.source.source_digest
     || row.snapshot_content_sha256 !== contentSha256) fail("CORRUPT_STORAGE");
 };
-const verifyManifest = (tenantId: string, row: PublicationRow, snapshot: ContractSnapshot): void => {
+const verifyManifest = (tenantId: string, row: PublicationRow, snapshot: ContractSnapshot): OpenApiPublicationSelector => {
   const base = { repositoryId: row.repository_id, serviceId: row.service_id,
     snapshotId: row.snapshot_id, revision: row.immutable_revision,
     configFingerprint: row.config_fingerprint };
@@ -214,12 +214,96 @@ const verifyManifest = (tenantId: string, row: PublicationRow, snapshot: Contrac
       || publicationId(tenantId, checked) !== row.publication_id
       || !validateOpenApiDocument(checked.document).ok) fail("CORRUPT_STORAGE");
   } catch { fail("CORRUPT_STORAGE"); }
+  return selector;
 };
 const materialize = (row: PublicationRow): PublishedOpenApi => {
   if (sha(row.bytes) !== row.content_sha256) return fail("CORRUPT_STORAGE");
   return { publicationId: row.publication_id, contentSha256: row.content_sha256,
     ...(row.pointer_version === undefined ? {} : { pointerVersion: row.pointer_version }),
     bytes: new Uint8Array(row.bytes), snapshotId: row.snapshot_id };
+};
+
+export type ValidatedOpenApiRead = Readonly<{
+  publication: PublishedOpenApi;
+  snapshot: ContractSnapshot;
+  selector: OpenApiPublicationSelector;
+}>;
+
+/** Validate a current publication using the caller's existing transaction and row locks. */
+export const readCurrentOpenApiWithClient = async (client: PoolClient, context: PrincipalContext,
+  key: PublicationKey): Promise<ValidatedOpenApiRead> => {
+  validContext(context); validKey(key);
+
+  const result = await client.query<PublicationRow>(`SELECT p.publication_id,p.content_sha256,p.snapshot_id,
+    p.repository_id,p.service_id,p.immutable_revision,p.config_version,p.config_fingerprint,
+    p.selector_kind,p.selector_value,p.environment_scope_ids,
+    p.source_digest,p.snapshot_content_sha256,p.branch_pointer_version::text AS branch_pointer_version,
+    p.environment_checkpoint_version::text AS environment_checkpoint_version,
+    a.bytes,c.pointer_version::text AS pointer_version FROM openapi_current_pointers c
+    JOIN openapi_publications p ON p.publication_id=c.publication_id
+      AND p.tenant_id=c.tenant_id AND p.repository_id=c.repository_id
+      AND p.service_id=c.service_id AND p.selector_kind=c.selector_kind
+      AND p.selector_value=c.selector_value
+    JOIN openapi_artifacts a ON a.tenant_id=p.tenant_id AND a.content_sha256=p.content_sha256
+    WHERE c.tenant_id=$1 AND c.repository_id=$2 AND c.service_id=$3
+      AND c.selector_kind=$4 AND c.selector_value=$5`,
+    [context.tenantId, key.repositoryId, key.serviceId, key.kind, selectorValue(key)]);
+  const row = result.rows[0];
+  if (!row) return fail("NOT_FOUND_OR_DENIED");
+  if (key.kind === "branch") {
+    const pointer = await branchPointer(client, context, key);
+    if (pointer.snapshotId !== row.snapshot_id || pointer.pointerVersion !== row.branch_pointer_version)
+      return fail("STALE_POINTER");
+  }
+  if (key.kind === "environment") {
+    const selector: EnvironmentSelector = { ...key,
+      snapshotId: row.snapshot_id, revision: row.immutable_revision,
+      configFingerprint: row.config_fingerprint,
+      checkpointVersion: row.environment_checkpoint_version ?? "",
+      resolvedSnapshotIds: [row.snapshot_id] };
+    const authority = await checkEnvironmentPin(client, context, selector);
+    if (authority.status === "denied") return fail("NOT_FOUND_OR_DENIED");
+    if (authority.status === "corrupt") return fail("CORRUPT_STORAGE");
+    if (authority.status !== "match") return fail("STALE_POINTER");
+    if (JSON.stringify(authority.scopeIds) !== JSON.stringify(row.environment_scope_ids))
+      return fail("CORRUPT_STORAGE");
+  }
+  const authorized = await authorizedSnapshot(client, context, row.snapshot_id);
+  verifyPublication(row, authorized.snapshot, authorized.contentSha256);
+  const selector = verifyManifest(context.tenantId, row, authorized.snapshot);
+  if (authorized.snapshot.service.repository_id !== key.repositoryId
+    || authorized.snapshot.service.service_id !== key.serviceId
+    || key.kind === "revision" && authorized.snapshot.source.immutable_revision !== key.revision)
+    return fail("CORRUPT_STORAGE");
+  return { publication: materialize(row), snapshot: authorized.snapshot, selector };
+};
+
+/** Validate a historical publication and current grants in the caller's transaction. */
+export const readPublicationOpenApiWithClient = async (client: PoolClient, context: PrincipalContext,
+  id: string): Promise<ValidatedOpenApiRead> => {
+  validContext(context);
+  if (!nonEmpty(id)) return fail("INVALID_PUBLICATION");
+
+  const result = await client.query<PublicationRow>(`SELECT p.publication_id,p.content_sha256,p.snapshot_id,
+    p.repository_id,p.service_id,p.immutable_revision,p.config_version,p.config_fingerprint,
+    p.selector_kind,p.selector_value,p.environment_scope_ids,
+    p.source_digest,p.snapshot_content_sha256,
+    p.branch_pointer_version::text AS branch_pointer_version,
+    p.environment_checkpoint_version::text AS environment_checkpoint_version,a.bytes
+    FROM openapi_publications p JOIN openapi_artifacts a
+      ON a.tenant_id=p.tenant_id AND a.content_sha256=p.content_sha256
+    WHERE p.tenant_id=$1 AND p.publication_id=$2`, [context.tenantId, id]);
+  const row = result.rows[0];
+  if (!row) return fail("NOT_FOUND_OR_DENIED");
+  if (row.selector_kind === "environment") {
+    if (!row.environment_scope_ids) return fail("CORRUPT_STORAGE");
+    if (!await authorizedPinnedScopes(client, context, row.environment_scope_ids))
+      return fail("NOT_FOUND_OR_DENIED");
+  }
+  const authorized = await authorizedSnapshot(client, context, row.snapshot_id);
+  verifyPublication(row, authorized.snapshot, authorized.contentSha256);
+  const selector = verifyManifest(context.tenantId, row, authorized.snapshot);
+  return { publication: materialize(row), snapshot: authorized.snapshot, selector };
 };
 
 export const createOpenApiPublicationStore = (pool: Pool, options: { schema: string }) => {
@@ -356,77 +440,12 @@ export const createOpenApiPublicationStore = (pool: Pool, options: { schema: str
       });
     },
     async readCurrent(context: PrincipalContext, key: PublicationKey): Promise<PublishedOpenApi> {
-      validContext(context); validKey(key);
-      return transaction(pool, options.schema, async (client) => {
-        const result = await client.query<PublicationRow>(`SELECT p.publication_id,p.content_sha256,p.snapshot_id,
-          p.repository_id,p.service_id,p.immutable_revision,p.config_version,p.config_fingerprint,
-          p.selector_kind,p.selector_value,p.environment_scope_ids,
-          p.source_digest,p.snapshot_content_sha256,p.branch_pointer_version::text AS branch_pointer_version,
-          p.environment_checkpoint_version::text AS environment_checkpoint_version,
-          a.bytes,c.pointer_version::text AS pointer_version FROM openapi_current_pointers c
-          JOIN openapi_publications p ON p.publication_id=c.publication_id
-            AND p.tenant_id=c.tenant_id AND p.repository_id=c.repository_id
-            AND p.service_id=c.service_id AND p.selector_kind=c.selector_kind
-            AND p.selector_value=c.selector_value
-          JOIN openapi_artifacts a ON a.tenant_id=p.tenant_id AND a.content_sha256=p.content_sha256
-          WHERE c.tenant_id=$1 AND c.repository_id=$2 AND c.service_id=$3
-            AND c.selector_kind=$4 AND c.selector_value=$5`,
-          [context.tenantId, key.repositoryId, key.serviceId, key.kind, selectorValue(key)]);
-        const row = result.rows[0];
-        if (!row) return fail("NOT_FOUND_OR_DENIED");
-        if (key.kind === "branch") {
-          const pointer = await branchPointer(client, context, key);
-          if (pointer.snapshotId !== row.snapshot_id || pointer.pointerVersion !== row.branch_pointer_version)
-            return fail("STALE_POINTER");
-        }
-        if (key.kind === "environment") {
-          const selector: EnvironmentSelector = { ...key,
-            snapshotId: row.snapshot_id, revision: row.immutable_revision,
-            configFingerprint: row.config_fingerprint,
-            checkpointVersion: row.environment_checkpoint_version ?? "",
-            resolvedSnapshotIds: [row.snapshot_id] };
-          const authority = await checkEnvironmentPin(client, context, selector);
-          if (authority.status === "denied") return fail("NOT_FOUND_OR_DENIED");
-          if (authority.status === "corrupt") return fail("CORRUPT_STORAGE");
-          if (authority.status !== "match") return fail("STALE_POINTER");
-          if (JSON.stringify(authority.scopeIds) !== JSON.stringify(row.environment_scope_ids))
-            return fail("CORRUPT_STORAGE");
-        }
-        const authorized = await authorizedSnapshot(client, context, row.snapshot_id);
-        verifyPublication(row, authorized.snapshot, authorized.contentSha256);
-        verifyManifest(context.tenantId, row, authorized.snapshot);
-        if (authorized.snapshot.service.repository_id !== key.repositoryId
-          || authorized.snapshot.service.service_id !== key.serviceId
-          || key.kind === "revision" && authorized.snapshot.source.immutable_revision !== key.revision)
-          return fail("CORRUPT_STORAGE");
-        return materialize(row);
-      });
+      return transaction(pool, options.schema, async (client) =>
+        (await readCurrentOpenApiWithClient(client, context, key)).publication);
     },
     async readPublication(context: PrincipalContext, id: string): Promise<PublishedOpenApi> {
-      validContext(context);
-      if (!nonEmpty(id)) return fail("INVALID_PUBLICATION");
-      return transaction(pool, options.schema, async (client) => {
-        const result = await client.query<PublicationRow>(`SELECT p.publication_id,p.content_sha256,p.snapshot_id,
-          p.repository_id,p.service_id,p.immutable_revision,p.config_version,p.config_fingerprint,
-          p.selector_kind,p.selector_value,p.environment_scope_ids,
-          p.source_digest,p.snapshot_content_sha256,
-          p.branch_pointer_version::text AS branch_pointer_version,
-          p.environment_checkpoint_version::text AS environment_checkpoint_version,a.bytes
-          FROM openapi_publications p JOIN openapi_artifacts a
-            ON a.tenant_id=p.tenant_id AND a.content_sha256=p.content_sha256
-          WHERE p.tenant_id=$1 AND p.publication_id=$2`, [context.tenantId, id]);
-        const row = result.rows[0];
-        if (!row) return fail("NOT_FOUND_OR_DENIED");
-        if (row.selector_kind === "environment") {
-          if (!row.environment_scope_ids) return fail("CORRUPT_STORAGE");
-          if (!await authorizedPinnedScopes(client, context, row.environment_scope_ids))
-            return fail("NOT_FOUND_OR_DENIED");
-        }
-        const authorized = await authorizedSnapshot(client, context, row.snapshot_id);
-        verifyPublication(row, authorized.snapshot, authorized.contentSha256);
-        verifyManifest(context.tenantId, row, authorized.snapshot);
-        return materialize(row);
-      });
+      return transaction(pool, options.schema, async (client) =>
+        (await readPublicationOpenApiWithClient(client, context, id)).publication);
     },
   };
 };

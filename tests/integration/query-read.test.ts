@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, expect, test } from "vitest";
 import { parseContractSnapshot, type ContractSnapshot } from "../../packages/ir/src/index.js";
 import { snapshotContentSha256, snapshotIdentitySha256 } from "../../packages/catalog/src/canonical.js";
 import { applyOrchestrationMigrations } from "../../packages/orchestration/src/migrations.js";
+import { applyOpenApiMigrations } from "../../packages/openapi/src/migrations.js";
 import { createQueryReader } from "../../packages/query/src/index.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema, type CatalogTestDatabase } from "./support/database.js";
 
@@ -23,6 +24,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   database = await createCatalogTestDatabase();
   await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+  await applyOpenApiMigrations(database.pool, { schema: database.schema });
   const schema = quoteCatalogTestSchema(database.schema);
   await database.pool.query(`INSERT INTO ${schema}.access_scopes (tenant_id,access_scope_id,active) VALUES ($1,$2,true)`, [tenantId, scope]);
   await database.pool.query(`INSERT INTO ${schema}.principal_scope_grants (tenant_id,principal_id,access_scope_id,active) VALUES ($1,$2,$3,true)`, [tenantId, principalId, scope]);
@@ -97,8 +99,15 @@ test("branch read rejects stale expected pointer version and retained pointer af
   await seedSnapshot(base);
   await seedPointer(base.snapshot_id);
   const reader = createQueryReader(database.pool, { schema: database.schema });
-  await expect(reader.readContract(context, selection({ kind: "branch", branch: "main", expectedPointerVersion: "2" })))
+  const wrongVersion = selection({ kind: "branch", branch: "main", expectedPointerVersion: "2" });
+  await expect(reader.readContract(context, wrongVersion))
     .rejects.toMatchObject({ code: "QUERY_STALE_SELECTION" });
+  await database.pool.query(`UPDATE ${quoteCatalogTestSchema(database.schema)}.principal_scope_grants
+    SET active=false WHERE tenant_id=$1 AND principal_id=$2`, [tenantId,principalId]);
+  await expect(reader.readContract(context, wrongVersion))
+    .rejects.toMatchObject({ code: "QUERY_NOT_FOUND_OR_DENIED" });
+  await database.pool.query(`UPDATE ${quoteCatalogTestSchema(database.schema)}.principal_scope_grants
+    SET active=true WHERE tenant_id=$1 AND principal_id=$2`, [tenantId,principalId]);
   const schema = quoteCatalogTestSchema(database.schema);
   await database.pool.query(`INSERT INTO ${schema}.orchestration_branch_checkpoints
     (tenant_id,repository_id,service_id,branch,desired_state,provider,provider_reference,
@@ -200,8 +209,7 @@ test("environment read pins only one observed, bound and authorized snapshot in 
   expect(await reader.compareContracts(context,
     selection({ kind: "revision", revision: "rev-b" }), currentEnvironment))
     .toEqual({ status: "unavailable", beforeStatus: "ambiguous", afterStatus: "unknown" });
-  await expect(reader.readContract(context, selected))
-    .rejects.toMatchObject({ code: "QUERY_STALE_SELECTION" });
+  expect(await reader.readContract(context, selected)).toEqual({ status: "unknown", selector: selected });
   await database.pool.query(`UPDATE ${schema}.principal_scope_grants SET active=false
     WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='source-read'`, [tenantId,principalId]);
   await expect(reader.readContract(context, selected))
@@ -241,7 +249,8 @@ test("contract comparison resolves both selectors under one authorization snapsh
     selection({ kind: "revision", revision: "a".repeat(40) }),
     selection({ kind: "revision", revision: "b".repeat(40) }));
   expect(comparison).toMatchObject({ status: "compared", before: { snapshotId: before.snapshot_id },
-    after: { snapshotId: after.snapshot_id }, differences: { service_id: "orders" } });
+    after: { snapshotId: after.snapshot_id }, beforePublication: { status: "absent" },
+    afterPublication: { status: "absent" }, differences: { service_id: "orders" } });
 });
 
 test("service discovery filters current configuration by policy and reports unknown environment honestly", async () => {
