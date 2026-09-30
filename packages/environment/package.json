@@ -5,5 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@api-truth/ir": "0.0.0",
+    "@api-truth/orchestration": "0.0.0",
+    "pg": "8.23.0"
   }
 }

@@ -1,3 +1,7 @@
+export { applyEnvironmentMigrations } from "./migrations.js";
+export { createEnvironmentRepository } from "./repository.js";
+export type { EnvironmentRepository } from "./repository.js";
+
 type RevisionReference =
   | Readonly<{ state: "known"; revision: string }>
   | Readonly<{ state: "unknown"; reason: string }>;
