@@ -40,10 +40,62 @@ const withClient = async <T>(pool: Pool, schema: string,
   } finally { client.release(); }
 };
 
-export const createEnvironmentReconciliationWorker = (pool: Pool, options: { schema: string },
+export const createEnvironmentReconciliationWorker = (pool: Pool,
+  options: { schema: string; reconcileAfterMs?: number },
   port: EnvironmentReconciliationPort): EnvironmentReconciliationWorker => {
   const schema = quoteEnvironmentSchema(options.schema);
+  const reconcileAfterMs = options.reconcileAfterMs ?? 3_600_000;
+  if (!Number.isSafeInteger(reconcileAfterMs) || reconcileAfterMs < 1 || reconcileAfterMs > 604_800_000)
+    throw new EnvironmentError("INVALID_ENVIRONMENT_INPUT");
   const claimNext = async (): Promise<Claimed | undefined> => withClient(pool, schema, async (client) => {
+    await client.query(
+      `INSERT INTO environment_serving_checkpoints
+         (tenant_id,repository_id,service_id,environment,reconciliation_required)
+       SELECT active.tenant_id,repository.document->>'repository_id',service.document->>'service_id',
+              environment.document->>'name',true
+       FROM orchestration_active_configurations active
+       JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+         AND configuration.config_fingerprint=active.config_fingerprint
+       CROSS JOIN LATERAL jsonb_array_elements(configuration.document->'repositories') repository(document)
+       CROSS JOIN LATERAL jsonb_array_elements(repository.document->'services') service(document)
+       CROSS JOIN LATERAL jsonb_array_elements(service.document->'environments') environment(document)
+       WHERE NOT EXISTS (
+         SELECT 1 FROM environment_serving_checkpoints checkpoint
+         WHERE checkpoint.tenant_id=active.tenant_id
+           AND checkpoint.repository_id=repository.document->>'repository_id'
+           AND checkpoint.service_id=service.document->>'service_id'
+           AND checkpoint.environment=environment.document->>'name'
+       )
+       ORDER BY active.tenant_id COLLATE "C",repository.document->>'repository_id',
+                service.document->>'service_id',environment.document->>'name'
+       LIMIT 128 ON CONFLICT DO NOTHING`,
+    );
+    await client.query(
+      `UPDATE environment_serving_checkpoints checkpoint
+       SET reconciliation_required=true,version=checkpoint.version+1,updated_at=clock_timestamp()
+       FROM orchestration_active_configurations active
+       JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+         AND configuration.config_fingerprint=active.config_fingerprint
+       WHERE checkpoint.tenant_id=active.tenant_id AND NOT checkpoint.reconciliation_required
+         AND ((SELECT observation.active_config_fingerprint
+              FROM environment_serving_observations observation
+              WHERE observation.tenant_id=checkpoint.tenant_id
+                AND observation.repository_id=checkpoint.repository_id
+                AND observation.service_id=checkpoint.service_id
+                AND observation.environment=checkpoint.environment
+                AND observation.producer_id=checkpoint.current_producer_id
+                AND observation.event_id=checkpoint.current_event_id)
+             IS DISTINCT FROM active.config_fingerprint
+           OR checkpoint.updated_at<=clock_timestamp()-($1::bigint*interval '1 millisecond'))
+         AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements(configuration.document->'repositories') repository(document)
+           CROSS JOIN LATERAL jsonb_array_elements(repository.document->'services') service(document)
+           CROSS JOIN LATERAL jsonb_array_elements(service.document->'environments') environment(document)
+           WHERE repository.document->>'repository_id'=checkpoint.repository_id
+             AND service.document->>'service_id'=checkpoint.service_id
+             AND environment.document->>'name'=checkpoint.environment
+         )`, [reconcileAfterMs],
+    );
     await client.query(
       `INSERT INTO environment_reconciliation_tasks AS task
          (tenant_id,repository_id,service_id,environment,checkpoint_version)

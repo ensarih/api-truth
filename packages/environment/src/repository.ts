@@ -33,7 +33,8 @@ type RecordServingResult = Readonly<{
 }>;
 export type ServingReconciliationTicket = Readonly<{
   tenantId: string; repositoryId: string; serviceId: string; environment: string;
-  pendingProducerId: string; pendingEventId: string; version: string; configFingerprint: string;
+  pendingProducerId: string | null; pendingEventId: string | null;
+  version: string; configFingerprint: string;
 }>;
 
 type StoredDeploymentEvent = Readonly<{
@@ -107,6 +108,24 @@ const parseFields = <K extends string>(input: unknown, keys: readonly K[]): Reco
 
 const scopeKeys = ["tenantId", "repositoryId", "serviceId", "environment"] as const;
 const ticketKeys = [...scopeKeys, "pendingProducerId", "pendingEventId", "version", "configFingerprint"] as const;
+const parseTicket = (input: unknown): ServingReconciliationTicket => {
+  try {
+    if (input === null || typeof input !== "object" || Array.isArray(input)
+      || Object.getPrototypeOf(input) !== Object.prototype) throw new Error();
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    if (Reflect.ownKeys(descriptors).length !== ticketKeys.length
+      || !ticketKeys.every((key) => descriptors[key] !== undefined && "value" in descriptors[key])) throw new Error();
+    const values = Object.fromEntries(ticketKeys.map((key) => [key, descriptors[key]!.value])) as
+      Record<(typeof ticketKeys)[number], unknown>;
+    if (![...scopeKeys, "version", "configFingerprint"].every((key) =>
+      typeof values[key as keyof typeof values] === "string" && ID.test(values[key as keyof typeof values] as string))
+      || ![values.pendingProducerId, values.pendingEventId].every((value) => value === null
+        || typeof value === "string" && ID.test(value))
+      || (values.pendingProducerId === null) !== (values.pendingEventId === null)
+      || !/^[1-9][0-9]*$/.test(values.version as string)) throw new Error();
+    return Object.freeze(values) as ServingReconciliationTicket;
+  } catch { throw new EnvironmentError("INVALID_ENVIRONMENT_INPUT"); }
+};
 const servingInventory = (payload: ServingPayload): string | null => payload.serving_state.status === "known"
   ? JSON.stringify([...payload.serving_state.inventory].sort((left, right) =>
     left.artifact_id < right.artifact_id ? -1 : left.artifact_id > right.artifact_id ? 1 : 0)
@@ -287,7 +306,7 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
       try {
         await client.query("BEGIN");
         await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
-        const result = await client.query<{ pending_producer_id: string; pending_event_id: string;
+        const result = await client.query<{ pending_producer_id: string | null; pending_event_id: string | null;
           version: string; config_fingerprint: string }>(
           `SELECT checkpoint.pending_producer_id,checkpoint.pending_event_id,checkpoint.version::text,
                   active.config_fingerprint
@@ -310,8 +329,7 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
     async confirmServingReconciliation(workerIdentity: unknown, ticketInput: unknown,
       eventIdentity: unknown): Promise<Readonly<{ outcome: "applied" | "pending" | "superseded" }>> {
       requireWorkerCapability(workerIdentity, "jobs.execute");
-      const ticket = parseFields(ticketInput, ticketKeys);
-      if (!/^[1-9][0-9]*$/.test(ticket.version)) throw new EnvironmentError("INVALID_ENVIRONMENT_INPUT");
+      const ticket = parseTicket(ticketInput);
       const identity = parseIdentity(eventIdentity);
       if (identity.tenantId !== ticket.tenantId) throw new EnvironmentError("ENVIRONMENT_NOT_FOUND_OR_DENIED");
       const client = await pool.connect().catch(() => { throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR"); });

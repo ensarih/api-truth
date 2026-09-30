@@ -70,7 +70,7 @@ test("D09 migrations require D08 and replay without changing the ledger", async 
     );
     expect(after.rows).toEqual([{ version: "0001_deployment_attempts" },
       { version: "0002_serving_observations" }, { version: "0003_deployment_inbox" },
-      { version: "0004_reconciliation_tasks" }]);
+      { version: "0004_reconciliation_tasks" }, { version: "0005_unobserved_reconciliation" }]);
     await database.pool.query(`UPDATE ${schema}.environment_schema_migrations SET checksum_sha256=$1`,
       [`sha256:${"0".repeat(64)}`]);
     await expect(applyEnvironmentMigrations(database.pool, { schema: database.schema }))
@@ -239,6 +239,91 @@ test("the reconciliation worker repairs an opaque serving state from one exact p
       `SELECT state,attempt_count::text FROM ${schema}.environment_reconciliation_tasks`,
     );
     expect(task.rows).toEqual([{ state: "resolved", attempt_count: "1" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("a configured environment with no deployment event gets an automatic exact provider check", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    const observed = vi.fn(async () => serving("initial-provider-check", "cursor-first", []));
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: observed }, workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ scope, state: "resolved" }]);
+    expect(observed).toHaveBeenCalledExactlyOnceWith(scope);
+    const checkpoint = await database.pool.query<{ current_event_id: string; reconciliation_required: boolean }>(
+      `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "initial-provider-check", reconciliation_required: false }]);
+    await expect(scheduling.drain(worker)).resolves.toEqual([]);
+  } finally { await database.cleanup(); }
+});
+
+test("activation of a new configuration automatically rechecks an older serving checkpoint", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.registerConfiguration(admin(), { ...configuration(), fingerprint: "config-b" });
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    await orchestration.ingestEvent(eventContext(), serving("before-config-change", "1", []));
+    await environment.recordServingObservation(worker,
+      { tenantId: "tenant-a", producerId: "deploy", eventId: "before-config-change" });
+    await orchestration.activateConfigurationByCas(admin(), { fingerprint: "config-b", expectedCheckpointVersion: "1",
+      providerEvidence: { provider: "control-plane", provider_reference: "activation-b" } });
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => serving("after-config-change", "2", []) },
+      workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "resolved" }]);
+    const checkpoint = await database.pool.query<{ current_event_id: string; reconciliation_required: boolean }>(
+      `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "after-config-change", reconciliation_required: false }]);
+  } finally { await database.cleanup(); }
+});
+
+test("a periodic exact check repairs a lost event without replaying repository code", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const artA = { artifact_id: "artifact-a", revision: { state: "known" as const, revision: revisionA } };
+    const artB = { artifact_id: "artifact-b", revision: { state: "known" as const, revision: revisionB } };
+    await orchestration.ingestEvent(eventContext(), serving("known-before-loss", "1", [artA]));
+    await environment.recordServingObservation(worker,
+      { tenantId: "tenant-a", producerId: "deploy", eventId: "known-before-loss" });
+    const observed = vi.fn(async () => serving("recovered-after-loss", "cursor-new", [artB]));
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: observed }, workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool,
+      { schema: database.schema, reconcileAfterMs: 1_000 }, exact);
+    await expect(scheduling.drain(worker)).resolves.toEqual([]);
+    await database.pool.query(`UPDATE ${schema}.environment_serving_checkpoints
+      SET updated_at=clock_timestamp()-interval '2 seconds'`);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "resolved" }]);
+    expect(observed).toHaveBeenCalledTimes(1);
+    const checkpoint = await database.pool.query<{ current_event_id: string; reconciliation_required: boolean }>(
+      `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "recovered-after-loss", reconciliation_required: false }]);
   } finally { await database.cleanup(); }
 });
 

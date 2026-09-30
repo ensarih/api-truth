@@ -52,13 +52,16 @@ unknown or incomplete inventory remains pending. The host must invoke this
 explicit operation; automatic provider reconciliation delivery remains open work. A pending
 flag alone is not evidence that reconciliation ran.
 
-`createEnvironmentReconciliationWorker.drain` discovers pending serving
-checkpoints, leases one exact scope at a time, and calls a trusted reconciliation
-port. A host can supply `createEnvironmentReconciler` with its authenticated
-deployment adapter. Transient errors and incomplete provider responses back
-off; new checkpoint versions supersede old leases. The current worker starts
-from pending checkpoints. An environment with no checkpoint needs a separate
-explicit missed-event request path, which remains open work.
+`createEnvironmentReconciliationWorker.drain` discovers configured environments
+without a serving checkpoint, stale configurations, and pending checkpoints.
+It also refreshes old serving evidence after a configurable interval (one hour
+by default), so a missed deployment event is eventually repaired without
+rescanning code. It leases one exact scope at a time and calls a trusted
+reconciliation port. A host can supply `createEnvironmentReconciler` with its
+authenticated deployment adapter. Transient errors and incomplete provider
+responses back off; new checkpoint versions supersede old leases. Wiring an
+explicit D08 environment reconciliation request to prompt immediate repair
+remains open work.
 
 `createEnvironmentViewRepository.getEnvironment` reads one tenant, repository,
 service, and environment under a consistent database snapshot. It checks the
