@@ -29,3 +29,15 @@ only synthetic envelopes. Run the same driver locally with
 
 Run the focused tests with
 `npx vitest run tests/unit/reference-connector.test.ts tests/unit/reference-workflow.test.ts`.
+
+## GitHub webhook verification boundary
+
+`verifyGitHubWebhookDelivery` accepts the original request bytes, the
+`X-Hub-Signature-256`, `X-GitHub-Delivery`, and `X-GitHub-Event` header values,
+and a host-owned secret. It checks the HMAC-SHA256 signature against the exact
+bytes and caps bodies at 1 MiB (or a smaller configured limit). The host must
+implement `replay.claim` as an atomic, durable claim in the webhook's own
+namespace; an in-memory set is suitable only for tests. A successful call
+returns copied bytes and fixed metadata, not a parsed or normalized provider
+event. The host remains responsible for safe HTTP body collection, provider
+semantics, artifact provenance, and durable event ingestion.
