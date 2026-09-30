@@ -1,6 +1,8 @@
 export { applyEnvironmentMigrations } from "./migrations.js";
 export { createEnvironmentRepository } from "./repository.js";
 export type { EnvironmentRepository } from "./repository.js";
+export { classifyServingObservation } from "./ordering.js";
+export type { ServingObservationClassification } from "./ordering.js";
 
 type RevisionReference =
   | Readonly<{ state: "known"; revision: string }>

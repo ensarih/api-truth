@@ -11,13 +11,15 @@ export const quoteEnvironmentSchema = (schema: unknown): string => {
   return `"${schema}"`;
 };
 
-const migrationVersion = "0001_deployment_attempts";
+const migrationVersions = ["0001_deployment_attempts", "0002_serving_observations"] as const;
 const checksum = (body: string): string => `sha256:${createHash("sha256").update(body).digest("hex")}`;
 
 export const applyEnvironmentMigrations = async (pool: Pool, options: { schema: string }): Promise<void> => {
   const schema = quoteEnvironmentSchema(options.schema);
-  const body = await readFile(new URL("../migrations/0001_deployment_attempts.sql", import.meta.url), "utf8")
-    .catch(() => { throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR"); });
+  const migrations = await Promise.all(migrationVersions.map(async (version) => ({ version,
+    body: await readFile(new URL(`../migrations/${version}.sql`, import.meta.url), "utf8")
+      .catch(() => { throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR"); }),
+  })));
   const client = await pool.connect().catch(() => { throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR"); });
   try {
     await client.query("BEGIN");
@@ -35,16 +37,18 @@ export const applyEnvironmentMigrations = async (pool: Pool, options: { schema: 
       checksum_sha256 text NOT NULL CHECK (checksum_sha256 ~ '^sha256:[0-9a-f]{64}$'),
       applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
     )`);
-    const stored = await client.query<{ checksum_sha256: string }>(
-      "SELECT checksum_sha256 FROM environment_schema_migrations WHERE version=$1", [migrationVersion],
-    );
-    const expected = checksum(body);
-    if (stored.rows[0] === undefined) {
-      await client.query(body);
-      await client.query("INSERT INTO environment_schema_migrations (version,checksum_sha256) VALUES ($1,$2)",
-        [migrationVersion, expected]);
-    } else if (stored.rows[0].checksum_sha256 !== expected) {
-      throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR");
+    for (const migration of migrations) {
+      const stored = await client.query<{ checksum_sha256: string }>(
+        "SELECT checksum_sha256 FROM environment_schema_migrations WHERE version=$1", [migration.version],
+      );
+      const expected = checksum(migration.body);
+      if (stored.rows[0] === undefined) {
+        await client.query(migration.body);
+        await client.query("INSERT INTO environment_schema_migrations (version,checksum_sha256) VALUES ($1,$2)",
+          [migration.version, expected]);
+      } else if (stored.rows[0].checksum_sha256 !== expected) {
+        throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR");
+      }
     }
     await client.query("COMMIT");
   } catch (error) {
