@@ -20,6 +20,7 @@
     "test:extractor": "vitest run tests/unit/extractor.test.ts tests/contract/extractor-cli.test.ts",
     "extract": "node scripts/extract.mjs",
     "catalog:roundtrip": "node scripts/catalog-roundtrip.ts",
+    "openapi:roundtrip": "node scripts/test-environment.ts ready && node --disable-warning=ExperimentalWarning --experimental-transform-types scripts/openapi-roundtrip.ts",
     "changes": "node scripts/contract-changes.ts",
     "test:env:up": "node scripts/test-environment.ts up",
     "test:env:ready": "node scripts/test-environment.ts ready",

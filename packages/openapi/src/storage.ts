@@ -7,6 +7,7 @@ import { snapshotContentSha256, snapshotIdentitySha256 } from "../../catalog/src
 import { prepareOpenApiPublication, type OpenApiPublicationPreparation, type OpenApiPublicationSelector } from "./preparation.js";
 import { quoteOpenApiSchema } from "./migrations.js";
 import { checkEnvironmentPin, type EnvironmentSelector } from "./environment-pin.js";
+import { validateOpenApiDocument } from "./validation.js";
 
 export type RevisionSelector = Extract<OpenApiPublicationSelector, { kind: "revision" }>;
 export type BranchSelector = Extract<OpenApiPublicationSelector, { kind: "branch" }>;
@@ -210,7 +211,8 @@ const verifyManifest = (tenantId: string, row: PublicationRow, snapshot: Contrac
     const checked = prepareOpenApiPublication({ snapshot, mode: "strict", selector });
     if (!checked.publishable || checked.contentSha256 !== row.content_sha256
       || !checked.bytes || !Buffer.from(checked.bytes).equals(row.bytes)
-      || publicationId(tenantId, checked) !== row.publication_id) fail("CORRUPT_STORAGE");
+      || publicationId(tenantId, checked) !== row.publication_id
+      || !validateOpenApiDocument(checked.document).ok) fail("CORRUPT_STORAGE");
   } catch { fail("CORRUPT_STORAGE"); }
 };
 const materialize = (row: PublicationRow): PublishedOpenApi => {
@@ -305,6 +307,7 @@ export const createOpenApiPublicationStore = (pool: Pool, options: { schema: str
         if (!checked.publishable || checked.contentSha256 !== prepared.contentSha256
           || !Buffer.from(checked.bytes!).equals(Buffer.from(bytes))
           || JSON.stringify(checked.provenance) !== JSON.stringify(prepared.provenance)) return fail("INVALID_PUBLICATION");
+        if (!validateOpenApiDocument(checked.document).ok) return fail("INVALID_PUBLICATION");
         const id = publicationId(context.tenantId, checked);
         const pointer = await client.query<{ publication_id: string; pointer_version: string }>(
           `SELECT publication_id, pointer_version::text AS pointer_version FROM openapi_current_pointers

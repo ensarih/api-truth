@@ -47,8 +47,20 @@ canonical bytes, and expected publication-pointer version inside one
 transaction. A replay of the current publication is idempotent. Current reads
 withhold stale branch/environment selections; all reads recheck grants and
 content integrity. Environment publications retain their source and deployment
-access scopes so historical reads also respect revocation. External OpenAPI
-validation and the local round-trip gate remain D10-S4 work.
+access scopes so historical reads also respect revocation. Before pointer
+promotion, the publisher validates the document against the pinned official
+OpenAPI 3.1 document schema, checks local references and JSON Schemas, and
+rejects external references or examples whose schema fit cannot be verified.
+The official document schema does not validate Schema Objects itself; the
+separate JSON Schema check closes that gap for this supported profile. The
+[pinned source and license](schema/SOURCE.md) are included offline.
+
+For the local synthetic revision-publication walkthrough, start the isolated
+PostgreSQL environment with `npm run test:env:up` and run
+`npm run openapi:roundtrip`. It publishes a strict document, confirms replay,
+rejects stale promotion, recovers with the correct pointer version, reads the
+previous publication, prints a small JSON result, and removes its temporary
+test schema. Use `npm run test:env:down` when finished.
 
 Run `npx vitest run tests/unit/openapi-projection.test.ts
 tests/unit/openapi-compiler.test.ts tests/unit/openapi-preparation.test.ts` from
