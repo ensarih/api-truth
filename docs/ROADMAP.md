@@ -1,6 +1,6 @@
 # API Truth — Phases and Release Gates
 
-**Status:** Phase 0 complete; Phase 1 implementation in progress through D08-S6 and D09-S0, with no v0.1 release yet.
+**Status:** Phase 0 complete; Phase 1 implementation in progress through D08-S6 and D09-S1, with no v0.1 release yet.
 **Date:** 2026-09-30
 **References:** [specification](SPECIFICATION.md), [architecture](ARCHITECTURE.md), [implementation plan](../PROJECT%20PLAN.md).
 

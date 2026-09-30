@@ -16,7 +16,7 @@ reviewed, and validated; it does not imply that a later phase is complete.
 |---|---|---|
 | D01–D07 | Complete | Synthetic constraints/fixtures, executable contracts, local test harness, bounded Express extraction, PostgreSQL catalog, and dependency-aware updates are committed. |
 | D08 | In progress: slices 0–6 of 0–7 complete | PR previews, exact branch/PR reconciliation, durable scheduler requests, and configuration-change races pass the slice 6 gate. Slice 7 remains. |
-| D09 | In progress: pure environment projection implemented | Deployment persistence, observation ordering, artifact binding, reconciliation, and authorized views remain. |
+| D09 | In progress: slices 0–1 implemented | Pure projection and durable attempt/artifact binding pass tests; observation ordering, reconciliation, automated consumption, and authorized views remain. |
 | D10–D13 | Open | Phase 1 publication, access, reference workflow, and release gates remain. |
 | Phases 2–6 | Planned | Java/framework conformance, runtime evidence, semantic discovery, related documents, and operating readiness follow their roadmap gates. |
 
@@ -55,7 +55,7 @@ close a product flow.
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
 | D09-S0 | Complete | Pure resolution from separately supplied attempt, authoritative serving inventory, exact artifact binding, and revision snapshot facts. | UAT-only, confirmed absence, failed mixed rollout, rollback request, unknown/incomplete inventory, missing/conflicting binding, and missing/conflicting analysis pass offline tests. No persistence or current-environment claim. |
-| D09-S1 | Open | Persist immutable deployment attempts and exact artifact-to-revision bindings from authenticated events. | Duplicate/conflicting events, tenant/service/environment authority, unknown revision, and crash/replay cases pass PostgreSQL tests. |
+| D09-S1 | Complete | Persist immutable deployment attempts and exact artifact-to-revision bindings from D08-authenticated events. | Migration prerequisite/replay/checksum, unauthorized worker/producer, tenant isolation, unknown revision, crash/replay, concurrent duplicate, and conflicting binding pass PostgreSQL tests. Automated outbox consumption is later work. |
 | D09-S2 | Open | Persist ordered serving observations and exact-scope reconciliation. | Incomparable or missing order requests reconciliation; stale evidence cannot replace newer state; complete absence, mixed state, and rollback confirmation remain distinct. |
 | D09-S3 | Open | Bind observed revisions to D06 snapshots and expose authorized environment views. | Missing analysis is pending; no branch-tip substitution; UAT-only and failed partial rollout resolve with current access checks. |
 | D09-S4 | Open | Local deployment lifecycle workflow, documentation, and final hardening. | End-to-end event-to-view, race, privacy, migration, and independent review gates pass. |

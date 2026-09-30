@@ -1,9 +1,10 @@
 # `@api-truth/environment`
 
-Private D09 environment-resolution core. The current implementation is a pure
-projection from facts already authenticated and scoped to one tenant, service,
-and environment. It does not persist deployments, select the latest provider
-observation, or serve an environment query yet.
+Private D09 environment-resolution core and durable attempt ledger. The pure
+projection consumes facts already authenticated and scoped to one tenant,
+service, and environment. The repository consumes only D08 events that have
+already passed its producer and deployment-authority checks. It does not yet
+select the latest provider observation or serve an environment query.
 
 `resolveEnvironment` keeps deployment attempts separate from authoritative
 serving observations. A branch tip, succeeded or failed attempt, and requested
@@ -19,7 +20,19 @@ The input associations must be pre-filtered to the same tenant, repository,
 service, and configuration context by the future D09 repository. This package
 does not authorize callers or infer artifact bindings from branch names.
 
+`applyEnvironmentMigrations` requires the D08 ledger and creates an independent
+checksum-checked migration record. `recordAttempt` requires a `jobs.execute`
+worker identity and an exact stored event identity. It records immutable
+deployment attempts and first-seen artifact-to-revision bindings in one
+transaction. Replaying the same event is idempotent; a conflicting binding
+rolls back the attempt. Unknown revisions remain unbound. The D08 event remains
+durable if consumption has not happened yet, so a host can replay it after a
+crash. Automatic delivery from the D08 outbox is a later integration slice;
+no active serving revision is inferred from an attempt.
+
 From the repository root, run `npm run test:environment` for the focused offline
-suite or `npm run check` for all offline suites. Durable event handling, provider
-ordering/reconciliation, storage, and authorized environment queries are later
-D09 slices in the [backlog](../../docs/BACKLOG.md).
+suite. Start the fixed local PostgreSQL test service with `npm run test:env:up`,
+run `npm run test:environment:integration`, then stop it with
+`npm run test:env:down`. `npm run check` covers all offline suites. Provider
+observation ordering/reconciliation, serving-state storage, and authorized
+environment queries are later D09 slices in the [backlog](../../docs/BACKLOG.md).

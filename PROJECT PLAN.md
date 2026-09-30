@@ -1,6 +1,6 @@
 # API Truth — Implementation Plan
 
-**Status:** development; D01–D07, D08 slices 0–6, and D09 pure projection complete.
+**Status:** development; D01–D07, D08 slices 0–6, and D09 slices 0–1 complete.
 **Updated:** 2026-09-30
 **Project name:** API Truth (`api-truth`).
 **License:** Apache-2.0; see [LICENSE](LICENSE).
@@ -89,7 +89,7 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 | D06 | **Complete:** immutable catalog snapshots, current access scopes/grants, and atomic selected-branch pointers | Real PostgreSQL round-trip; unauthorized and revoked reads denied; provider ordering/CAS verified |
 | D07 | **Complete:** add dependency-aware updates and structured differences | Shared changes reach every affected API; safe full-service fallback and deterministic differences demonstrated |
 | D08 | **In progress (slices 0–6 of 0–7 complete):** events, durable jobs, isolated PR previews, and exact reconciliation | Duplicate, stale, missed-event, absence, closed-PR, and configuration-change cases pass; Slice 7 final gate remains |
-| D09 | **In progress:** pure projection implemented; durable deployment/configuration facts and authorized views remain | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
+| D09 | **In progress:** pure projection and durable attempt/artifact records implemented; serving observations and authorized views remain | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
 | D10 | Build OpenAPI compiler and publication manifests | Valid exports, faithful route-variant aggregation/scoping, strict rejection of representation gaps, recovery |
 | D11 | Build query layer, minimal portal, initial MCP tools | Same pinned contract/environment across surfaces |
 | D12 | Connect reference CI and deployment fixture workflow | Automatic preview, merge, deployment, rollback updates after baseline |
@@ -210,4 +210,4 @@ Provider-neutral interfaces must remain usable from enterprise CI/CD systems ind
 
 ## 11. Next action
 
-Close [D08-S7](docs/BACKLOG.md#now--finish-event-orchestration) with independent review, then connect D09's tested environment projection to durable deployment facts and authorized views. Continue through the Phase 1 gates in the maintained backlog.
+Close [D08-S7](docs/BACKLOG.md#now--finish-event-orchestration) with independent review, then add ordered D09 serving observations and authorized views to the tested attempt/artifact ledger. Continue through the Phase 1 gates in the maintained backlog.
