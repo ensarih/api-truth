@@ -72,6 +72,7 @@ const detached = (value: unknown): unknown => {
   if (Buffer.byteLength(serialized) > MAX_BYTES) throw new ReferenceAdapterError("INVALID_INPUT");
   return JSON.parse(serialized) as unknown;
 };
+export const detachReferenceJson = detached;
 const date = (value: unknown): string => {
   if (typeof value !== "string" || !Number.isFinite(Date.parse(value)) || value.length > 40)
     throw new ReferenceAdapterError("INVALID_INPUT");
