@@ -1,0 +1,43 @@
+# Synthetic event formatting only. No authenticated ingestion or deployment occurs.
+name: Reference synthetic lifecycle
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-fixture:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.6.0
+          cache: npm
+      - name: Verify toolchain and install locked dependencies
+        run: |
+          test "$(node --version)" = "v24.6.0"
+          test "$(npm --version)" = "11.5.1"
+          npm ci
+      - name: Format synthetic baseline and incremental events
+        env:
+          TRIGGER_BRANCH: ${{ github.base_ref || github.ref_name }}
+        run: node connectors/reference/fixture-driver.mjs --branch "$TRIGGER_BRANCH" --output .reference-output/events.json
+      - name: Save synthetic nonsecret envelopes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: reference-synthetic-events
+          path: .reference-output/events.json
+          if-no-files-found: error
+          retention-days: 1

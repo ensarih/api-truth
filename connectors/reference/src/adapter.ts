@@ -1,3 +1,4 @@
+import { types as utilTypes } from "node:util";
 import { parseConfig, parseEvent, type EventEnvelope, type InstallationConfig } from "../../../packages/ir/src/index.js";
 import { authorizeNormalizedEvent, classifyProviderUpdate, parseAuthenticatedEventContext } from "../../../packages/orchestration/src/index.js";
 
@@ -31,19 +32,43 @@ const strings = (value: unknown): string[] => {
   return result;
 };
 const detached = (value: unknown): unknown => {
-  const visit = (item: unknown, depth: number): void => {
+  const seen = new WeakSet<object>();
+  const visit = (item: unknown, depth: number): unknown => {
     if (depth > 16) throw new ReferenceAdapterError("INVALID_INPUT");
-    if (item === null || typeof item === "boolean") return;
-    if (typeof item === "string") { if (item.length > MAX_BYTES) throw new ReferenceAdapterError("INVALID_INPUT"); return; }
-    if (typeof item === "number") { if (!Number.isFinite(item)) throw new ReferenceAdapterError("INVALID_INPUT"); return; }
-    if (Array.isArray(item)) { if (item.length > MAX_ITEMS) throw new ReferenceAdapterError("INVALID_INPUT"); item.forEach((entry) => visit(entry, depth + 1)); return; }
-    if (!record(item) || Object.getPrototypeOf(item) !== Object.prototype || Object.keys(item).length > MAX_ITEMS)
+    if (item === null || typeof item === "boolean") return item;
+    if (typeof item === "string") { if (item.length > MAX_BYTES) throw new ReferenceAdapterError("INVALID_INPUT"); return item; }
+    if (typeof item === "number") { if (!Number.isFinite(item)) throw new ReferenceAdapterError("INVALID_INPUT"); return item; }
+    if (typeof item !== "object" || utilTypes.isProxy(item) || seen.has(item))
       throw new ReferenceAdapterError("INVALID_INPUT");
-    Object.values(item).forEach((entry) => visit(entry, depth + 1));
+    seen.add(item);
+    const array = Array.isArray(item);
+    if (!array && Object.getPrototypeOf(item) !== Object.prototype) throw new ReferenceAdapterError("INVALID_INPUT");
+    const descriptors = Object.getOwnPropertyDescriptors(item);
+    const ownKeys = Reflect.ownKeys(item);
+    if (ownKeys.length > MAX_ITEMS + (array ? 1 : 0) || ownKeys.some((key) => typeof key !== "string"))
+      throw new ReferenceAdapterError("INVALID_INPUT");
+    if (array) {
+      if (item.length > MAX_ITEMS || ownKeys.length !== item.length + 1) throw new ReferenceAdapterError("INVALID_INPUT");
+      const output: unknown[] = [];
+      for (let index = 0; index < item.length; index++) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !Object.hasOwn(descriptor, "value")) throw new ReferenceAdapterError("INVALID_INPUT");
+        output.push(visit(descriptor.value, depth + 1));
+      }
+      return output;
+    } else {
+      const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+      for (const key of ownKeys as string[]) {
+        const descriptor = descriptors[key];
+        if (!descriptor || !Object.hasOwn(descriptor, "value")) throw new ReferenceAdapterError("INVALID_INPUT");
+        output[key] = visit(descriptor.value, depth + 1);
+      }
+      return output;
+    }
   };
-  visit(value, 0);
+  const clean = visit(value, 0);
   let serialized: string;
-  try { serialized = JSON.stringify(value); } catch { throw new ReferenceAdapterError("INVALID_INPUT"); }
+  try { serialized = JSON.stringify(clean); } catch { throw new ReferenceAdapterError("INVALID_INPUT"); }
   if (Buffer.byteLength(serialized) > MAX_BYTES) throw new ReferenceAdapterError("INVALID_INPUT");
   return JSON.parse(serialized) as unknown;
 };
@@ -82,6 +107,29 @@ const known = (artifacts: Map<string, string>, artifactId: unknown, artifactRevi
   return { artifact_id: id, revision: { state: "known" as const, revision: rev } };
 };
 
+const sameStream = (previous: EventEnvelope, next: EventEnvelope): boolean => {
+  if (previous.event_type !== next.event_type) return false;
+  const left = previous.payload as unknown as Record<string, unknown>;
+  const right = next.payload as unknown as Record<string, unknown>;
+  if (next.event_type === "branch.updated") return left.branch === right.branch;
+  if (next.event_type === "pull_request.updated") return left.pull_request_id === right.pull_request_id
+    && left.base_branch === right.base_branch && left.head_branch === right.head_branch;
+  if (next.event_type === "deployment.changed") {
+    if (left.change_kind !== right.change_kind) return false;
+    if (left.change_kind === "attempt") return left.deployment_id === right.deployment_id;
+    const leftSource = left.source as Record<string, unknown>;
+    const rightSource = right.source as Record<string, unknown>;
+    return leftSource.authority_id === rightSource.authority_id;
+  }
+  if (next.event_type === "reconciliation.requested") {
+    const leftScope = left.scope as { service_ids: string[]; environments: string[] };
+    const rightScope = right.scope as { service_ids: string[]; environments: string[] };
+    return JSON.stringify([...leftScope.service_ids].sort()) === JSON.stringify([...rightScope.service_ids].sort())
+      && JSON.stringify([...leftScope.environments].sort()) === JSON.stringify([...rightScope.environments].sort());
+  }
+  return true;
+};
+
 /** Normalizes one bounded local fact using host-supplied policy and artifact facts. This does not ingest an event. */
 export const normalizeLocalFact = (factInput: unknown, policyInput: Policy): EventEnvelope => {
   const fact = detached(factInput);
@@ -96,8 +144,9 @@ export const normalizeLocalFact = (factInput: unknown, policyInput: Policy): Eve
   const artifacts = artifactMap(policy.knownArtifacts);
   const common = ["adapter_version", "event_id", "occurred_at", "received_at", "provider_reference", "sequence",
     "repository_id", "service_id", "kind"];
-  const kind = stringValue(fact.kind, ["branch", "pull_request", "deployment_attempt", "serving_observation", "reconciliation"]);
+  const kind = stringValue(fact.kind, ["baseline", "branch", "pull_request", "deployment_attempt", "serving_observation", "reconciliation"]);
   const specific: Record<string, string[]> = {
+    baseline: ["immutable_revision"],
     branch: ["branch", "prior_revision", "new_revision", "reference_state"],
     pull_request: ["pull_request_id", "state", "base_branch", "base_revision", "head_branch", "head_revision"],
     deployment_attempt: ["environment", "deployment_id", "attempt_state", "effective_order", "artifact_id", "revision"],
@@ -115,7 +164,10 @@ export const normalizeLocalFact = (factInput: unknown, policyInput: Policy): Eve
   let eventType: EventEnvelope["event_type"];
   let payload: unknown;
   let environment: string | undefined;
-  if (kind === "branch") {
+  if (kind === "baseline") {
+    eventType = "repository.baseline_requested";
+    payload = { immutable_revision: revision(fact.immutable_revision), service_ids: [serviceId] };
+  } else if (kind === "branch") {
     const branch = text(fact.branch);
     if (!service.intended_branches.includes(branch)) throw new ReferenceAdapterError("UNCONFIGURED_BRANCH");
     const prior = fact.prior_revision === null ? null : revision(fact.prior_revision);
@@ -174,7 +226,7 @@ export const normalizeLocalFact = (factInput: unknown, policyInput: Policy): Eve
   try { authorizeNormalizedEvent(context, event, config); } catch { throw new ReferenceAdapterError("UNAUTHORIZED"); }
   if (policy.previousEvent !== undefined) {
     const previous = parseEvent(policy.previousEvent);
-    if (!previous.ok || previous.value.event_type !== event.event_type
+    if (!previous.ok || !sameStream(previous.value, event)
       || previous.value.subjects.repository_id !== repositoryId
       || previous.value.subjects.service_ids.length !== 1 || previous.value.subjects.service_ids[0] !== serviceId
       || previous.value.subjects.environment !== event.subjects.environment)

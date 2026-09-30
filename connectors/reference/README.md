@@ -21,4 +21,11 @@ artifact provenance. A production host must authenticate provider input and
 pass trusted policy/artifact evidence to the adapter, then use D08's durable
 ingestion and ordering checks and D09's serving evidence flow.
 
-Run the focused tests with `npx vitest run tests/unit/reference-connector.test.ts`.
+The [synthetic reference workflow](../../.github/workflows/reference-synthetic.yml)
+uses `fixture-driver.mjs` to format a baseline, PR updates, branch update,
+UAT attempt, explicit UAT serving observation, and reconciliation. It writes
+only synthetic envelopes. Run the same driver locally with
+`node connectors/reference/fixture-driver.mjs --branch main --output /tmp/api-truth-reference-events.json`.
+
+Run the focused tests with
+`npx vitest run tests/unit/reference-connector.test.ts tests/unit/reference-workflow.test.ts`.

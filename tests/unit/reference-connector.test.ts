@@ -8,7 +8,7 @@ const configuration = () => ({ config_version: "1.0.0", access_scopes: [{ access
       intended_branches: ["main", "release/*"], environments: [{ name: "uat", intended_branch: "main",
         deployment_authority: { adapter_id: "deploy", access_scope_id: "public" } }] }] }] });
 const context = (deployment = false) => ({ tenantId: "tenant", principalId: "fixture", producerId: deployment ? "deploy" : "source",
-  allowedEventTypes: deployment ? ["deployment.changed"] : ["branch.updated", "pull_request.updated", "reconciliation.requested"],
+  allowedEventTypes: deployment ? ["deployment.changed"] : ["branch.updated", "pull_request.updated", "reconciliation.requested", "repository.baseline_requested"],
   allowedRepositories: ["repo"], allowedServices: ["orders"], capabilities: ["event.ingest"],
   deploymentAuthorityGrants: deployment ? [{ repositoryId: "repo", serviceId: "orders", environment: "uat",
     adapterId: "deploy", sourceAuthorityIds: ["inventory"] }] : [] });
@@ -151,4 +151,73 @@ test("Node 24 direct CLI entry formats one fact using a separate local policy fi
     expect(result.stderr).toBe("");
     expect(parseEvent(JSON.parse(result.stdout)).ok).toBe(true);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("baseline fact remains branchless and cannot imply deployment", () => {
+  const event = normalize({ ...base(), kind: "baseline", immutable_revision: "a".repeat(40) });
+  expect(event.event_type).toBe("repository.baseline_requested");
+  expect(event.payload).toEqual({ immutable_revision: "a".repeat(40), service_ids: ["orders"] });
+  expect(event.subjects).not.toHaveProperty("environment");
+});
+
+test("hostile getters, toJSON, proxies, and symbols are rejected before execution", () => {
+  let calls = 0;
+  const getter = { ...branch(), get new_revision() { calls++; return "a".repeat(40); } };
+  expect(() => normalize(getter)).toThrowError(ReferenceAdapterError);
+  expect(calls).toBe(0);
+  const withToJson = { ...branch(), toJSON() { calls++; return branch(); } };
+  expect(() => normalize(withToJson)).toThrowError(ReferenceAdapterError);
+  expect(calls).toBe(0);
+  const proxy = new Proxy(branch(), { get(target, key) { calls++; return Reflect.get(target, key); } });
+  expect(() => normalize(proxy)).toThrowError(ReferenceAdapterError);
+  expect(calls).toBe(0);
+  const withSymbol = Object.assign(branch(), { [Symbol("hidden")]: "x" });
+  expect(() => normalize(withSymbol)).toThrowError(ReferenceAdapterError);
+});
+
+test("direct CLI rejects a nonregular policy path", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const directory = await mkdtemp(join(tmpdir(), "api-truth-policy-dir-"));
+  try {
+    const entry = new URL("../../connectors/reference/cli.mjs", import.meta.url).pathname;
+    const result = spawnSync(process.execPath, [entry, directory],
+      { input: JSON.stringify(branch()), encoding: "utf8", timeout: 5_000 });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("INVALID_INPUT\n");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test("prior event must identify the same branch, PR, deployment, or reconciliation stream", () => {
+  const priorBranch = normalize(branch());
+  const wrongBranch = structuredClone(priorBranch);
+  (wrongBranch.payload as any).branch = "other";
+  expect(() => normalize({ ...branch(), event_id: "event-2", sequence: "2" }, false, wrongBranch))
+    .toThrowError(ReferenceAdapterError);
+
+  const prFact = { ...base(), kind: "pull_request", pull_request_id: "42", state: "open",
+    base_branch: "main", base_revision: "a", head_branch: "feature", head_revision: "b" };
+  const priorPr = normalize(prFact);
+  const wrongPr = structuredClone(priorPr);
+  (wrongPr.payload as any).pull_request_id = "other";
+  expect(() => normalize({ ...prFact, event_id: "event-2", sequence: "2" }, false, wrongPr))
+    .toThrowError(ReferenceAdapterError);
+
+  const attempt = { ...base(), kind: "deployment_attempt", environment: "uat", deployment_id: "d1",
+    attempt_state: "pending", effective_order: "1", artifact_id: "artifact-1", revision: "a".repeat(40) };
+  const priorAttempt = normalize(attempt, true);
+  const wrongDeployment = structuredClone(priorAttempt);
+  (wrongDeployment.payload as any).deployment_id = "d-other";
+  expect(() => normalize({ ...attempt, event_id: "event-2", sequence: "2", effective_order: "2" }, true, wrongDeployment))
+    .toThrowError(ReferenceAdapterError);
+
+  const reconcile = { ...base(), kind: "reconciliation", environments: ["uat"], provider_snapshot_reference: "snap-1" };
+  const priorReconcile = normalize(reconcile);
+  const wrongScope = structuredClone(priorReconcile);
+  (wrongScope.payload as any).scope.environments = [];
+  expect(() => normalize({ ...reconcile, event_id: "event-2", sequence: "2" }, false, wrongScope))
+    .toThrowError(ReferenceAdapterError);
 });
