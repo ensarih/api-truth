@@ -5,7 +5,7 @@ import { ANALYZER, createAnalyzer } from "../../analyzers/typescript/src/index.j
 import { createReferenceEventBridge } from "../../connectors/reference/src/bridge.js";
 import { normalizeLocalFact } from "../../connectors/reference/src/adapter.js";
 import { buildSyntheticReferenceFixture } from "../../connectors/reference/src/fixture.js";
-import type { AnalyzerRequest, AnalyzerResult } from "../../packages/ir/src/index.js";
+import type { AnalyzerRequest } from "../../packages/ir/src/index.js";
 import { createAccessPolicyStore, contractSnapshotFromAnalyzerResult } from "../../packages/catalog/src/index.js";
 import { applyOrchestrationMigrations, createOrchestrationRepository, createOrchestrationWorker } from "../../packages/orchestration/src/index.js";
 import { applyEnvironmentMigrations, createEnvironmentInboxWorker, createEnvironmentReconciler,
@@ -19,6 +19,7 @@ const repo = "synthetic-repo";
 const service = "synthetic-orders";
 const revisionA = "a".repeat(40);
 const revisionB = "b".repeat(40);
+const revisionC = "c".repeat(40);
 const admin = { tenantId, principalId: "admin", capabilities: ["configuration.admin"] };
 const workerIdentity = { workerId: "reference-worker", instanceId: "local", capabilities: ["jobs.execute"] };
 const reader = { tenantId, principalId: "architect" };
@@ -40,7 +41,7 @@ const analyze = async (revision: string, fixture: "baseline" | "changed",
   return { result, request };
 };
 
-test("synthetic facts drive isolated preview, merged branch, and UAT-only contract without manual rescan", async () => {
+test("synthetic facts drive preview, merge, failed rollout, rollback, and repair without manual rescan", async () => {
   const database = await createCatalogTestDatabase();
   try {
     await applyOrchestrationMigrations(database.pool, { schema: database.schema });
@@ -70,7 +71,31 @@ test("synthetic facts drive isolated preview, merged branch, and UAT-only contra
     const initialBranch = { ...steps[3]!.fact, event_id: "synthetic-initial-branch",
       provider_reference: "synthetic-initial-branch", sequence: "1", prior_revision: null,
       new_revision: revisionA, reference_state: "created" };
-    const deliveries = [...steps, { fact: initialBranch, policy: steps[3]!.policy }];
+    const staleBranch = { ...steps[3]!.fact, event_id: "synthetic-branch-stale",
+      provider_reference: "synthetic-branch-stale", sequence: "3", prior_revision: revisionB,
+      new_revision: revisionA, reference_state: "rewritten" };
+    const candidateArtifact = { artifact_id: "synthetic-artifact-c", revision: revisionC };
+    const rollbackArtifacts = [...steps[4]!.policy.knownArtifacts as Array<{ artifact_id: string; revision: string }>,
+      candidateArtifact];
+    const rollbackPolicy: Record<string, unknown> = { ...steps[4]!.policy, knownArtifacts: rollbackArtifacts };
+    const failedRollout = { ...steps[4]!.fact, event_id: "synthetic-rollout-failed",
+      provider_reference: "synthetic-rollout-failed", sequence: "9", effective_order: "9",
+      deployment_id: "synthetic-rollout-c", attempt_state: "failed",
+      artifact_id: candidateArtifact.artifact_id, revision: revisionC };
+    const mixedServing = { ...steps[5]!.fact, event_id: "synthetic-serving-mixed",
+      provider_reference: "synthetic-serving-mixed", sequence: "10", effective_order: "10",
+      observation_id: "synthetic-serving-mixed", reference: "synthetic-inventory-mixed",
+      inventory: [{ artifact_id: "synthetic-artifact-b", revision: revisionB }, candidateArtifact] };
+    const rollbackRequest = { ...steps[4]!.fact, event_id: "synthetic-rollback-request",
+      provider_reference: "synthetic-rollback-request", sequence: "11", effective_order: "11",
+      deployment_id: "synthetic-rollback-b", attempt_state: "rollback_requested" };
+    const rollbackConfirmed = { ...steps[5]!.fact, event_id: "synthetic-rollback-confirmed",
+      provider_reference: "synthetic-rollback-confirmed", sequence: "12", effective_order: "12",
+      observation_id: "synthetic-rollback-confirmed", reference: "synthetic-inventory-rollback" };
+    const deliveries = [...steps, { fact: initialBranch, policy: steps[3]!.policy },
+      { fact: staleBranch, policy: steps[3]!.policy },
+      { fact: failedRollout, policy: rollbackPolicy }, { fact: mixedServing, policy: rollbackPolicy },
+      { fact: rollbackRequest, policy: rollbackPolicy }, { fact: rollbackConfirmed, policy: rollbackPolicy }];
     const bridge = createReferenceEventBridge(orchestration, {
       async verify(raw) {
         const step = deliveries.find((item) => item.fact.event_id === raw);
@@ -163,22 +188,64 @@ test("synthetic facts drive isolated preview, merged branch, and UAT-only contra
       workerIdentity, eventContext: steps[5]!.policy.context });
     expect(await createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact)
       .drain(workerIdentity)).toMatchObject([{ state: "resolved" }]);
+    expect(await inbox.drain(workerIdentity)).toMatchObject([{ eventId: "synthetic-serving-repaired",
+      state: "delivered" }]);
     expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed", contract: "resolved",
       snapshotId: merged.result.snapshot_id, reconciliationRequired: false });
 
+    expect(await bridge.deliver("synthetic-rollout-failed")).toMatchObject({ outcome: "accepted" });
+    expect(await inbox.drain(workerIdentity)).toMatchObject([{ state: "delivered" }]);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed", contract: "resolved",
+      snapshotId: merged.result.snapshot_id,
+      latestAttempt: { deploymentId: "synthetic-rollout-c", state: "failed" } });
+    const afterFailure = await database.pool.query<{ current_event_id: string }>(
+      `SELECT current_event_id FROM ${schema}.environment_serving_checkpoints WHERE tenant_id=$1`, [tenantId]);
+    expect(afterFailure.rows).toEqual([{ current_event_id: "synthetic-serving-repaired" }]);
+    expect(await bridge.deliver("synthetic-serving-mixed")).toMatchObject({ outcome: "accepted" });
+    expect(await inbox.drain(workerIdentity)).toMatchObject([{ state: "delivered" }]);
+    const mixedView = await view.getEnvironment(reader, key);
+    expect(mixedView).toMatchObject({ deployment: "transitional",
+      contract: "ambiguous", active: [{ artifactId: "synthetic-artifact-b", revision: revisionB },
+        { artifactId: "synthetic-artifact-c", revision: revisionC }] });
+    expect(mixedView).not.toHaveProperty("snapshotId");
+    expect(await bridge.deliver("synthetic-rollback-request")).toMatchObject({ outcome: "accepted" });
+    expect(await inbox.drain(workerIdentity)).toMatchObject([{ state: "delivered" }]);
+    const requestedView = await view.getEnvironment(reader, key);
+    expect(requestedView).toMatchObject({ deployment: "transitional",
+      contract: "ambiguous", latestAttempt: { deploymentId: "synthetic-rollback-b",
+        state: "rollback_requested" } });
+    expect(requestedView).not.toHaveProperty("snapshotId");
+    const afterRequest = await database.pool.query<{ current_event_id: string }>(
+      `SELECT current_event_id FROM ${schema}.environment_serving_checkpoints WHERE tenant_id=$1`, [tenantId]);
+    expect(afterRequest.rows).toEqual([{ current_event_id: "synthetic-serving-mixed" }]);
+    expect(await bridge.deliver("synthetic-rollback-confirmed")).toMatchObject({ outcome: "accepted" });
+    expect(await inbox.drain(workerIdentity)).toMatchObject([{ state: "delivered" }]);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed", contract: "resolved",
+      snapshotId: merged.result.snapshot_id, active: [{ artifactId: "synthetic-artifact-b", revision: revisionB }] });
+
+    const missedFact = { ...rollbackConfirmed, event_id: "synthetic-missed-observation",
+      provider_reference: "synthetic-missed-observation", sequence: "13", effective_order: "13",
+      observation_id: "synthetic-missed-observation", reference: "synthetic-inventory-after-loss" };
+    const periodic = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => normalizeLocalFact(missedFact,
+        { configuration: rollbackPolicy.configuration, context: rollbackPolicy.context,
+          knownArtifacts: rollbackPolicy.knownArtifacts }) },
+      workerIdentity, eventContext: rollbackPolicy.context });
+    await database.pool.query(`UPDATE ${schema}.environment_serving_checkpoints
+      SET updated_at=clock_timestamp()-interval '2 seconds' WHERE tenant_id=$1`, [tenantId]);
+    expect(await createEnvironmentReconciliationWorker(database.pool,
+      { schema: database.schema, reconcileAfterMs: 1_000 }, periodic).drain(workerIdentity))
+      .toMatchObject([{ state: "resolved" }]);
+    expect(await inbox.drain(workerIdentity)).toMatchObject([{ eventId: "synthetic-missed-observation",
+      state: "delivered" }]);
+    const afterLossRepair = await database.pool.query<{ current_event_id: string }>(
+      `SELECT current_event_id FROM ${schema}.environment_serving_checkpoints WHERE tenant_id=$1`, [tenantId]);
+    expect(afterLossRepair.rows).toEqual([{ current_event_id: "synthetic-missed-observation" }]);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed", contract: "resolved",
+      snapshotId: merged.result.snapshot_id });
+
     expect(await bridge.deliver("synthetic-branch")).toMatchObject({ outcome: "duplicate" });
-    const stale = { ...steps[3]!.fact, event_id: "synthetic-branch-stale", sequence: "3",
-      provider_reference: "synthetic-branch-stale", new_revision: revisionA };
-    const staleContext = steps[3]!.policy.context;
-    expect(await orchestration.ingestEvent(staleContext, {
-      event_version: "1.0.0", event_id: stale.event_id, event_type: "branch.updated",
-      producer: { producer_id: "synthetic-source", adapter_version: "1.0.0" },
-      occurred_at: "2026-01-01T00:00:03Z", received_at: "2026-01-01T00:01:03Z",
-      subjects: { repository_id: repo, service_ids: [service] },
-      provider_evidence: { provider: "github", provider_reference: stale.provider_reference,
-        order: { kind: "sequence", value: stale.sequence } },
-      payload: { branch: "main", prior_revision: revisionB, new_revision: revisionA, reference_state: "rewritten" },
-    })).toMatchObject({ disposition: "ignored_stale" });
+    expect(await bridge.deliver("synthetic-branch-stale")).toMatchObject({ disposition: "ignored_stale" });
     const branchAnalysisCount = await database.pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${schema}.orchestration_jobs
        WHERE tenant_id=$1 AND kind='branch_analysis'`, [tenantId]);
