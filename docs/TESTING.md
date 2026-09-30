@@ -1,6 +1,6 @@
 # Testing and Local Validation
 
-**Status:** offline TypeScript and isolated PostgreSQL suites cover D03–D10, including environment lifecycle and OpenAPI publication; D11 query, portal HTTP, and MCP protocol slices are implemented, with browser and full environment cross-surface gates in progress. Java execution remains planned.
+**Status:** offline TypeScript and isolated PostgreSQL suites cover D03–D11, including environment lifecycle, OpenAPI publication, authorized portal/MCP reads, real-browser portal interaction, and environment cross-surface revocation. D12 reference lifecycle and provider boundaries are in progress; Java execution remains planned.
 **Date:** 2026-09-30
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
@@ -75,6 +75,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:unit -- <file>` | **Available:** focus the unit project; missing selections fail |
 | `npm run test:watch` | **Available:** rerun relevant offline tests during development |
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity and linked read-only MCP protocol behavior |
+| `npm run test:browser` | **Available:** require an installed Chrome/Chromium executable and exercise portal search, selection, detail, download, and unknown state in a real browser; no silent skip |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
 | `npm run test:updates` | **Available:** run the D07 planner, difference, execution, contract, and local CLI suites without Docker or provider credentials |
 | `npm run test:environment` | **Available:** run D09 pure environment-resolution and serving-order scenarios without Docker or provider credentials |
@@ -190,4 +191,4 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The D04 offline scaffold and PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, D07 update/difference core, D08 event/worker orchestration, D09 environment lifecycle, and D10 validated OpenAPI compilation/publication are implemented. D11 shared query, portal HTTP, and initial MCP transport are also implemented; browser interaction and environment cross-surface gates remain. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance is pending. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, update contracts and limitations in `packages/updates/README.md`, orchestration capabilities in `packages/orchestration/README.md`, D09 behavior in `packages/environment/README.md`, and D10 behavior in `packages/openapi/README.md`.
+The D04 offline scaffold and PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, D07 update/difference core, D08 event/worker orchestration, D09 environment lifecycle, D10 validated OpenAPI compilation/publication, and D11 shared query/portal/MCP are implemented. Real-browser and PostgreSQL cross-surface tests cover D11's acceptance boundary. D12 provider wiring and the complete D13 Phase 1 release scenario remain open. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance is pending. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, update contracts and limitations in `packages/updates/README.md`, orchestration capabilities in `packages/orchestration/README.md`, D09 behavior in `packages/environment/README.md`, and D10 behavior in `packages/openapi/README.md`.

@@ -30,6 +30,10 @@ npm run typecheck
 npm run check
 ```
 
+Run `npm run test:browser` separately for the real Chrome/Chromium portal
+interaction test. It requires an installed browser and fails clearly if one
+is unavailable; see [the browser test guide](tests/browser/README.md).
+
 `npm test` runs the unit and contract Vitest projects once. The focused unit
 form accepts a file selector after `--`; a selector that matches no tests is a
 failure. `npm run test:watch` stays open and reruns affected offline tests until

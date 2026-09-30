@@ -24,6 +24,17 @@ does not need Docker or external credentials. A version mismatch should be
 fixed before diagnosing test failures; `npm ci` installs from the committed
 lockfile rather than updating dependencies.
 
+The portal's real-browser test uses an installed Chrome or Chromium executable:
+
+```sh
+npm run test:browser
+```
+
+If browser discovery fails, set
+`API_TRUTH_BROWSER_EXECUTABLE=/absolute/path/to/chrome` for that command. The
+test fails clearly when no browser exists; it is separate from the offline
+`npm run check` suite.
+
 ## 2. Start the disposable PostgreSQL service
 
 The test controller accepts only the fixed `api-truth-test` Compose project and
