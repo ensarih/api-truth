@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const MAX_SECRET_BYTES = 4096;
@@ -28,8 +28,8 @@ export type GitHubWebhookHost = Readonly<{
   /** The secret configured for this particular webhook; never supplied by the HTTP sender. */
   secret: string | Uint8Array;
   maxPayloadBytes: number;
-  /** Atomically claim a verified delivery ID within this webhook's replay namespace. */
-  replay: Readonly<{ claim(deliveryId: string): Promise<boolean> }>;
+  /** Atomically reject either a repeated ID or a repeated body digest in this webhook's namespace. */
+  replay: Readonly<{ claim(deliveryId: string, bodySha256: string): Promise<boolean> }>;
 }>;
 
 export type VerifiedGitHubWebhookDelivery = Readonly<{
@@ -67,8 +67,9 @@ export async function verifyGitHubWebhookDelivery(
   const received = Buffer.from(match[1]!, "hex");
   if (!timingSafeEqual(calculated, received)) throw new GitHubWebhookError("UNAUTHORIZED");
 
+  const bodySha256 = createHash("sha256").update(verifiedBytes).digest("hex");
   let claimed: boolean;
-  try { claimed = await host.replay.claim(deliveryId); }
+  try { claimed = await host.replay.claim(deliveryId, bodySha256); }
   catch { throw new GitHubWebhookError("REPLAY_STORE_UNAVAILABLE"); }
   if (claimed !== true) throw new GitHubWebhookError("REPLAYED");
 

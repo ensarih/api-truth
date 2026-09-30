@@ -36,8 +36,11 @@ Run the focused tests with
 `X-Hub-Signature-256`, `X-GitHub-Delivery`, and `X-GitHub-Event` header values,
 and a host-owned secret. It checks the HMAC-SHA256 signature against the exact
 bytes and caps bodies at 1 MiB (or a smaller configured limit). The host must
-implement `replay.claim` as an atomic, durable claim in the webhook's own
-namespace; an in-memory set is suitable only for tests. A successful call
-returns copied bytes and fixed metadata, not a parsed or normalized provider
-event. The host remains responsible for safe HTTP body collection, provider
-semantics, artifact provenance, and durable event ingestion.
+implement `replay.claim` as an atomic, durable claim of both the delivery ID
+and body SHA-256 digest in the webhook's own namespace; a repeat of either must
+return false. An in-memory set is suitable only for tests. The HMAC covers
+the body, not the event or delivery headers, so the host must not treat those
+headers as independently signed. A successful call returns copied bytes and
+fixed metadata, not a parsed or normalized provider event. The host remains
+responsible for safe HTTP body collection, provider semantics, artifact
+provenance, and durable event ingestion.

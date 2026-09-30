@@ -10,6 +10,7 @@ const fresh = () => {
   const ids = new Set<string>();
   const bodies = new Set<string>();
   return { async claim(id: string, bodySha256: string) {
+    expect(bodySha256).toMatch(/^[0-9a-f]{64}$/);
     if (ids.has(id) || bodies.has(bodySha256)) return false;
     ids.add(id); bodies.add(bodySha256); return true;
   } };
