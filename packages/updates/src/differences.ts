@@ -263,7 +263,7 @@ const presenceProjection = (presence: Endpoint["parameters"][number]["presence"]
     ? { state: presence.state, condition: canonicalCondition(presence.condition) }
     : { state: presence.state };
 
-const endpointProjection = (endpoint: Endpoint): JsonValue => {
+const endpointProjection = (endpoint: Endpoint, snapshot?: ContractSnapshot): JsonValue => {
   const parameters = endpoint.parameters.map((parameter) => ({
     name: parameter.name,
     in: parameter.in,
@@ -328,6 +328,12 @@ const endpointProjection = (endpoint: Endpoint): JsonValue => {
         .map(([scheme, scopes]) => ({ scheme, scopes: canonicalStrings(scopes) })),
     };
   }), canonicalJson);
+  const schemeNames = canonicalStrings(endpoint.security.alternatives.flatMap((alternative) =>
+    alternative.requirements.map((requirement) => requirement.scheme)));
+  const definitions = Object.fromEntries(schemeNames.flatMap((name) => {
+    const fact = snapshot?.security_schemes?.[name];
+    return fact === undefined ? [] : [[name, structuredClone(fact.definition)]];
+  }));
   return {
     endpoint_id: endpoint.endpoint_id,
     identity: structuredClone(endpoint.identity),
@@ -336,7 +342,11 @@ const endpointProjection = (endpoint: Endpoint): JsonValue => {
     parameters,
     request_bodies: requestBodies,
     responses,
-    security: { alternatives },
+    security: {
+      ...(endpoint.security.state === undefined ? {} : { state: endpoint.security.state }),
+      alternatives,
+      ...(Object.keys(definitions).length === 0 ? {} : { scheme_definitions: definitions }),
+    },
   } as JsonValue;
 };
 
@@ -399,8 +409,8 @@ const responseProjection = (group: ResponseGroup): JsonValue => ({
   ...(group.headers.length === 0 ? {} : { headers: group.headers }),
 }) as unknown as JsonValue;
 
-const securityProjection = (endpoint: Endpoint): JsonValue =>
-  (endpointProjection(endpoint) as Record<string, JsonValue>).security!;
+const securityProjection = (endpoint: Endpoint, snapshot: ContractSnapshot): JsonValue =>
+  (endpointProjection(endpoint, snapshot) as Record<string, JsonValue>).security!;
 
 const presenceState = (fact: Parameter | RequestBody): string => fact.presence.state;
 
@@ -814,6 +824,8 @@ const addEndpointMemberDrafts = (
   serviceId: string,
   before: Endpoint,
   after: Endpoint,
+  baseSnapshot: ContractSnapshot,
+  targetSnapshot: ContractSnapshot,
   targetIncomplete: boolean,
 ): void => {
   const baseParameters = new Map(before.parameters.map((fact) => [parameterKey(fact), fact]));
@@ -851,8 +863,8 @@ const addEndpointMemberDrafts = (
     else if (canonicalJson(responseProjection(oldFact)) !== canonicalJson(responseProjection(newFact))) drafts.push({ kind: "response.changed", compatibility: "potentially_breaking", subject, before: responseProjection(oldFact), after: responseProjection(newFact) });
   }
 
-  const oldSecurity = securityProjection(before);
-  const newSecurity = securityProjection(after);
+  const oldSecurity = securityProjection(before, baseSnapshot);
+  const newSecurity = securityProjection(after, targetSnapshot);
   if (canonicalJson(oldSecurity) !== canonicalJson(newSecurity)) drafts.push({
     kind: "security.changed",
     compatibility: "potentially_breaking",
@@ -998,7 +1010,7 @@ export const compareContractSnapshots = (value: unknown): ContractDifferenceSet 
           kind: "endpoint.added",
           compatibility: "non_breaking",
           subject,
-          after: endpointProjection(after),
+          after: endpointProjection(after, target),
         });
         continue;
       }
@@ -1007,7 +1019,7 @@ export const compareContractSnapshots = (value: unknown): ContractDifferenceSet 
           kind: target.coverage.status === "complete" ? "endpoint.removed" : "endpoint.absence_unconfirmed",
           compatibility: target.coverage.status === "complete" ? "potentially_breaking" : "unknown",
           subject,
-          before: endpointProjection(before),
+          before: endpointProjection(before, base),
         });
         continue;
       }
@@ -1017,13 +1029,13 @@ export const compareContractSnapshots = (value: unknown): ContractDifferenceSet 
           kind: "endpoint.added",
           compatibility: "non_breaking",
           subject,
-          after: endpointProjection(after),
+          after: endpointProjection(after, target),
         });
         drafts.push({
           kind: target.coverage.status === "complete" ? "endpoint.removed" : "endpoint.absence_unconfirmed",
           compatibility: target.coverage.status === "complete" ? "potentially_breaking" : "unknown",
           subject,
-          before: endpointProjection(before),
+          before: endpointProjection(before, base),
         });
         continue;
       }
@@ -1043,6 +1055,8 @@ export const compareContractSnapshots = (value: unknown): ContractDifferenceSet 
         base.service.service_id,
         before,
         after,
+        base,
+        target,
         target.coverage.status === "incomplete",
       );
     }

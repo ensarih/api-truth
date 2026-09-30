@@ -63,6 +63,9 @@ export const contractSnapshotFromAnalyzerResult = (
     coverage: validatedResult.coverage,
     evidence: validatedResult.evidence,
     schemas: validatedResult.schemas,
+    ...(validatedResult.security_schemes === undefined ? {} : {
+      security_schemes: validatedResult.security_schemes,
+    }),
     endpoints: validatedResult.endpoints,
     claims: validatedResult.claims,
     editorial_reviews: [],

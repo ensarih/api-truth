@@ -101,7 +101,7 @@ const snapshot = (
       source_version: immutable_revision,
       location: { path: "src/routes.ts" },
       method: "deterministic_analysis",
-      scope: { service_id: "pets" },
+      scope: { service_id: "pets", snapshot_id },
       limitations: [],
       access_label: "fixture-read",
     }],
@@ -343,6 +343,80 @@ describe("D07 endpoint contract differences", () => {
     ]);
     expect(result.differences.every(({ compatibility }) => compatibility === "potentially_breaking")).toBe(true);
     expect(JSON.stringify(result)).not.toContain("evidence_ids");
+    expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
+  });
+
+  test("reports an explicit security state change without exposing evidence IDs", () => {
+    const before = endpoint("endpoint-security-state", "GET", "/pets");
+    before.security = { state: "unknown", alternatives: [] };
+    const after = structuredClone(before);
+    after.security = { state: "anonymous", alternatives: [], evidence_ids: ["ev-route"] };
+
+    const result = compare([before], [after]);
+    expect(result.differences).toEqual([
+      expect.objectContaining({
+        kind: "security.changed",
+        subject: expect.objectContaining({ fact_key: '["security","endpoint-security-state"]' }),
+        before: { state: "unknown", alternatives: [] },
+        after: { state: "anonymous", alternatives: [] },
+      }),
+    ]);
+    expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
+    expect(JSON.stringify(result)).not.toContain("evidence_ids");
+  });
+
+  test("reports a referenced security scheme definition change", () => {
+    const secured = endpoint("endpoint-security-definition", "GET", "/pets");
+    secured.security = {
+      state: "declared",
+      alternatives: [{ requirements: [{ scheme: "access", scopes: [] }] }],
+      evidence_ids: ["ev-route"],
+    };
+    const base = snapshot("snapshot-base", baseRevision, [endpoint("endpoint-security-definition", "GET", "/pets")]);
+    const target = snapshot("snapshot-target", targetRevision, [endpoint("endpoint-security-definition", "GET", "/pets")]);
+    base.endpoints[0]!.security = structuredClone(secured.security);
+    target.endpoints[0]!.security = structuredClone(secured.security);
+    base.security_schemes = {
+      access: { definition: { type: "http", scheme: "basic" }, evidence_ids: ["ev-route"] },
+    };
+    target.security_schemes = {
+      access: { definition: { type: "http", scheme: "bearer", bearerFormat: "JWT" }, evidence_ids: ["ev-route"] },
+      unused: { definition: { type: "apiKey", name: "X-Key", in: "header" }, evidence_ids: ["ev-route"] },
+    };
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    expect(result.differences).toEqual([
+      expect.objectContaining({
+        kind: "security.changed",
+        subject: expect.objectContaining({ endpoint_id: "endpoint-security-definition" }),
+        before: expect.objectContaining({ scheme_definitions: { access: { type: "http", scheme: "basic" } } }),
+        after: expect.objectContaining({ scheme_definitions: { access: { type: "http", scheme: "bearer", bearerFormat: "JWT" } } }),
+      }),
+    ]);
+    expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
+    expect(JSON.stringify(result)).not.toContain("evidence_ids");
+    expect(JSON.stringify(result)).not.toContain("unused");
+  });
+
+  test("includes the referenced scheme definition when an endpoint is added", () => {
+    const added = endpoint("endpoint-new-security", "GET", "/pets");
+    const existing = endpoint("endpoint-existing", "GET", "/pets/existing");
+    const base = snapshot("snapshot-base", baseRevision, [existing]);
+    const target = snapshot("snapshot-target", targetRevision, [existing, added]);
+    added.security = { state: "declared", evidence_ids: ["ev-route"],
+      alternatives: [{ requirements: [{ scheme: "access", scopes: [] }] }] };
+    target.security_schemes = {
+      access: { definition: { type: "http", scheme: "bearer" }, evidence_ids: ["ev-route"] },
+    };
+
+    const result = compareContractSnapshots({ base_snapshot: base, target_snapshot: target });
+    expect(result.differences).toEqual([
+      expect.objectContaining({ kind: "endpoint.added", after: expect.objectContaining({
+        security: expect.objectContaining({ scheme_definitions: {
+          access: { type: "http", scheme: "bearer" },
+        } }),
+      }) }),
+    ]);
     expect(parseContractDifferenceSet(result)).toMatchObject({ ok: true });
   });
 

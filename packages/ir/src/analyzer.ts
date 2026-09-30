@@ -2,6 +2,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { SchemaComponentSchema } from "./api-schema.js";
 import { ClaimSchema, EvidenceSchema } from "./evidence.js";
 import { EndpointSchema } from "./endpoints.js";
+import { SecuritySchemeFactSchema } from "./security.js";
 import {
   AnalyzerIdentitySchema, ContractSnapshotSchemaReferences, CoverageSchema, DependencySchema, DiagnosticSchema,
   validateContractSnapshotSemantics,
@@ -69,6 +70,7 @@ export const AnalyzerResultSchema = Type.Object({
   coverage: CoverageSchema,
   evidence: Type.Array(Type.Ref(EvidenceSchema)),
   schemas: Type.Record(Type.String({ minLength: 1 }), Type.Ref(SchemaComponentSchema)),
+  security_schemes: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Ref(SecuritySchemeFactSchema))),
   endpoints: Type.Array(Type.Ref(EndpointSchema)),
   claims: Type.Array(Type.Ref(ClaimSchema)),
   dependencies: Type.Array(DependencySchema),
@@ -100,6 +102,7 @@ const validateAnalyzerResultSemantics = (result: AnalyzerResult): ValidationIssu
     coverage: result.coverage,
     evidence: result.evidence,
     schemas: result.schemas,
+    ...(result.security_schemes === undefined ? {} : { security_schemes: result.security_schemes }),
     endpoints: result.endpoints,
     claims: result.claims,
     editorial_reviews: [],

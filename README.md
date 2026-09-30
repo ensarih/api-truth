@@ -35,7 +35,7 @@ Unknown information stays unknown. Inferred statements remain distinguishable fr
 
 ## Project status
 
-Development is underway. D01–D07 and D08 slices 0–6 are complete. D08 now runs durable branch analysis, isolated PR previews, exact branch/PR reconciliation, and configuration-change repair against the local PostgreSQL test environment. Its independent final review remains. D09 has pure environment resolution, durable deployment-attempt/artifact records, ordered serving checkpoints, an exact-scope provider reconciliation port, authorized views, and workers for event consumption, immediate environment requests, and periodic repair. D10 has started with a method/path projection planner; OpenAPI documents and publication are not yet implemented. The TypeScript/Express analyzer covers a published bounded subset. The portal and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
+Development is underway. D01–D07 and D08 slices 0–6 are complete. D08 now runs durable branch analysis, isolated PR previews, exact branch/PR reconciliation, and configuration-change repair against the local PostgreSQL test environment. Its independent final review remains. D09 has pure environment resolution, durable deployment-attempt/artifact records, ordered serving checkpoints, an exact-scope provider reconciliation port, authorized views, and workers for event consumption, immediate environment requests, and periodic repair. D10 now has a method/path projection planner and evidence-gated OpenAPI 3.1 compilation for representable single operations; variant handling and atomic publication remain. The TypeScript/Express analyzer covers a published bounded subset. The portal and MCP tools are later Phase 1 work. Java and additional Node.js framework adapters have separate conformance gates.
 
 Start with:
 
@@ -49,7 +49,7 @@ Start with:
 - [Catalog package and local round-trip](packages/catalog/README.md)
 - [Orchestration package and local lifecycle test](packages/orchestration/README.md)
 - [Environment-resolution core](packages/environment/README.md)
-- [OpenAPI projection planner](packages/openapi/README.md)
+- [OpenAPI planner and compiler](packages/openapi/README.md)
 
 ## Development direction
 

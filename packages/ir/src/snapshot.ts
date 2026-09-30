@@ -8,6 +8,7 @@ import {
 import { EndpointSchema, type Endpoint } from "./endpoints.js";
 import { deriveEndpointIdentity, EndpointIdentitySchema } from "./identity.js";
 import { JsonValueSchema } from "./json-value.js";
+import { SecuritySchemeDefinitionSchema, SecuritySchemeFactSchema } from "./security.js";
 import { issue, parserFor, type ValidationIssue } from "./validation.js";
 import { ConfigVersionSchema, IdentityVersionSchema, IrVersionSchema } from "./versions.js";
 
@@ -71,6 +72,7 @@ export const ContractSnapshotSchema = Type.Object({
   coverage: CoverageSchema,
   evidence: Type.Array(Type.Ref(EvidenceSchema)),
   schemas: Type.Record(Type.String({ minLength: 1 }), Type.Ref(SchemaComponentSchema)),
+  security_schemes: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Ref(SecuritySchemeFactSchema))),
   endpoints: Type.Array(Type.Ref(EndpointSchema)),
   claims: Type.Array(Type.Ref(ClaimSchema)),
   editorial_reviews: Type.Array(Type.Ref(EditorialReviewSchema)),
@@ -181,6 +183,7 @@ export const validateContractSnapshotSemantics = (snapshot: ContractSnapshot): V
   const claimIds = new Set(snapshot.claims.map((claim) => claim.claim_id));
   const diagnosticIds = new Set(snapshot.diagnostics.map((diagnostic) => diagnostic.diagnostic_id));
   const schemaIds = new Set(Object.keys(snapshot.schemas));
+  const securitySchemeIds = new Set(Object.keys(snapshot.security_schemes ?? {}));
   issues.push(...duplicateIssues(snapshot.endpoints.map((endpoint) => endpoint.endpoint_id), "/endpoints"));
   issues.push(...duplicateIssues(snapshot.evidence.map((evidence) => evidence.evidence_id), "/evidence"));
   issues.push(...duplicateIssues(snapshot.claims.map((claim) => claim.claim_id), "/claims"));
@@ -233,6 +236,47 @@ export const validateContractSnapshotSemantics = (snapshot: ContractSnapshot): V
     if (applicationPathIsValid && !identityMatches) {
       issues.push(issue(`/endpoints/${index}/identity`, "semantic.identity_mismatch", "route identity does not match method, path, and selectors"));
     }
+    const security = endpoint.security;
+    if (security.state !== undefined) {
+      if ((security.state === "declared") !== (security.alternatives.length > 0)) {
+        issues.push(issue(`/endpoints/${index}/security/state`, "semantic.security_state_mismatch",
+          "explicit security state and requirements disagree"));
+      }
+      if (security.state !== "unknown" && (security.evidence_ids?.length ?? 0) === 0) {
+        issues.push(issue(`/endpoints/${index}/security/evidence_ids`, "semantic.missing_evidence",
+          "explicit security requires evidence"));
+      }
+      if (security.state === "declared") {
+        for (const [alternativeIndex, alternative] of security.alternatives.entries()) {
+          const names = new Set<string>();
+          for (const [requirementIndex, requirement] of alternative.requirements.entries()) {
+            const path = `/endpoints/${index}/security/alternatives/${alternativeIndex}/requirements/${requirementIndex}/scheme`;
+            if (!securitySchemeIds.has(requirement.scheme)) {
+              issues.push(issue(path, "semantic.dangling_reference", "security scheme definition is absent"));
+            } else if (requirement.scopes.length > 0) {
+              issues.push(issue(`${path}/scopes`, "semantic.invalid_security_scopes",
+                "apiKey and HTTP security requirements cannot declare scopes"));
+            }
+            if (names.has(requirement.scheme)) {
+              issues.push(issue(path, "semantic.duplicate_id", "security requirement repeats a scheme"));
+            }
+            names.add(requirement.scheme);
+          }
+        }
+      }
+    }
+    for (const [evidenceIndex, id] of (security.evidence_ids ?? []).entries()) {
+      const found = snapshot.evidence.find((candidate) => candidate.evidence_id === id);
+      if (found === undefined) {
+        issues.push(issue(`/endpoints/${index}/security/evidence_ids/${evidenceIndex}`,
+          "semantic.dangling_reference", "unknown security evidence"));
+      } else if (found.scope.service_id !== snapshot.service.service_id
+        || found.scope.snapshot_id !== snapshot.snapshot_id
+        || found.scope.endpoint_id !== undefined && found.scope.endpoint_id !== endpoint.endpoint_id) {
+        issues.push(issue(`/endpoints/${index}/security/evidence_ids/${evidenceIndex}`,
+          "semantic.scope_mismatch", "security evidence does not cover the endpoint"));
+      }
+    }
     evidenceReference(endpoint.evidence_ids, evidenceIds, `/endpoints/${index}/evidence_ids`, issues);
     endpoint.parameters.forEach((parameter, parameterIndex) => {
       evidenceReference(
@@ -251,6 +295,29 @@ export const validateContractSnapshotSemantics = (snapshot: ContractSnapshot): V
       );
     });
   });
+
+  for (const [name, fact] of Object.entries(snapshot.security_schemes ?? {})) {
+    if (fact.definition.type === "http" && fact.definition.bearerFormat !== undefined
+      && fact.definition.scheme.toLowerCase() !== "bearer") {
+      issues.push(issue(`/security_schemes/${name}/definition/bearerFormat`, "semantic.invalid_bearer_format",
+        "bearerFormat only applies to HTTP bearer schemes"));
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+      issues.push(issue(`/security_schemes/${name}`, "semantic.invalid_component_key",
+        "security scheme name cannot be used as an OpenAPI component key"));
+    }
+    for (const [index, id] of fact.evidence_ids.entries()) {
+      const evidence = snapshot.evidence.find((candidate) => candidate.evidence_id === id);
+      if (evidence === undefined) {
+        issues.push(issue(`/security_schemes/${name}/evidence_ids/${index}`,
+          "semantic.dangling_reference", "unknown security scheme evidence"));
+      } else if (evidence.scope.service_id !== snapshot.service.service_id
+        || evidence.scope.snapshot_id !== snapshot.snapshot_id || evidence.scope.endpoint_id !== undefined) {
+        issues.push(issue(`/security_schemes/${name}/evidence_ids/${index}`,
+          "semantic.scope_mismatch", "security scheme evidence must cover the service"));
+      }
+    }
+  }
 
   Object.entries(snapshot.schemas).forEach(([key, component]) => {
     if (key !== component.schema_id) issues.push(issue(`/schemas/${key}/schema_id`, "semantic.identity_mismatch", "schema key and ID differ"));
@@ -373,6 +440,8 @@ export const ContractSnapshotSchemaReferences = [
   JsonValueSchema,
   ApiSchemaSchema,
   SchemaComponentSchema,
+  SecuritySchemeDefinitionSchema,
+  SecuritySchemeFactSchema,
   ConditionSchema,
   PresenceFactSchema,
   EvidenceSchema,

@@ -8,6 +8,7 @@ export * from "./identity.js";
 export * from "./json-schema.js";
 export * from "./json-value.js";
 export * from "./snapshot.js";
+export * from "./security.js";
 export * from "./validation.js";
 export * from "./versions.js";
 export * from "./views.js";

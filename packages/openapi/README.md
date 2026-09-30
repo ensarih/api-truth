@@ -1,20 +1,27 @@
 # `@api-truth/openapi`
 
-D10 starts with a deterministic projection planner. `planOpenApiProjection`
-validates a D03 contract snapshot, groups endpoints by the method and path
-shape that would share one OpenAPI operation, and retains every endpoint ID.
-Placeholder spelling does not create a second operation. Distinct handlers
-selected by headers or media types produce a `variant_set` diagnostic rather
-than overwriting one another. Constrained or otherwise unsupported route
-syntax and unsupported HTTP methods remain explicitly unprojectable.
+`planOpenApiProjection` validates a D03 snapshot and groups endpoints by the
+method and path shape they would occupy in OpenAPI. It keeps all endpoint IDs;
+different handlers are never silently overwritten.
 
-This planner does **not** produce an OpenAPI document or declare any group
-exportable. Subsequent D10 slices must prove faithful representation of
-selectors and request/response relationships, handle schema/requiredness
-gaps, validate draft and strict documents, and publish immutable artifacts
-atomically. In particular, a `selected_single` group still needs selector
-compilation before export.
+`compileOpenApiSnapshot(snapshot, mode)` builds an OpenAPI 3.1 document in
+`draft` or `strict` mode. It emits only operations whose route, known response,
+parameter presence, body presence, and security can be represented. Draft mode
+returns explicit diagnostics for omitted operations or constraints. Strict mode
+returns no document when any diagnostic remains. Neither mode invents a server,
+response status, security rule, or required input.
 
-Run `npx vitest run tests/unit/openapi-projection.test.ts` from the repository
-root for focused tests. See the [backlog](../../docs/BACKLOG.md) for the
-remaining D10 gates.
+The compiler rewrites local schema references into OpenAPI components, keeps
+exact status codes, ranges, media types, and supported parameter serialization,
+and uses evidence-backed API-key and HTTP security definitions. Source-only or
+unqualified constraints stay out of normative schemas. An exact eligible,
+unconditional field-presence claim can promote a matching `required` property;
+otherwise the omission is diagnosed.
+
+The current compiler deliberately omits selector-dependent handlers and
+same-method/path variants. Faithful variant handling belongs to D10-S2;
+immutable publication and external OpenAPI validation belong to D10-S3/S4.
+
+Run `npx vitest run tests/unit/openapi-projection.test.ts
+tests/unit/openapi-compiler.test.ts` from the repository root for focused tests.
+See the [backlog](../../docs/BACKLOG.md) for the remaining gates.

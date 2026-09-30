@@ -11,6 +11,7 @@ import {
   JsonValueSchema,
   NormalizedProjectPathSchema,
   EndpointIdentitySchema,
+  SecuritySchemeDefinitionSchema,
   failure,
   issue,
   parserFor,
@@ -286,12 +287,18 @@ const ResponseProjectionSchema = Type.Object({
 }, { additionalProperties: false, minProperties: 1 });
 
 const SecurityProjectionSchema = Type.Object({
+  state: Type.Optional(Type.Union([
+    Type.Literal("unknown"),
+    Type.Literal("anonymous"),
+    Type.Literal("declared"),
+  ])),
   alternatives: Type.Array(Type.Object({
     requirements: Type.Array(Type.Object({
       scheme: NonEmptyString(),
       scopes: Type.Array(Type.String()),
     }, { additionalProperties: false }), { minItems: 1 }),
   }, { additionalProperties: false })),
+  scheme_definitions: Type.Optional(Type.Record(NonEmptyString(), Type.Ref(SecuritySchemeDefinitionSchema))),
 }, { additionalProperties: false });
 
 const EndpointProjectionSchema = Type.Object({
@@ -562,12 +569,12 @@ const validateAssignmentOrder = (
   }
 };
 
-const projectionReferences = [JsonValueSchema, ApiSchemaSchema, ConditionSchema, EndpointIdentitySchema];
+const projectionReferences = [JsonValueSchema, ApiSchemaSchema, ConditionSchema, EndpointIdentitySchema, SecuritySchemeDefinitionSchema];
 const parseEndpointProjection = safeParserFor(EndpointProjectionSchema, undefined, projectionReferences);
 const parseParameterProjection = safeParserFor(ParameterProjectionSchema, undefined, projectionReferences);
 const parseRequestBodyProjection = safeParserFor(RequestBodyProjectionSchema, undefined, projectionReferences);
 const parseResponseProjection = safeParserFor(ResponseProjectionSchema, undefined, projectionReferences);
-const parseSecurityProjection = safeParserFor(SecurityProjectionSchema);
+const parseSecurityProjection = safeParserFor(SecurityProjectionSchema, undefined, projectionReferences);
 const parseSchemaProjection = safeParserFor(SchemaProjectionSchema, undefined, projectionReferences);
 const parseClaimProjection = safeParserFor(ClaimProjectionSchema, undefined, [JsonValueSchema, ConditionSchema]);
 const parsePathParameterNamesProjection = safeParserFor(PathParameterNamesProjectionSchema);

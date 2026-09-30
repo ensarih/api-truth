@@ -1,10 +1,10 @@
 # API Truth — Architecture and Interface Design
 
-**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration through slice 6, and D09 environment resolution/lifecycle implemented. D10 projection planning has started; D11 remains design, 2026-09-30.
+**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration through slice 6, and D09 environment resolution/lifecycle implemented. D10 projection planning and evidence-gated single-operation compilation are implemented; D11 remains design, 2026-09-30.
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 
-Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). D08 durable event/job orchestration and exact reconciliation are implemented in [`packages/orchestration`](../packages/orchestration/README.md). D09's attempt/artifact ledger, ordered serving checkpoints, exact-scope repair, authorized environment views, deployment inbox, and repair worker are in [`packages/environment`](../packages/environment/README.md). D10's initial method/path projection planner is in [`packages/openapi`](../packages/openapi/README.md); OpenAPI compilation/publication and query transports remain Phase 1 deliverables.
+Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). D08 durable event/job orchestration and exact reconciliation are implemented in [`packages/orchestration`](../packages/orchestration/README.md). D09's attempt/artifact ledger, ordered serving checkpoints, exact-scope repair, authorized environment views, deployment inbox, and repair worker are in [`packages/environment`](../packages/environment/README.md). D10's method/path planner and evidence-gated single-operation compiler are in [`packages/openapi`](../packages/openapi/README.md); variant representation, publication, and query transports remain Phase 1 deliverables.
 
 ## 1. Components
 
@@ -87,11 +87,13 @@ Catalog identity and OpenAPI operation identity are different. Distinct, fully r
 
 Compiler fixtures must include compatible media-type aggregation and header-dependent variants that cannot be faithfully combined into one operation.
 
-The D10-S0 planner currently validates a snapshot and groups candidate
-operations by OpenAPI method and simple path shape. It reports variant sets,
-unsupported methods, and unrepresentable route syntax without emitting a
-document or asserting export eligibility. Later compiler slices must resolve
-those groups according to the rules above.
+The D10-S0 planner validates a snapshot and groups candidate operations by
+OpenAPI method and simple path shape. D10-S1 compiles only representable single
+operations, with diagnostics for incomplete coverage, weak evidence, unknown
+requiredness/security/status, unsupported serialization, invalid component
+keys, and conflicting templates. Strict compilation returns no document when
+any diagnostic remains. D10-S2 must resolve selector and variant groups under
+the rules above; D10-S3/S4 add publication and external validation.
 
 ### 2.4 Schemas and claims
 

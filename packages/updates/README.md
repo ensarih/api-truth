@@ -131,6 +131,12 @@ each value and verification partition attached to its condition, emits at most
 one record per owning claim tuple and difference kind, and uses sorted unique
 `ClaimConditionAssignment` arrays.
 
+Security comparisons include an endpoint's explicit `unknown`, `anonymous`, or
+`declared` state and the definitions of schemes it references. A state change
+or an edit to a referenced definition produces `security.changed`; an unused
+scheme definition does not change an endpoint. Evidence IDs stay out of the
+public difference projection.
+
 A target with incomplete coverage cannot prove deletion. Missing endpoints use
 `endpoint.absence_unconfirmed`; missing parameters, request bodies, responses,
 schemas, and claims use `fact.absence_unconfirmed`. Confirmed removal kinds are

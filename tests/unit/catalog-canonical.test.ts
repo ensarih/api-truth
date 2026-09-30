@@ -54,6 +54,27 @@ beforeAll(async () => {
 });
 
 describe("catalog canonical values", () => {
+  test("analyzer security definitions survive conversion into the stored snapshot", () => {
+    const result = structuredClone(partialResult);
+    result.evidence.push({ evidence_id: "ev-security", source: { kind: "source_code", source_id: "commerce" },
+      source_version: result.source.immutable_revision, location: { path: "src/auth.ts" },
+      method: "deterministic_analysis", scope: { service_id: "orders", snapshot_id: result.snapshot_id },
+      limitations: [], access_label: "orders-read" });
+    result.security_schemes = {
+      apiToken: { definition: { type: "apiKey", name: "X-Api-Token", in: "header" },
+        evidence_ids: ["ev-security"] },
+      tenant: { definition: { type: "http", scheme: "bearer" }, evidence_ids: ["ev-security"] },
+    };
+    for (const endpoint of result.endpoints) {
+      endpoint.security.state = "declared";
+      endpoint.security.evidence_ids = ["ev-security"];
+    }
+    result.endpoints[1]!.security.alternatives[0]!.requirements[1]!.scopes = [];
+    const converted = contractSnapshotFromAnalyzerResult(result, "sha256:config");
+    expect(converted.snapshot.security_schemes).toEqual(result.security_schemes);
+    expect(converted.snapshot.endpoints.map((endpoint) => endpoint.security.state))
+      .toEqual(["declared", "declared"]);
+  });
   test("sorts object keys recursively while preserving array order", () => {
     expect(sha256Canonical({ b: 2, nested: { d: 4, c: 3 }, a: 1 }))
       .toBe(sha256Canonical({ a: 1, nested: { c: 3, d: 4 }, b: 2 }));

@@ -10,6 +10,7 @@ import { EventSchema } from "./events.js";
 import { EndpointIdentitySchema } from "./identity.js";
 import { JsonValueSchema } from "./json-value.js";
 import { ContractSnapshotSchema } from "./snapshot.js";
+import { SecuritySchemeDefinitionSchema, SecuritySchemeFactSchema } from "./security.js";
 import { ViewSelectorSchema } from "./views.js";
 
 export const jsonSchemas = {
@@ -25,6 +26,8 @@ export const jsonSchemaCatalog: readonly TSchema[] = [
   JsonValueSchema,
   ApiSchemaSchema,
   SchemaComponentSchema,
+  SecuritySchemeDefinitionSchema,
+  SecuritySchemeFactSchema,
   ConditionSchema,
   PresenceFactSchema,
   EvidenceSchema,

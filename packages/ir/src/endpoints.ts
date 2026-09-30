@@ -45,6 +45,8 @@ export const EndpointSchema = Type.Object({
     headers: Type.Optional(Type.Array(Type.Object({ name: NonEmptyString(), schema: Type.Ref(ApiSchemaSchema) }, { additionalProperties: false }))),
   }, { additionalProperties: false }), { minItems: 1 }),
   security: Type.Object({
+    state: Type.Optional(Type.Union([Type.Literal("unknown"), Type.Literal("anonymous"), Type.Literal("declared")])),
+    evidence_ids: Type.Optional(Type.Array(NonEmptyString(), { minItems: 1, uniqueItems: true })),
     alternatives: Type.Array(Type.Object({
       requirements: Type.Array(Type.Object({
         scheme: NonEmptyString(), scopes: Type.Array(Type.String()),
