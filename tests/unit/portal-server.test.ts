@@ -1,13 +1,20 @@
 import { once } from "node:events";
 import { expect, test } from "vitest";
 import { createPortalServer } from "../../apps/portal/src/server.js";
+import type { QueryReader } from "../../packages/query/src/index.js";
+
+const detailMethods: Pick<QueryReader, "readContract" | "compareContracts" | "readPublication"> = {
+  readContract: async () => { throw new Error("not called"); },
+  compareContracts: async () => { throw new Error("not called"); },
+  readPublication: async () => { throw new Error("not called"); },
+};
 
 test("portal requires host authentication and searches only the trusted tenant", async () => {
   const searches: unknown[] = [];
   const server = createPortalServer({
     authenticate: async (request) => request.headers.authorization === "Bearer fixture"
       ? { tenantId: "tenant-a", principalId: "reader-a" } : undefined,
-    query: { searchServices: async (context, request) => {
+    query: { ...detailMethods, searchServices: async (context, request) => {
       searches.push({ context, request });
       return { services: [{ repositoryId: "commerce", serviceId: "orders",
         environment: { name: "uat", status: "unknown" as const } }], truncated: false };
@@ -54,7 +61,7 @@ test("portal exposes bounded result errors without database details", async () =
     { code: "QUERY_RESULT_LIMIT_EXCEEDED" });
   const server = createPortalServer({
     authenticate: async () => ({ tenantId: "tenant-a", principalId: "reader-a" }),
-    query: { searchServices: async () => { throw failure; } },
+    query: { ...detailMethods, searchServices: async () => { throw failure; } },
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
