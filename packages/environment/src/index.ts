@@ -11,3 +11,6 @@ export { createEnvironmentViewRepository } from "./views.js";
 export type { EnvironmentView, EnvironmentViewRepository } from "./views.js";
 export { createEnvironmentInboxWorker } from "./inbox.js";
 export type { EnvironmentInboxWorker, EnvironmentInboxOutcome } from "./inbox.js";
+export { createEnvironmentReconciliationWorker } from "./reconciliation-worker.js";
+export type { EnvironmentReconciliationScope, EnvironmentReconciliationPort,
+  EnvironmentReconciliationWorker, EnvironmentReconciliationOutcome } from "./reconciliation-worker.js";

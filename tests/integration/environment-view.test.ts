@@ -9,7 +9,8 @@ import type { AnalyzerRequest, AnalyzerResult } from "../../packages/ir/src/inde
 import { createAccessPolicyStore, createCatalogStore } from "../../packages/catalog/src/index.js";
 import { applyOrchestrationMigrations, createOrchestrationRepository }
   from "../../packages/orchestration/src/index.js";
-import { applyEnvironmentMigrations, createEnvironmentRepository, createEnvironmentViewRepository }
+import { applyEnvironmentMigrations, createEnvironmentInboxWorker, createEnvironmentReconciler,
+  createEnvironmentReconciliationWorker, createEnvironmentRepository, createEnvironmentViewRepository }
   from "../../packages/environment/src/index.js";
 import { createCatalogTestDatabase } from "./support/database.js";
 
@@ -191,5 +192,62 @@ test("a branch pointer with an analyzed snapshot does not establish an environme
     const observed = await view.getEnvironment({ tenantId: "tenant-a", principalId: "architect" }, key);
     expect(observed).toMatchObject({ deployment: "unknown", contract: "unavailable", active: [] });
     expect(observed).not.toHaveProperty("snapshotId");
+  } finally { await database.cleanup(); }
+});
+
+test("the local deployment lifecycle keeps a failed mixed rollout until authoritative rollback confirmation", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const access = createAccessPolicyStore(database.pool, { schema: database.schema });
+    for (const scopeId of ["engineering", "deployment", "contract-read"]) {
+      await access.putScope({ tenantId: "tenant-a" }, { scopeId, active: true });
+      await access.putGrant({ tenantId: "tenant-a" }, { principalId: "architect", scopeId, active: true });
+    }
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin, config);
+    await orchestration.activateInitialConfiguration(admin, { fingerprint: "config-a" });
+    const catalog = createCatalogStore(database.pool, { schema: database.schema });
+    await catalog.ingestAnalyzerResult({ tenantId: "tenant-a", result, configFingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const inbox = createEnvironmentInboxWorker(database.pool, { schema: database.schema }, environment);
+    const view = createEnvironmentViewRepository(database.pool, { schema: database.schema });
+    const reader = { tenantId: "tenant-a", principalId: "architect" };
+    const artA = { artifact_id: "artifact-a", revision: { state: "known", revision: revisionA } };
+    const artB = { artifact_id: "artifact-b", revision: { state: "known", revision: revisionB } };
+    const deployed = attempt("deploy-a", "artifact-a", revisionA, "1");
+    await orchestration.ingestEvent(context, { ...deployed,
+      payload: { ...deployed.payload, attempt_state: "succeeded" } });
+    await orchestration.ingestEvent(context, serving("serving-a", "1", [artA]));
+    await inbox.drain(worker);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed",
+      contract: "resolved", snapshotId: result.snapshot_id });
+
+    await orchestration.ingestEvent(context, attempt("deploy-b-failed", "artifact-b", revisionB, "2"));
+    await orchestration.ingestEvent(context, serving("mixed-rollout", "2", [artA, artB]));
+    await inbox.drain(worker);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "transitional",
+      contract: "ambiguous", latestAttempt: { deploymentId: "deploy-b-failed", state: "failed" } });
+
+    const rollback = attempt("rollback-request", "artifact-a", revisionA, "3");
+    await orchestration.ingestEvent(context, { ...rollback,
+      payload: { ...rollback.payload, attempt_state: "rollback_requested" } });
+    await inbox.drain(worker);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "transitional",
+      contract: "ambiguous", latestAttempt: { deploymentId: "rollback-request", state: "rollback_requested" } });
+
+    await orchestration.ingestEvent(context, serving("opaque-after-rollback", "cursor-3", [artA]));
+    await inbox.drain(worker);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "transitional",
+      reconciliationRequired: true });
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => serving("rollback-confirmed", "cursor-4", [artA]) },
+      workerIdentity: worker, eventContext: context });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "resolved" }]);
+    await inbox.drain(worker);
+    expect(await view.getEnvironment(reader, key)).toMatchObject({ deployment: "deployed",
+      contract: "resolved", snapshotId: result.snapshot_id, reconciliationRequired: false });
   } finally { await database.cleanup(); }
 });

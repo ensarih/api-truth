@@ -3,7 +3,7 @@ import { expect, test, vi } from "vitest";
 import { applyOrchestrationMigrations, createOrchestrationRepository }
   from "../../packages/orchestration/src/index.js";
 import { applyEnvironmentMigrations, createEnvironmentInboxWorker, createEnvironmentReconciler,
-  createEnvironmentRepository }
+  createEnvironmentReconciliationWorker, createEnvironmentRepository }
   from "../../packages/environment/src/index.js";
 import { EnvironmentError } from "../../packages/environment/src/errors.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
@@ -69,7 +69,8 @@ test("D09 migrations require D08 and replay without changing the ledger", async 
       `SELECT version FROM ${schema}.environment_schema_migrations ORDER BY version`,
     );
     expect(after.rows).toEqual([{ version: "0001_deployment_attempts" },
-      { version: "0002_serving_observations" }, { version: "0003_deployment_inbox" }]);
+      { version: "0002_serving_observations" }, { version: "0003_deployment_inbox" },
+      { version: "0004_reconciliation_tasks" }]);
     await database.pool.query(`UPDATE ${schema}.environment_schema_migrations SET checksum_sha256=$1`,
       [`sha256:${"0".repeat(64)}`]);
     await expect(applyEnvironmentMigrations(database.pool, { schema: database.schema }))
@@ -204,6 +205,150 @@ test("a transient inbox consumption failure is retried without duplicating the a
     expect((await database.pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${schema}.environment_deployment_attempts`,
     )).rows[0]?.count).toBe("1");
+  } finally { await database.cleanup(); }
+});
+
+test("the reconciliation worker repairs an opaque serving state from one exact provider scope", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const inbox = createEnvironmentInboxWorker(database.pool, { schema: database.schema }, environment);
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    await orchestration.ingestEvent(eventContext(), serving("opaque-inbox", "cursor-one", []));
+    await expect(inbox.drain(worker)).resolves.toMatchObject([{ eventId: "opaque-inbox", state: "delivered" }]);
+    const observed = vi.fn(async () => serving("provider-exact", "cursor-two", []));
+    const reconciler = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: observed }, workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, reconciler);
+    const runs = await Promise.all([scheduling.drain(worker), scheduling.drain(worker)]);
+    expect(runs.flat()).toMatchObject([{ scope, state: "resolved" }]);
+    expect(observed).toHaveBeenCalledExactlyOnceWith(scope);
+    await expect(scheduling.drain(worker)).resolves.toEqual([]);
+    await expect(inbox.drain(worker)).resolves.toMatchObject([{ eventId: "provider-exact", state: "delivered" }]);
+    const checkpoint = await database.pool.query<{ current_event_id: string; reconciliation_required: boolean }>(
+      `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "provider-exact", reconciliation_required: false }]);
+    const task = await database.pool.query<{ state: string; attempt_count: string }>(
+      `SELECT state,attempt_count::text FROM ${schema}.environment_reconciliation_tasks`,
+    );
+    expect(task.rows).toEqual([{ state: "resolved", attempt_count: "1" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("an incomplete provider result backs off, then a later exact result resolves the same scope", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const inbox = createEnvironmentInboxWorker(database.pool, { schema: database.schema }, environment);
+    await orchestration.ingestEvent(eventContext(), serving("opaque-start", "cursor-one", []));
+    await inbox.drain(worker);
+    let observations = 0;
+    const reconciler = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => {
+        observations += 1;
+        return observations === 1 ? serving("still-unknown", "cursor-two", [], {
+          completeness: "incomplete", serving_state: { status: "unknown", reason: "inventory unavailable" },
+        }) : serving("finally-known", "cursor-three", []);
+      } }, workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, reconciler);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "retry_wait" }]);
+    await expect(scheduling.drain(worker)).resolves.toEqual([]);
+    await database.pool.query(
+      `UPDATE ${schema}.environment_reconciliation_tasks
+       SET available_at=clock_timestamp()-interval '1 second'`,
+    );
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "resolved" }]);
+    expect(observations).toBe(2);
+    const checkpoint = await database.pool.query<{ current_event_id: string; reconciliation_required: boolean }>(
+      `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "finally-known", reconciliation_required: false }]);
+  } finally { await database.cleanup(); }
+});
+
+test("a transient provider failure retains a safe retry and later confirms the exact scope", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    await orchestration.ingestEvent(eventContext(), serving("provider-pending", "cursor-one", []));
+    await createEnvironmentInboxWorker(database.pool, { schema: database.schema }, environment).drain(worker);
+    let calls = 0;
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => serving("provider-success", "cursor-two", []) },
+      workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, {
+      reconcile: async (scope) => {
+        calls += 1;
+        if (calls === 1) throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR");
+        return exact.reconcile(scope);
+      },
+    });
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "retry_wait" }]);
+    const failed = await database.pool.query<{ state: string; safe_last_error_code: string }>(
+      `SELECT state,safe_last_error_code FROM ${schema}.environment_reconciliation_tasks`,
+    );
+    expect(failed.rows).toEqual([{ state: "retry_wait", safe_last_error_code: "ENVIRONMENT_STORAGE_ERROR" }]);
+    await expect(scheduling.drain(worker)).resolves.toEqual([]);
+    await database.pool.query(`UPDATE ${schema}.environment_reconciliation_tasks
+      SET available_at=clock_timestamp()-interval '1 second'`);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "resolved" }]);
+    expect(calls).toBe(2);
+  } finally { await database.cleanup(); }
+});
+
+test("configuration activation during provider observation cannot apply the old ticket", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.registerConfiguration(admin(), { ...configuration(), fingerprint: "config-b" });
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    await orchestration.ingestEvent(eventContext(), serving("old-pending", "cursor-one", []));
+    await createEnvironmentInboxWorker(database.pool, { schema: database.schema }, environment).drain(worker);
+    let calls = 0;
+    const exact = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => {
+        calls += 1;
+        if (calls === 1) await orchestration.activateConfigurationByCas(admin(), {
+          fingerprint: "config-b", expectedCheckpointVersion: "1",
+          providerEvidence: { provider: "control-plane", provider_reference: "activation-b" },
+        });
+        return serving(calls === 1 ? "stale-confirmation" : "fresh-confirmation", `cursor-${calls}`, []);
+      } }, workerIdentity: worker, eventContext: eventContext() });
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, { schema: database.schema }, exact);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "retry_wait" }]);
+    expect((await database.pool.query<{ current_event_id: string | null }>(
+      `SELECT current_event_id FROM ${schema}.environment_serving_checkpoints`,
+    )).rows).toEqual([{ current_event_id: null }]);
+    await database.pool.query(`UPDATE ${schema}.environment_reconciliation_tasks
+      SET available_at=clock_timestamp()-interval '1 second'`);
+    await expect(scheduling.drain(worker)).resolves.toMatchObject([{ state: "resolved" }]);
+    expect((await database.pool.query<{ current_event_id: string }>(
+      `SELECT current_event_id FROM ${schema}.environment_serving_checkpoints`,
+    )).rows).toEqual([{ current_event_id: "fresh-confirmation" }]);
   } finally { await database.cleanup(); }
 });
 
@@ -434,6 +579,8 @@ test("an incomplete exact response stays pending and a configuration change supe
       .resolves.toEqual({ outcome: "pending" });
     const next = await environment.getPendingServingReconciliation(worker, scope);
     expect(next).toMatchObject({ pendingEventId: "still-incomplete" });
+    await expect(environment.confirmServingReconciliation(worker, next, identity("still-incomplete")))
+      .resolves.toEqual({ outcome: "pending" });
     await orchestration.activateConfigurationByCas(admin(), { fingerprint: "config-b", expectedCheckpointVersion: "1",
       providerEvidence: { provider: "control-plane", provider_reference: "activation-b" } });
     await orchestration.ingestEvent(eventContext(), serving("post-config-confirmation", "cursor-c", []));

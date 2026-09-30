@@ -331,8 +331,8 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
           [ticket.tenantId],
         );
         const checkpoint = await client.query<{ version: string; pending_producer_id: string | null;
-          pending_event_id: string | null }>(
-          `SELECT version::text,pending_producer_id,pending_event_id
+          pending_event_id: string | null; current_producer_id: string | null; current_event_id: string | null }>(
+          `SELECT version::text,pending_producer_id,pending_event_id,current_producer_id,current_event_id
            FROM environment_serving_checkpoints
            WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND environment=$4 FOR UPDATE`, scope,
         );
@@ -350,7 +350,13 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
            WHERE tenant_id=$1 AND producer_id=$2 AND event_id=$3`,
           [identity.tenantId, identity.producerId, identity.eventId],
         );
-        if (prior.rows.length !== 0) throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR");
+        if (prior.rows.length !== 0) {
+          await client.query("COMMIT");
+          return Object.freeze({ outcome: checkpoint.rows[0]?.current_producer_id === identity.producerId
+            && checkpoint.rows[0]?.current_event_id === identity.eventId
+            && checkpoint.rows[0]?.pending_producer_id === identity.producerId
+            && checkpoint.rows[0]?.pending_event_id === identity.eventId ? "pending" : "superseded" });
+        }
         const complete = payload.completeness === "complete" && payload.serving_state.status === "known";
         await insertServingObservation(client, identity, row, payload,
           complete ? "applied" : "reconciliation_required");
