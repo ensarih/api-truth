@@ -17,7 +17,8 @@ reviewed, and validated; it does not imply that a later phase is complete.
 | D01–D07 | Complete | Synthetic constraints/fixtures, executable contracts, local test harness, bounded Express extraction, PostgreSQL catalog, and dependency-aware updates are committed. |
 | D08 | In progress: slices 0–6 of 0–7 complete | PR previews, exact branch/PR reconciliation, durable scheduler requests, and configuration-change races pass the slice 6 gate. Slice 7 remains. |
 | D09 | Complete: slices 0–4 | Deployment facts, serving checkpoints, exact-scope repair, authorized views, and the local lifecycle pass 320 offline and 181 PostgreSQL tests. Independent review findings on request races, removed scopes, migration cutover, and stale views are fixed. |
-| D10–D13 | Open | Phase 1 publication, access, reference workflow, and release gates remain. |
+| D10 | In progress: slice 0 complete | Validated method/path projection planning passes tests and independent review. OpenAPI compilation, variant representation, and atomic publication remain. |
+| D11–D13 | Open | Authorized access, reference workflow, and release gates remain. |
 | Phases 2–6 | Planned | Java/framework conformance, runtime evidence, semantic discovery, related documents, and operating readiness follow their roadmap gates. |
 
 The first working release requires the complete Phase 1 loop. D08 progress is
@@ -59,6 +60,16 @@ close a product flow.
 | D09-S2 | Complete | Persist ordered serving observations and exact-scope reconciliation. | Immutable observations and serialized checkpoints distinguish absence, mixed state, rollback, and unknown inventory. The explicit provider port queries one exact scope; D08 authenticates its response, and version/configuration CAS rejects stale confirmation. Opaque order can be resolved without inventing order. Unknown/incomplete inventory remains pending. 320 offline and 160 PostgreSQL tests pass; the competing-confirmation race passed three repeated runs. Automatic delivery remains D09-S4 work. |
 | D09-S3 | Complete | Bind observed revisions to D06 snapshots and expose authorized environment views. | A repeatable-read query checks active service/environment/source scopes and current snapshot grants, validates D06 snapshot integrity, and binds only exact tenant/repository/service/revision/configuration matches. Missing analysis remains pending; a branch pointer alone yields unknown deployment; UAT-only, confirmed absence, failed mixed rollout, revocation, tenant isolation, and configuration changes pass PostgreSQL tests. 320 offline and 163 PostgreSQL tests pass. |
 | D09-S4 | Complete | Local deployment lifecycle workflow, documentation, and final hardening. | The bounded inbox and reconciliation workers use leases and safe retries. A local event-to-view test covers UAT deployment, failed mixed rollout, rollback request, and exact rollback confirmation. Configured environments with no checkpoint are discovered, superseded configurations trigger rechecks, and a configurable periodic exact check repairs a missed event without a code rescan. D08 environment-specific requests schedule immediate repair; older queued events cannot erase them, concurrent requests escape stale backoff, and scopes removed before a claim are retired. Migration cutover preserves concurrent requests. Pending repair withholds a previously resolved snapshot or confirmed absence. Independent review findings are fixed; 320 offline and 181 PostgreSQL tests pass. |
+
+### D10 slices
+
+| ID | Status | Work | Acceptance gate |
+|---|---|---|---|
+| D10-S0 | Complete | Validate a D03 snapshot and group candidate OpenAPI operations by projected method/path shape. | Deterministic groups retain every endpoint ID, including distinct selector variants and alternate placeholder names. Unsupported methods and route syntax receive diagnostics; no group is claimed exportable. Independent review findings are addressed; 325 offline tests pass. |
+| D10-S1 | Open | Compile one representable operation, schemas, parameters, bodies, responses, security, and evidence gaps. | No invented response/status/security/server; unknown requiredness and unverified constraints remain non-normative. Draft diagnostics are explicit; strict export rejects material gaps. |
+| D10-S2 | Open | Faithful variant aggregation or explicitly scoped export. | Compatible media-type variants preserve request/response relationships. Header-dependent or incompatible variants cannot overwrite each other or broaden the accepted combinations. |
+| D10-S3 | Open | Immutable validated artifacts and atomic publication manifests. | Branch/revision/environment selectors pin exact snapshot/configuration; failed compilation or publication preserves the prior valid manifest. |
+| D10-S4 | Open | Local compiler/publication round trip and documentation. | Draft/strict, reference/schema validation, deterministic bytes, rollback on failure, and recovery tests pass using public synthetic fixtures. |
 
 ## Later phases and analyzer coverage
 
