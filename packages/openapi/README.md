@@ -18,9 +18,15 @@ unqualified constraints stay out of normative schemas. An exact eligible,
 unconditional field-presence claim can promote a matching `required` property;
 otherwise the omission is diagnosed.
 
-The current compiler deliberately omits selector-dependent handlers and
-same-method/path variants. Faithful variant handling belongs to D10-S2;
-immutable publication and external OpenAPI validation belong to D10-S3/S4.
+The compiler represents a `consumes` selector only when its concrete media
+types exactly match required request-body media. It can combine handlers that
+use disjoint concrete media types when their path, parameters, responses, and
+security agree. Each media type keeps its own request schema. Header, query,
+and `produces` selectors, overlapping media, and variants with different
+responses or other contracts are diagnosed and omitted rather than flattened
+into a broader operation. Explicit variant-scoped exports are not yet
+supported. Immutable publication and external OpenAPI validation belong to
+D10-S3/S4.
 
 Run `npx vitest run tests/unit/openapi-projection.test.ts
 tests/unit/openapi-compiler.test.ts` from the repository root for focused tests.

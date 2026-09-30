@@ -132,7 +132,8 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
   };
 
   if (snapshot.coverage.status === "incomplete") add("INCOMPLETE_COVERAGE", "/coverage");
-  plan.diagnostics.forEach((item) => add(item.code, "/endpoints", item.endpointIds));
+  plan.diagnostics.filter((item) => item.code !== "VARIANT_REQUIRES_REPRESENTATION")
+    .forEach((item) => add(item.code, "/endpoints", item.endpointIds));
   const reachableSchemas = (endpoint: Endpoint): Set<string> => {
     const names = new Set<string>();
     refs(endpoint.parameters, names); refs(endpoint.request_bodies, names); refs(endpoint.responses, names);
@@ -147,7 +148,15 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
   };
   const shapePaths = new Map<string, Set<string>>();
   for (const group of plan.groups) {
-    if (group.kind !== "single") continue;
+    if (group.kind === "variant_set") {
+      for (const id of group.endpointIds) {
+        const endpoint = snapshot.endpoints.find((item) => item.endpoint_id === id)!;
+        const paths = shapePaths.get(group.pathShape) ?? new Set<string>();
+        paths.add(openApiPath(endpoint.application_path).path);
+        shapePaths.set(group.pathShape, paths);
+      }
+      continue;
+    }
     const endpoint = snapshot.endpoints.find((item) => item.endpoint_id === group.endpointIds[0])!;
     const paths = shapePaths.get(group.pathShape) ?? new Set<string>();
     paths.add(openApiPath(endpoint.application_path).path);
@@ -156,30 +165,26 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
   const paths: Record<string, Record<string, unknown>> = {};
   const usedSecurity = new Set<string>();
   const usedSchemas = new Set<string>();
-  for (const group of plan.groups) {
-    if (group.kind !== "single") {
-      add(group.kind === "variant_set" ? "VARIANT_REQUIRES_REPRESENTATION" : "SELECTOR_REQUIRES_REPRESENTATION",
-        "/endpoints", group.endpointIds);
-      continue;
-    }
-    const endpoint = snapshot.endpoints.find((item) => item.endpoint_id === group.endpointIds[0])!;
+  type Compiled = { endpoint: Endpoint; operation: Record<string, unknown>; renderedPath: string;
+    schemas: Set<string>; security: Set<string> };
+  const compileEndpoint = (endpoint: Endpoint): Compiled | undefined => {
     const endpointPath = `/endpoints/${pointer(endpoint.endpoint_id)}`;
     const rendered = openApiPath(endpoint.application_path);
-    if ((shapePaths.get(group.pathShape)?.size ?? 0) > 1) {
+    if ((shapePaths.get(endpoint.identity.normalized_path_shape)?.size ?? 0) > 1) {
       add("CONFLICTING_PATH_PARAMETER_NAMES", `${endpointPath}/application_path`, [endpoint.endpoint_id]);
-      continue;
+      return undefined;
     }
     const endpointSchemas = reachableSchemas(endpoint);
     if ([...endpointSchemas].some((name) => !componentKey.test(name))) {
       for (const name of [...endpointSchemas].filter((item) => !componentKey.test(item)).sort(ascii))
         add("INVALID_SCHEMA_COMPONENT_KEY", `/schemas/${pointer(name)}`, [endpoint.endpoint_id]);
-      continue;
+      return undefined;
     }
     const pathParameters = endpoint.parameters.filter((item) => item.in === "path");
     if (rendered.names.some((name) => !pathParameters.some((item) => item.name === name && item.presence.state === "required"))
       || pathParameters.some((item) => !rendered.names.includes(item.name) || item.presence.state !== "required")) {
       add("UNREPRESENTABLE_PATH_PARAMETER", `${endpointPath}/parameters`, [endpoint.endpoint_id]);
-      continue;
+      return undefined;
     }
     const operation: Record<string, unknown> = {};
     let skipOperation = false;
@@ -247,7 +252,7 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
         `${endpointPath}/request_bodies/${pointer(item.media_type)}/schema`, [endpoint.endpoint_id]) };
       if (item.serialization.content_encoding !== undefined || item.serialization.style !== undefined
         || item.serialization.explode !== undefined
-        || item.serialization.format !== undefined && !(item.serialization.format === "json" && item.media_type === "application/json"))
+        || item.serialization.format !== undefined && !(item.serialization.format === "json" && (item.media_type === "application/json" || item.media_type.endsWith("+json"))))
         add("UNREPRESENTABLE_SERIALIZATION",
         `${endpointPath}/request_bodies/${pointer(item.media_type)}/serialization`, [endpoint.endpoint_id]);
     }
@@ -273,7 +278,7 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
           content[item.media_type] = { schema: exportSchema(item.schema, `${itemPath}/schema`, [endpoint.endpoint_id]) };
           if (item.serialization.content_encoding !== undefined || item.serialization.style !== undefined
             || item.serialization.explode !== undefined
-            || item.serialization.format !== undefined && !(item.serialization.format === "json" && item.media_type === "application/json"))
+            || item.serialization.format !== undefined && !(item.serialization.format === "json" && (item.media_type === "application/json" || item.media_type.endsWith("+json"))))
             add("UNREPRESENTABLE_SERIALIZATION", `${itemPath}/serialization`, [endpoint.endpoint_id]);
         }
         exported.content = content;
@@ -291,7 +296,7 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
       }
       responses[status] = exported;
     }
-    if (Object.keys(responses).length === 0) { add("NO_KNOWN_RESPONSE", `${endpointPath}/responses`, [endpoint.endpoint_id]); continue; }
+    if (Object.keys(responses).length === 0) { add("NO_KNOWN_RESPONSE", `${endpointPath}/responses`, [endpoint.endpoint_id]); return undefined; }
     if (!hasQualifyingEvidence(endpoint.evidence_ids, endpoint.endpoint_id, true)) {
       add("UNVERIFIED_RESPONSE", `${endpointPath}/responses`, [endpoint.endpoint_id]);
       skipOperation = true;
@@ -307,11 +312,96 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
         Object.fromEntries(sorted(alternative.requirements, (item) => item.scheme)
           .map((item) => [item.scheme, [...item.scopes].sort(ascii)]))).sort((a, b) => ascii(JSON.stringify(a), JSON.stringify(b)));
     } else { add("UNKNOWN_SECURITY", `${endpointPath}/security`, [endpoint.endpoint_id]); skipOperation = true; }
-    if (!skipOperation) {
-      (paths[rendered.path] ??= {})[endpoint.identity.method.toLowerCase()] = operation;
-      endpointSchemas.forEach((name) => usedSchemas.add(name));
-      if (security.state === "declared") security.alternatives.flatMap((alternative) => alternative.requirements)
-        .forEach((requirement) => usedSecurity.add(requirement.scheme));
+    if (skipOperation) return undefined;
+    const securityNames = new Set<string>();
+    if (security.state === "declared") security.alternatives.flatMap((alternative) => alternative.requirements)
+      .forEach((requirement) => securityNames.add(requirement.scheme));
+    return { endpoint, operation, renderedPath: rendered.path, schemas: endpointSchemas, security: securityNames };
+  };
+  const exactConsumes = (endpoint: Endpoint): string[] | undefined => {
+    const selectors = endpoint.identity.selectors;
+    if ((selectors.headers?.length ?? 0) > 0 || (selectors.query?.length ?? 0) > 0
+      || (selectors.produces?.length ?? 0) > 0) return undefined;
+    const consumes = selectors.consumes ?? [];
+    const body = endpoint.request_bodies.map((item) => item.media_type);
+    const concreteMediaType = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
+    if (consumes.length === 0 || body.length === 0 || new Set(consumes).size !== consumes.length
+      || body.some((media) => !concreteMediaType.test(media))
+      || consumes.some((media) => !concreteMediaType.test(media))
+      || consumes.length !== body.length || [...consumes].sort(ascii).some((media, index) => media !== [...body].sort(ascii)[index])
+      || endpoint.request_bodies.some((item) => item.presence.state !== "required")) return undefined;
+    return [...consumes].sort(ascii);
+  };
+  const canonical = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(sorted(Object.entries(item), (entry) => entry[0])) : item);
+  const groupSchemasReady = (items: readonly Compiled[]): boolean => {
+    const names = new Set(items.flatMap((item) => [...item.schemas]));
+    const before = diagnostics.length;
+    for (const name of [...names].sort(ascii)) {
+      const users = [...(schemaUsers.get(name) ?? [])].sort(ascii);
+      if (!hasQualifyingEvidence(snapshot.schemas[name]!.evidence_ids, users.length === 1 ? users[0] : undefined))
+        add("UNVERIFIED_SCHEMA", `/schemas/${pointer(name)}`, users);
+      exportSchema(snapshot.schemas[name]!.schema, `/schemas/${pointer(name)}/schema`, users);
+    }
+    return diagnostics.length === before;
+  };
+  const emit = (compiled: Compiled) => {
+    (paths[compiled.renderedPath] ??= {})[compiled.endpoint.identity.method.toLowerCase()] = compiled.operation;
+    compiled.schemas.forEach((name) => usedSchemas.add(name));
+    compiled.security.forEach((name) => usedSecurity.add(name));
+  };
+  for (const group of plan.groups) {
+    const endpoints = group.endpointIds.map((id) => snapshot.endpoints.find((item) => item.endpoint_id === id)!);
+    const ids = group.endpointIds;
+    const initialDiagnostics = diagnostics.length;
+    const compiled = endpoints.map((endpoint) => compileEndpoint(endpoint));
+    if (group.kind === "single") { if (compiled[0]) emit(compiled[0]); continue; }
+    if (group.kind === "selected_single") {
+      if (exactConsumes(endpoints[0]!) === undefined) {
+        add((endpoints[0]!.identity.selectors.consumes?.length ?? 0) > 0
+          && Object.keys(endpoints[0]!.identity.selectors).every((key) => key === "consumes")
+          ? "SELECTOR_CONSUMES_MISMATCH" : "SELECTOR_REQUIRES_REPRESENTATION", "/endpoints", ids);
+      } else if (compiled[0] && diagnostics.length === initialDiagnostics && groupSchemasReady([compiled[0]])) emit(compiled[0]);
+      else add("SELECTOR_REQUIRES_REPRESENTATION", "/endpoints", ids);
+      continue;
+    }
+    if (endpoints.some((endpoint) => exactConsumes(endpoint) === undefined)) {
+      add("SELECTOR_REQUIRES_REPRESENTATION", "/endpoints", ids);
+      continue;
+    }
+    if (compiled.some((item) => item === undefined) || diagnostics.length !== initialDiagnostics) {
+      add("UNVERIFIED_VARIANT_CONTRACT", "/endpoints", ids);
+      continue;
+    }
+    const media = endpoints.flatMap((endpoint) => exactConsumes(endpoint)!);
+    if (new Set(media).size !== media.length) {
+      add("OVERLAPPING_VARIANT_MEDIA_TYPE", "/endpoints", ids);
+      continue;
+    }
+    if (!groupSchemasReady(compiled as Compiled[])) {
+      add("UNVERIFIED_VARIANT_CONTRACT", "/endpoints", ids);
+      continue;
+    }
+    const first = compiled[0]!;
+    const contract = (item: Compiled) => JSON.stringify({ path: item.renderedPath,
+      parameters: item.operation.parameters ?? [], responses: item.operation.responses,
+      security: item.operation.security,
+      responseFacts: item.endpoint.responses.map((response) => canonical({ ...response,
+        content: sorted(response.content, (content) => content.media_type),
+        headers: response.headers && sorted(response.headers, (header) => header.name.toLowerCase()) })).sort(ascii) });
+    if (compiled.some((item) => contract(item!) !== contract(first))) {
+      add("INCOMPATIBLE_VARIANT_CONTRACT", "/endpoints", ids);
+      continue;
+    }
+    const content: Record<string, unknown> = {};
+    for (const item of compiled) Object.assign(content, (item!.operation.requestBody as { content: Record<string, unknown> }).content);
+    first.operation.requestBody = { required: true,
+      content: Object.fromEntries(sorted(Object.entries(content), (entry) => entry[0])) };
+    emit(first);
+    for (const item of compiled.slice(1)) {
+      item!.schemas.forEach((name) => usedSchemas.add(name));
+      item!.security.forEach((name) => usedSecurity.add(name));
     }
   }
   const schemas = Object.fromEntries(sorted(Object.entries(snapshot.schemas).filter(([name]) => usedSchemas.has(name)), (entry) => entry[0]).map(([name, fact]) =>

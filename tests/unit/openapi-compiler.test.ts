@@ -263,3 +263,162 @@ test("input must pass IR validation", () => {
   expect(() => compileOpenApiSnapshot({ endpoints: [] }, "draft")).toThrow("Invalid contract snapshot");
   expect(() => compileOpenApiSnapshot({}, "other" as any)).toThrow("Invalid OpenAPI compile mode");
 });
+
+const variantSnapshot = async () => {
+  const snapshot = await exportableGet();
+  const base = snapshot.endpoints[0];
+  base.endpoint_id = "ep-json";
+  base.application_path = "/api/orders";
+  base.parameters = [];
+  base.request_bodies = [{ media_type: "application/json", schema: { type: "string" },
+    serialization: { format: "json" }, presence: { state: "required", evidence_ids: ["ev-json"] } }];
+  base.identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: base.application_path, selectors: { consumes: ["application/json"] } });
+  base.evidence_ids = ["ev-json"];
+  base.security.evidence_ids = ["ev-json"];
+  snapshot.evidence.push({ ...snapshot.evidence.find((item: any) => item.evidence_id === "ev-proof"),
+    evidence_id: "ev-json", scope: { service_id: "orders", snapshot_id: snapshot.snapshot_id,
+      endpoint_id: "ep-json" } });
+  const vnd = structuredClone(base);
+  vnd.endpoint_id = "ep-vnd";
+  vnd.identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: vnd.application_path, selectors: { consumes: ["application/vnd.api+json"] } });
+  vnd.request_bodies = [{ media_type: "application/vnd.api+json", schema: { type: "object" },
+    serialization: { format: "json" }, presence: { state: "required", evidence_ids: ["ev-vnd"] } }];
+  vnd.evidence_ids = ["ev-vnd"];
+  vnd.security.evidence_ids = ["ev-vnd"];
+  snapshot.evidence.push({ ...snapshot.evidence.find((item: any) => item.evidence_id === "ev-json"),
+    evidence_id: "ev-vnd", scope: { service_id: "orders", snapshot_id: snapshot.snapshot_id,
+      endpoint_id: "ep-vnd" } });
+  snapshot.endpoints.push(vnd);
+  snapshot.evidence = snapshot.evidence.filter((item: any) => item.scope.endpoint_id !== "ep-get");
+  const parsed = parseContractSnapshot(snapshot);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.error.issues));
+  return snapshot;
+};
+
+test("disjoint consumes variants preserve media schemas and requiredness in any input order", async () => {
+  const snapshot = await variantSnapshot();
+  const first = compileOpenApiSnapshot(snapshot, "strict");
+  expect(first.ok).toBe(true);
+  expect((first.document as any).paths["/api/orders"].post.requestBody).toEqual({ required: true,
+    content: { "application/json": { schema: { type: "string" } },
+      "application/vnd.api+json": { schema: { type: "object" } } } });
+  snapshot.endpoints.reverse();
+  expect(compileOpenApiSnapshot(snapshot, "strict")).toEqual(first);
+});
+
+test("selected single accepts only an exact consumes match", async () => {
+  const snapshot = await variantSnapshot();
+  snapshot.endpoints.pop();
+  snapshot.evidence = snapshot.evidence.filter((item: any) => item.scope.endpoint_id !== "ep-vnd");
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(true);
+  snapshot.endpoints[0].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders", selectors: { consumes: ["application/vnd.api+json"] } });
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "SELECTOR_CONSUMES_MISMATCH",
+    endpointIds: ["ep-json"] }));
+});
+
+test("variant groups reject differing responses, header selectors, and overlapping media", async () => {
+  const snapshot = await variantSnapshot();
+  snapshot.endpoints[1].responses[0].content[0].schema = { type: "number" };
+  let result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "INCOMPATIBLE_VARIANT_CONTRACT",
+    endpointIds: ["ep-json", "ep-vnd"] }));
+  snapshot.endpoints[1].responses[0].content[0].schema = { type: "string" };
+  snapshot.endpoints[1].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders", selectors: { consumes: ["application/vnd.api+json"],
+      headers: [{ name: "x-mode", operator: "equals", value: "vnd" }] } });
+  result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "SELECTOR_REQUIRES_REPRESENTATION",
+    endpointIds: ["ep-json", "ep-vnd"] }));
+  snapshot.endpoints[1].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders", selectors: { consumes: ["application/json", "application/vnd.api+json"] } });
+  snapshot.endpoints[1].request_bodies.push({ ...structuredClone(snapshot.endpoints[1].request_bodies[0]), media_type: "application/json" });
+  result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "OVERLAPPING_VARIANT_MEDIA_TYPE",
+    endpointIds: ["ep-json", "ep-vnd"] }));
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+});
+
+
+test("optional body and weak evidence omit an entire variant group", async () => {
+  const snapshot = await variantSnapshot();
+  snapshot.endpoints[1].request_bodies[0].presence.state = "optional";
+  let result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "SELECTOR_REQUIRES_REPRESENTATION",
+    endpointIds: ["ep-json", "ep-vnd"] }));
+  snapshot.endpoints[1].request_bodies[0].presence.state = "required";
+  snapshot.endpoints[1].request_bodies[0].presence.evidence_ids = ["ev-type"];
+  result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "UNVERIFIED_VARIANT_CONTRACT",
+    endpointIds: ["ep-json", "ep-vnd"] }));
+});
+
+test("selected consumes rejects wildcard media and header-dependent routing", async () => {
+  const snapshot = await variantSnapshot();
+  snapshot.endpoints.pop();
+  snapshot.evidence = snapshot.evidence.filter((item: any) => item.scope.endpoint_id !== "ep-vnd");
+  snapshot.endpoints[0].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders", selectors: { consumes: ["*/*"] } });
+  snapshot.endpoints[0].request_bodies[0].media_type = "*/*";
+  let result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  snapshot.endpoints[0].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders", selectors: { consumes: ["application/json"],
+      headers: [{ name: "x-mode", operator: "present" }] } });
+  snapshot.endpoints[0].request_bodies[0].media_type = "application/json";
+  result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "SELECTOR_REQUIRES_REPRESENTATION",
+    endpointIds: ["ep-json"] }));
+});
+
+test("variant aggregation rejects parameterized and malformed media", async () => {
+  const snapshot = await variantSnapshot();
+  snapshot.endpoints[1].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders",
+    selectors: { consumes: ["application/json; charset=utf-8"] } });
+  snapshot.endpoints[1].request_bodies[0].media_type = "application/json; charset=utf-8";
+  let result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({
+    code: "SELECTOR_REQUIRES_REPRESENTATION", endpointIds: ["ep-json", "ep-vnd"],
+  }));
+
+  snapshot.endpoints[1].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders", selectors: { consumes: ["application//json"] } });
+  snapshot.endpoints[1].request_bodies[0].media_type = "application//json";
+  result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+});
+
+
+test("placeholder names must agree across a consumes variant group", async () => {
+  const snapshot = await variantSnapshot();
+  for (const [index, endpoint] of snapshot.endpoints.entries()) {
+    const name = index === 0 ? "orderId" : "id";
+    endpoint.application_path = `/api/orders/:${name}`;
+    endpoint.identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+      method: "POST", application_path: endpoint.application_path,
+      selectors: { consumes: endpoint.identity.selectors.consumes } });
+    endpoint.parameters = [{ name, in: "path", schema: { type: "string" },
+      serialization: { style: "simple", explode: false },
+      presence: { state: "required", evidence_ids: [index === 0 ? "ev-json" : "ev-vnd"] } }];
+  }
+  const parsed = parseContractSnapshot(snapshot);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.error.issues));
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "UNVERIFIED_VARIANT_CONTRACT",
+    endpointIds: ["ep-json", "ep-vnd"] }));
+  expect(result.diagnostics.filter((item) => item.code === "CONFLICTING_PATH_PARAMETER_NAMES")).toHaveLength(2);
+});
