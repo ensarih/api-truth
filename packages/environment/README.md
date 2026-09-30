@@ -1,6 +1,6 @@
 # `@api-truth/environment`
 
-Private D09 environment-resolution core and durable attempt ledger. The pure
+Private D09 environment-resolution core and durable deployment ledger. The pure
 projection consumes facts already authenticated and scoped to one tenant,
 service, and environment. The repository consumes only D08 events that have
 already passed its producer and deployment-authority checks. It does not yet
@@ -30,9 +30,22 @@ durable if consumption has not happened yet, so a host can replay it after a
 crash. Automatic delivery from the D08 outbox is a later integration slice;
 no active serving revision is inferred from an attempt.
 
+`classifyServingObservation` compares the authoritative source and canonical
+effective order, independently of event arrival time. `recordServingObservation`
+persists immutable observations and advances one serialized checkpoint per
+tenant/repository/service/environment. Old observations do not replace current
+state. Opaque or conflicting order retains the current observation and records
+a pending exact-scope reconciliation requirement. An observation from an old
+installation configuration cannot become current. Unknown or incomplete
+inventories remain current evidence but keep reconciliation pending until a
+newer complete observation establishes the serving set. Unknown revision
+reasons are omitted from D09's safe inventory. The exact provider reconciler
+and automatic request delivery
+remain open work; a pending flag is not evidence that reconciliation ran.
+
 From the repository root, run `npm run test:environment` for the focused offline
 suite. Start the fixed local PostgreSQL test service with `npm run test:env:up`,
 run `npm run test:environment:integration`, then stop it with
 `npm run test:env:down`. `npm run check` covers all offline suites. Provider
-observation ordering/reconciliation, serving-state storage, and authorized
-environment queries are later D09 slices in the [backlog](../../docs/BACKLOG.md).
+exact provider reconciliation, automatic delivery, and authorized environment
+queries are later D09 slices in the [backlog](../../docs/BACKLOG.md).

@@ -2,7 +2,7 @@
 
 **Version:** 0.1 draft  
 **Date:** 2026-09-30
-**Implementation status:** D01–D07, D08 slices 0–6, and D09 projection/attempt ledger implemented; the Phase 1 product gate remains open
+**Implementation status:** D01–D07, D08 slices 0–6, and D09 projection/attempt/ordered-observation ledger implemented; the Phase 1 product gate remains open
 **Related documents:** [architecture](ARCHITECTURE.md), [project plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md)
 
 This document defines the intended product. “Must” denotes a release requirement for the phase assigned in the roadmap. “Should” denotes a preference that may change with evidence. Requirements are not claims about implemented functionality.
