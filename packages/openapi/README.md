@@ -27,15 +27,24 @@ responses or other contracts are diagnosed and omitted rather than flattened
 into a broader operation. Explicit variant-scoped exports are not yet
 supported.
 
-`prepareOpenApiPublication` is the pure first step of D10-S3. It checks an
+`prepareOpenApiPublication` checks an
 explicit revision, branch-pointer, or environment-checkpoint assertion against
 the exact snapshot; a resolved environment assertion must name one snapshot.
 It adds snapshot/source/config provenance inside the OpenAPI document, returns
 canonical UTF-8 bytes and their SHA-256 digest, and marks only diagnostic-free
 strict results publishable. Branch and environment pins are assertions: a
 database publisher must recheck current authoritative state inside the
-transaction that switches a publication pointer. Durable storage, atomic
-promotion, and external OpenAPI validation remain D10-S3/S4 work.
+transaction that switches a publication pointer.
+
+`applyOpenApiMigrations(pool, { schema })` creates tenant-scoped immutable
+artifact and publication tables plus versioned current pointers in the same
+PostgreSQL schema as the catalog. `createOpenApiPublicationStore(pool,
+{ schema })` currently supports revision selectors through `prepareRevision`,
+`publish`, `readCurrent`, and `readPublication`. Publication rechecks the
+snapshot, access grants, canonical bytes, and expected pointer version inside
+one transaction. A replay of the current publication is idempotent. Reads
+recheck grants and content integrity. Branch/environment authority checks and
+external OpenAPI validation remain D10-S3/S4 work.
 
 Run `npx vitest run tests/unit/openapi-projection.test.ts
 tests/unit/openapi-compiler.test.ts tests/unit/openapi-preparation.test.ts` from

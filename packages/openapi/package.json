@@ -7,6 +7,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@api-truth/ir": "0.0.0"
+    "@api-truth/ir": "0.0.0",
+    "@api-truth/catalog": "0.0.0",
+    "pg": "8.23.0"
   }
 }

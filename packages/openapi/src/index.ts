@@ -1,6 +1,8 @@
 import { parseContractSnapshot, type ContractSnapshot, type Endpoint } from "@api-truth/ir";
 export * from "./compiler.js";
 export * from "./preparation.js";
+export * from "./migrations.js";
+export * from "./storage.js";
 
 export type OpenApiProjectionDiagnostic = Readonly<{
   code: "UNREPRESENTABLE_ROUTE" | "UNSUPPORTED_METHOD" | "VARIANT_REQUIRES_REPRESENTATION";
