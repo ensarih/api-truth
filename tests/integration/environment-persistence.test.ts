@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 
 import { applyOrchestrationMigrations, createOrchestrationRepository }
   from "../../packages/orchestration/src/index.js";
-import { applyEnvironmentMigrations, createEnvironmentRepository }
+import { applyEnvironmentMigrations, createEnvironmentReconciler, createEnvironmentRepository }
   from "../../packages/environment/src/index.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 
@@ -181,6 +181,165 @@ test("an initial opaque observation stays pending until exact ordered evidence a
       `SELECT current_event_id,pending_event_id FROM ${schema}.environment_serving_checkpoints`,
     );
     expect(applied.rows).toEqual([{ current_event_id: "exact-next", pending_event_id: null }]);
+  } finally { await database.cleanup(); }
+});
+
+test("exact reconciliation confirms an opaque provider inventory without treating its cursor as an order", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    const identity = (eventId: string) => ({ tenantId: "tenant-a", producerId: "deploy", eventId });
+    const artA = { artifact_id: "artifact-a", revision: { state: "known" as const, revision: revisionA } };
+    await orchestration.ingestEvent(eventContext(), serving("opaque-pending", "cursor-old", [artA]));
+    await environment.recordServingObservation(worker, identity("opaque-pending"));
+    const ticket = await environment.getPendingServingReconciliation(worker, scope);
+    expect(ticket).toMatchObject({ ...scope, pendingEventId: "opaque-pending", configFingerprint: "config-a" });
+    await orchestration.ingestEvent(eventContext(), serving("exact-confirmation", "cursor-new", []));
+    await expect(environment.confirmServingReconciliation(worker, ticket, identity("exact-confirmation")))
+      .resolves.toEqual({ outcome: "applied" });
+    await expect(environment.confirmServingReconciliation(worker, ticket, identity("exact-confirmation")))
+      .resolves.toEqual({ outcome: "superseded" });
+    const checkpoint = await database.pool.query<{ current_event_id: string; pending_event_id: string | null;
+      reconciliation_required: boolean }>(
+      `SELECT current_event_id,pending_event_id,reconciliation_required
+       FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "exact-confirmation", pending_event_id: null,
+      reconciliation_required: false }]);
+  } finally { await database.cleanup(); }
+});
+
+test("exact reconciliation rejects a stale ticket after a newer observation and keeps the original checkpoint", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    const identity = (eventId: string) => ({ tenantId: "tenant-a", producerId: "deploy", eventId });
+    const artA = { artifact_id: "artifact-a", revision: { state: "known" as const, revision: revisionA } };
+    await orchestration.ingestEvent(eventContext(), serving("opaque-pending", "cursor-old", [artA]));
+    await environment.recordServingObservation(worker, identity("opaque-pending"));
+    const ticket = await environment.getPendingServingReconciliation(worker, scope);
+    await orchestration.ingestEvent(eventContext(), serving("newer-current", "7", [artA]));
+    await environment.recordServingObservation(worker, identity("newer-current"));
+    await orchestration.ingestEvent(eventContext(), serving("late-confirmation", "cursor-late", []));
+    await expect(environment.confirmServingReconciliation(worker, ticket, identity("late-confirmation")))
+      .resolves.toEqual({ outcome: "superseded" });
+    const checkpoint = await database.pool.query<{ current_event_id: string; pending_event_id: string | null }>(
+      `SELECT current_event_id,pending_event_id FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "newer-current", pending_event_id: null }]);
+  } finally { await database.cleanup(); }
+});
+
+test("the provider reconciler queries one exact scope and rejects an unrelated response before ingestion", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    const identity = (eventId: string) => ({ tenantId: "tenant-a", producerId: "deploy", eventId });
+    await orchestration.ingestEvent(eventContext(), serving("opaque-for-provider", "cursor-old", []));
+    await environment.recordServingObservation(worker, identity("opaque-for-provider"));
+    const observed = vi.fn(async () => serving("provider-confirmed", "cursor-new", []));
+    const reconciler = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: observed }, workerIdentity: worker, eventContext: eventContext() });
+    await expect(reconciler.reconcile(scope)).resolves.toEqual({ outcome: "applied" });
+    expect(observed).toHaveBeenCalledExactlyOnceWith(scope);
+    await expect(reconciler.reconcile(scope)).resolves.toEqual({ outcome: "no_pending" });
+    expect(observed).toHaveBeenCalledTimes(1);
+
+    await orchestration.ingestEvent(eventContext(), serving("opaque-again", "cursor-next", []));
+    await environment.recordServingObservation(worker, identity("opaque-again"));
+    const bad = createEnvironmentReconciler({ environment, orchestration,
+      provider: { observe: async () => ({ ...serving("wrong-scope", "cursor-wrong", []),
+        subjects: { repository_id: "other", service_ids: ["orders"], environment: "uat" } }) },
+      workerIdentity: worker, eventContext: eventContext() });
+    await expect(bad.reconcile(scope)).rejects.toMatchObject({ code: "ENVIRONMENT_NOT_FOUND_OR_DENIED" });
+    const event = await database.pool.query(`SELECT event_id FROM ${schema}.orchestration_events
+      WHERE event_id='wrong-scope'`);
+    expect(event.rows).toEqual([]);
+  } finally { await database.cleanup(); }
+});
+
+test("an incomplete exact response stays pending and a configuration change supersedes its ticket", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.registerConfiguration(admin(), { ...configuration(), fingerprint: "config-b" });
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    const identity = (eventId: string) => ({ tenantId: "tenant-a", producerId: "deploy", eventId });
+    await orchestration.ingestEvent(eventContext(), serving("pending-incomplete", "cursor-a", []));
+    await environment.recordServingObservation(worker, identity("pending-incomplete"));
+    const ticket = await environment.getPendingServingReconciliation(worker, scope);
+    await orchestration.ingestEvent(eventContext(), serving("still-incomplete", "cursor-b", [], {
+      completeness: "incomplete", serving_state: { status: "unknown", reason: "inventory unavailable" },
+    }));
+    await expect(environment.confirmServingReconciliation(worker, ticket, identity("still-incomplete")))
+      .resolves.toEqual({ outcome: "pending" });
+    const next = await environment.getPendingServingReconciliation(worker, scope);
+    expect(next).toMatchObject({ pendingEventId: "still-incomplete" });
+    await orchestration.activateConfigurationByCas(admin(), { fingerprint: "config-b", expectedCheckpointVersion: "1",
+      providerEvidence: { provider: "control-plane", provider_reference: "activation-b" } });
+    await orchestration.ingestEvent(eventContext(), serving("post-config-confirmation", "cursor-c", []));
+    await expect(environment.confirmServingReconciliation(worker, next, identity("post-config-confirmation")))
+      .resolves.toEqual({ outcome: "superseded" });
+    const checkpoint = await database.pool.query<{ current_event_id: string; pending_event_id: string }>(
+      `SELECT current_event_id,pending_event_id FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(checkpoint.rows).toEqual([{ current_event_id: "still-incomplete", pending_event_id: "still-incomplete" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("competing exact confirmations apply once under the same checkpoint version", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const scope = { tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat" };
+    const identity = (eventId: string) => ({ tenantId: "tenant-a", producerId: "deploy", eventId });
+    await orchestration.ingestEvent(eventContext(), serving("opaque-race", "cursor-a", []));
+    await environment.recordServingObservation(worker, identity("opaque-race"));
+    const ticket = await environment.getPendingServingReconciliation(worker, scope);
+    await Promise.all(["candidate-a", "candidate-b"].map((eventId) =>
+      orchestration.ingestEvent(eventContext(), serving(eventId, `cursor-${eventId}`, []))));
+    const results = await Promise.all(["candidate-a", "candidate-b"].map((eventId) =>
+      environment.confirmServingReconciliation(worker, ticket, identity(eventId))));
+    expect(results.map((result) => result.outcome).sort()).toEqual(["applied", "superseded"]);
+    const checkpoint = await database.pool.query<{ current_event_id: string; pending_event_id: string | null;
+      version: string }>(
+      `SELECT current_event_id,pending_event_id,version::text FROM ${schema}.environment_serving_checkpoints`,
+    );
+    expect(["candidate-a", "candidate-b"]).toContain(checkpoint.rows[0]?.current_event_id);
+    expect(checkpoint.rows[0]).toMatchObject({ pending_event_id: null, version: "2" });
   } finally { await database.cleanup(); }
 });
 

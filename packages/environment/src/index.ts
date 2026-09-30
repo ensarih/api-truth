@@ -1,6 +1,9 @@
 export { applyEnvironmentMigrations } from "./migrations.js";
 export { createEnvironmentRepository } from "./repository.js";
 export type { EnvironmentRepository } from "./repository.js";
+export type { ServingReconciliationTicket } from "./repository.js";
+export { createEnvironmentReconciler } from "./reconciler.js";
+export type { ExactServingProvider } from "./reconciler.js";
 export { classifyServingObservation } from "./ordering.js";
 export type { ServingObservationClassification } from "./ordering.js";
 

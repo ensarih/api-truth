@@ -31,6 +31,10 @@ type RecordServingResult = Readonly<{
   outcome: "inserted" | "existing";
   disposition: "applied" | "stale" | "replay" | "reconciliation_required";
 }>;
+export type ServingReconciliationTicket = Readonly<{
+  tenantId: string; repositoryId: string; serviceId: string; environment: string;
+  pendingProducerId: string; pendingEventId: string; version: string; configFingerprint: string;
+}>;
 
 type StoredDeploymentEvent = Readonly<{
   row: Readonly<{ repository_id: string; service_id: string; active_config_fingerprint: string }>;
@@ -89,9 +93,50 @@ const parseIdentity = (input: unknown): EventIdentity => {
   } catch { throw new EnvironmentError("INVALID_ENVIRONMENT_INPUT"); }
 };
 
+const parseFields = <K extends string>(input: unknown, keys: readonly K[]): Record<K, string> => {
+  try {
+    if (input === null || typeof input !== "object" || Array.isArray(input)
+      || Object.getPrototypeOf(input) !== Object.prototype) throw new Error();
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    if (Reflect.ownKeys(descriptors).length !== keys.length || !keys.every((key) =>
+      descriptors[key] !== undefined && "value" in descriptors[key]
+      && typeof descriptors[key].value === "string" && ID.test(descriptors[key].value))) throw new Error();
+    return Object.freeze(Object.fromEntries(keys.map((key) => [key, descriptors[key]!.value]))) as Record<K, string>;
+  } catch { throw new EnvironmentError("INVALID_ENVIRONMENT_INPUT"); }
+};
+
+const scopeKeys = ["tenantId", "repositoryId", "serviceId", "environment"] as const;
+const ticketKeys = [...scopeKeys, "pendingProducerId", "pendingEventId", "version", "configFingerprint"] as const;
+const servingInventory = (payload: ServingPayload): string | null => payload.serving_state.status === "known"
+  ? JSON.stringify([...payload.serving_state.inventory].sort((left, right) =>
+    left.artifact_id < right.artifact_id ? -1 : left.artifact_id > right.artifact_id ? 1 : 0)
+    .map((item) => ({ artifact_id: item.artifact_id,
+      revision: item.revision.state === "known"
+        ? { state: "known", revision: item.revision.revision } : { state: "unknown" } }))) : null;
+
+const insertServingObservation = async (client: PoolClient, identity: EventIdentity,
+  row: StoredDeploymentEvent["row"], payload: ServingPayload,
+  disposition: RecordServingResult["disposition"]): Promise<void> => {
+  await client.query(
+    `INSERT INTO environment_serving_observations
+     (tenant_id,producer_id,event_id,repository_id,service_id,environment,observation_id,
+      source_authority_id,source_access_label,effective_order,completeness,serving_status,
+      inventory,rollback_request_id,active_config_fingerprint,disposition)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16)`,
+    [identity.tenantId, identity.producerId, identity.eventId, row.repository_id, row.service_id,
+      payload.environment, payload.observation_id, payload.source.authority_id,
+      payload.source.access_label, payload.effective_order, payload.completeness,
+      payload.serving_state.status, servingInventory(payload), payload.rollback_request_id ?? null,
+      row.active_config_fingerprint, disposition],
+  );
+};
+
 export type EnvironmentRepository = Readonly<{
   recordAttempt(workerIdentity: unknown, eventIdentity: unknown): Promise<RecordResult>;
   recordServingObservation(workerIdentity: unknown, eventIdentity: unknown): Promise<RecordServingResult>;
+  getPendingServingReconciliation(workerIdentity: unknown, scope: unknown): Promise<ServingReconciliationTicket | undefined>;
+  confirmServingReconciliation(workerIdentity: unknown, ticket: unknown, eventIdentity: unknown):
+    Promise<Readonly<{ outcome: "applied" | "pending" | "superseded" }>>;
 }>;
 
 export const createEnvironmentRepository = (pool: Pool, options: { schema: string }): EnvironmentRepository => {
@@ -197,24 +242,7 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
           === row.active_config_fingerprint ? classifyServingObservation(currentEvent, event) : "reconcile";
         const disposition: RecordServingResult["disposition"] = classification === "apply" ? "applied"
           : classification === "reconcile" ? "reconciliation_required" : classification;
-        const inventory = payload.serving_state.status === "known"
-          ? JSON.stringify([...payload.serving_state.inventory].sort((left, right) =>
-            left.artifact_id < right.artifact_id ? -1 : left.artifact_id > right.artifact_id ? 1 : 0)
-            .map((item) => ({ artifact_id: item.artifact_id,
-              revision: item.revision.state === "known"
-                ? { state: "known", revision: item.revision.revision } : { state: "unknown" } }))) : null;
-        await client.query(
-          `INSERT INTO environment_serving_observations
-           (tenant_id,producer_id,event_id,repository_id,service_id,environment,observation_id,
-            source_authority_id,source_access_label,effective_order,completeness,serving_status,
-            inventory,rollback_request_id,active_config_fingerprint,disposition)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16)`,
-          [identity.tenantId, identity.producerId, identity.eventId, row.repository_id, row.service_id,
-            payload.environment, payload.observation_id, payload.source.authority_id,
-            payload.source.access_label, payload.effective_order, payload.completeness,
-            payload.serving_state.status, inventory, payload.rollback_request_id ?? null,
-            row.active_config_fingerprint, disposition],
-        );
+        await insertServingObservation(client, identity, row, payload, disposition);
         if (classification === "apply") {
           const needsReconciliation = payload.completeness !== "complete"
             || payload.serving_state.status === "unknown";
@@ -245,6 +273,98 @@ export const createEnvironmentRepository = (pool: Pool, options: { schema: strin
         }
         await client.query("COMMIT");
         return Object.freeze({ outcome: "inserted", disposition });
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        if (error instanceof EnvironmentError) throw error;
+        throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR");
+      } finally { client.release(); }
+    },
+    async getPendingServingReconciliation(workerIdentity: unknown, scopeInput: unknown):
+      Promise<ServingReconciliationTicket | undefined> {
+      requireWorkerCapability(workerIdentity, "jobs.execute");
+      const scope = parseFields(scopeInput, scopeKeys);
+      const client = await pool.connect().catch(() => { throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR"); });
+      try {
+        await client.query("BEGIN");
+        await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
+        const result = await client.query<{ pending_producer_id: string; pending_event_id: string;
+          version: string; config_fingerprint: string }>(
+          `SELECT checkpoint.pending_producer_id,checkpoint.pending_event_id,checkpoint.version::text,
+                  active.config_fingerprint
+           FROM environment_serving_checkpoints checkpoint
+           JOIN orchestration_active_configurations active ON active.tenant_id=checkpoint.tenant_id
+           WHERE checkpoint.tenant_id=$1 AND checkpoint.repository_id=$2 AND checkpoint.service_id=$3
+             AND checkpoint.environment=$4 AND checkpoint.reconciliation_required=true`,
+          [scope.tenantId, scope.repositoryId, scope.serviceId, scope.environment],
+        );
+        await client.query("COMMIT");
+        const pending = result.rows[0];
+        return pending === undefined ? undefined : Object.freeze({ ...scope,
+          pendingProducerId: pending.pending_producer_id, pendingEventId: pending.pending_event_id,
+          version: pending.version, configFingerprint: pending.config_fingerprint });
+      } catch {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR");
+      } finally { client.release(); }
+    },
+    async confirmServingReconciliation(workerIdentity: unknown, ticketInput: unknown,
+      eventIdentity: unknown): Promise<Readonly<{ outcome: "applied" | "pending" | "superseded" }>> {
+      requireWorkerCapability(workerIdentity, "jobs.execute");
+      const ticket = parseFields(ticketInput, ticketKeys);
+      if (!/^[1-9][0-9]*$/.test(ticket.version)) throw new EnvironmentError("INVALID_ENVIRONMENT_INPUT");
+      const identity = parseIdentity(eventIdentity);
+      if (identity.tenantId !== ticket.tenantId) throw new EnvironmentError("ENVIRONMENT_NOT_FOUND_OR_DENIED");
+      const client = await pool.connect().catch(() => { throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR"); });
+      try {
+        await client.query("BEGIN");
+        await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
+        const { row, event } = await loadDeploymentEvent(client, identity, "serving_observation");
+        const payload = event.payload as ServingPayload;
+        if (row.repository_id !== ticket.repositoryId || row.service_id !== ticket.serviceId
+          || payload.environment !== ticket.environment) throw new EnvironmentError("ENVIRONMENT_NOT_FOUND_OR_DENIED");
+        const scope = [ticket.tenantId, ticket.repositoryId, ticket.serviceId, ticket.environment];
+        await client.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
+          JSON.stringify(["api-truth:environment-serving", ...scope]),
+        ]);
+        const active = await client.query<{ config_fingerprint: string }>(
+          `SELECT config_fingerprint FROM orchestration_active_configurations WHERE tenant_id=$1 FOR SHARE`,
+          [ticket.tenantId],
+        );
+        const checkpoint = await client.query<{ version: string; pending_producer_id: string | null;
+          pending_event_id: string | null }>(
+          `SELECT version::text,pending_producer_id,pending_event_id
+           FROM environment_serving_checkpoints
+           WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND environment=$4 FOR UPDATE`, scope,
+        );
+        const valid = checkpoint.rows[0]?.version === ticket.version
+          && checkpoint.rows[0]?.pending_producer_id === ticket.pendingProducerId
+          && checkpoint.rows[0]?.pending_event_id === ticket.pendingEventId
+          && active.rows[0]?.config_fingerprint === ticket.configFingerprint
+          && row.active_config_fingerprint === ticket.configFingerprint;
+        if (!valid) {
+          await client.query("COMMIT");
+          return Object.freeze({ outcome: "superseded" });
+        }
+        const prior = await client.query(
+          `SELECT 1 FROM environment_serving_observations
+           WHERE tenant_id=$1 AND producer_id=$2 AND event_id=$3`,
+          [identity.tenantId, identity.producerId, identity.eventId],
+        );
+        if (prior.rows.length !== 0) throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR");
+        const complete = payload.completeness === "complete" && payload.serving_state.status === "known";
+        await insertServingObservation(client, identity, row, payload,
+          complete ? "applied" : "reconciliation_required");
+        await client.query(
+          `UPDATE environment_serving_checkpoints SET
+             current_producer_id=$5,current_event_id=$6,
+             pending_producer_id=$7,pending_event_id=$8,reconciliation_required=$9,
+             version=version+1,updated_at=clock_timestamp()
+           WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND environment=$4`,
+          [...scope, identity.producerId, identity.eventId,
+            complete ? null : identity.producerId, complete ? null : identity.eventId, !complete],
+        );
+        await client.query("COMMIT");
+        return Object.freeze({ outcome: complete ? "applied" : "pending" });
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
         if (error instanceof EnvironmentError) throw error;

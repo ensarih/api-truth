@@ -3,8 +3,8 @@
 Private D09 environment-resolution core and durable deployment ledger. The pure
 projection consumes facts already authenticated and scoped to one tenant,
 service, and environment. The repository consumes only D08 events that have
-already passed its producer and deployment-authority checks. It does not yet
-select the latest provider observation or serve an environment query.
+already passed its producer and deployment-authority checks. It records a
+current serving checkpoint but does not yet serve an authorized environment query.
 
 `resolveEnvironment` keeps deployment attempts separate from authoritative
 serving observations. A branch tip, succeeded or failed attempt, and requested
@@ -39,13 +39,18 @@ a pending exact-scope reconciliation requirement. An observation from an old
 installation configuration cannot become current. Unknown or incomplete
 inventories remain current evidence but keep reconciliation pending until a
 newer complete observation establishes the serving set. Unknown revision
-reasons are omitted from D09's safe inventory. The exact provider reconciler
-and automatic request delivery
-remain open work; a pending flag is not evidence that reconciliation ran.
+reasons are omitted from D09's safe inventory. `createEnvironmentReconciler`
+requests one literal tenant/repository/service/environment from a provider port,
+ingests that response through D08 authorization, then confirms it using the
+checkpoint version and active configuration. A stale provider response cannot
+replace a newer checkpoint. Complete known inventory can resolve opaque order;
+unknown or incomplete inventory remains pending. The host must invoke this
+explicit operation; automatic request delivery remains open work. A pending
+flag alone is not evidence that reconciliation ran.
 
 From the repository root, run `npm run test:environment` for the focused offline
 suite. Start the fixed local PostgreSQL test service with `npm run test:env:up`,
 run `npm run test:environment:integration`, then stop it with
-`npm run test:env:down`. `npm run check` covers all offline suites. Provider
-exact provider reconciliation, automatic delivery, and authorized environment
-queries are later D09 slices in the [backlog](../../docs/BACKLOG.md).
+`npm run test:env:down`. `npm run check` covers all offline suites. A concrete
+deployment-provider adapter, automatic delivery, and authorized environment
+queries are later work in the [backlog](../../docs/BACKLOG.md).
