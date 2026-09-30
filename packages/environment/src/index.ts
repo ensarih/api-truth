@@ -9,3 +9,5 @@ export { resolveEnvironment } from "./resolution.js";
 export type { EnvironmentResolution, EnvironmentResolutionInput } from "./resolution.js";
 export { createEnvironmentViewRepository } from "./views.js";
 export type { EnvironmentView, EnvironmentViewRepository } from "./views.js";
+export { createEnvironmentInboxWorker } from "./inbox.js";
+export type { EnvironmentInboxWorker, EnvironmentInboxOutcome } from "./inbox.js";

@@ -1,10 +1,10 @@
 # API Truth — Architecture and Interface Design
 
-**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration through slice 6, and D09 projection/attempt/serving ledger, exact-scope reconciliation port, and authorized environment views implemented; D10–D11 remain design, 2026-09-30.
+**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration through slice 6, and D09 projection/attempt/serving ledger, exact-scope reconciliation port, authorized environment views, and deployment event inbox implemented; D10–D11 remain design, 2026-09-30.
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 
-Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). D08 durable event/job orchestration and exact reconciliation are implemented in [`packages/orchestration`](../packages/orchestration/README.md). D09's pure projection, attempts/artifacts, ordered serving checkpoints, exact-scope reconciliation port, and authorized environment views are in [`packages/environment`](../packages/environment/README.md); automated delivery, publication, and query transports remain Phase 1 deliverables.
+Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). D08 durable event/job orchestration and exact reconciliation are implemented in [`packages/orchestration`](../packages/orchestration/README.md). D09's pure projection, attempts/artifacts, ordered serving checkpoints, exact-scope reconciliation port, authorized environment views, and deployment inbox are in [`packages/environment`](../packages/environment/README.md); provider reconciliation scheduling, publication, and query transports remain Phase 1 deliverables.
 
 ## 1. Components
 
@@ -231,8 +231,9 @@ analyzer, and exact provider reconcilers through explicit worker ports. D07
 accepts one selected service/revision and never enumerates branches. Branch
 patterns require a future configuration version. D09's pure projection,
 durable attempt/artifact facts, ordered serving observations, exact-scope
-provider reconciliation port, and authorized environment resolution are
-implemented; automatic environment consumption, publication/OpenAPI, query
+provider reconciliation port, authorized environment resolution, and an event
+inbox with a retrying consumer are implemented; provider reconciliation
+scheduling, publication/OpenAPI, query
 transport, portal, and MCP behavior remain unimplemented.
 
 1. Validate, persist, and deduplicate the event; create a durable job.

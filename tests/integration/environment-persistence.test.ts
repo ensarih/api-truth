@@ -2,8 +2,10 @@ import { expect, test, vi } from "vitest";
 
 import { applyOrchestrationMigrations, createOrchestrationRepository }
   from "../../packages/orchestration/src/index.js";
-import { applyEnvironmentMigrations, createEnvironmentReconciler, createEnvironmentRepository }
+import { applyEnvironmentMigrations, createEnvironmentInboxWorker, createEnvironmentReconciler,
+  createEnvironmentRepository }
   from "../../packages/environment/src/index.js";
+import { EnvironmentError } from "../../packages/environment/src/errors.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 
 const revisionA = "a".repeat(40);
@@ -67,11 +69,141 @@ test("D09 migrations require D08 and replay without changing the ledger", async 
       `SELECT version FROM ${schema}.environment_schema_migrations ORDER BY version`,
     );
     expect(after.rows).toEqual([{ version: "0001_deployment_attempts" },
-      { version: "0002_serving_observations" }]);
+      { version: "0002_serving_observations" }, { version: "0003_deployment_inbox" }]);
     await database.pool.query(`UPDATE ${schema}.environment_schema_migrations SET checksum_sha256=$1`,
       [`sha256:${"0".repeat(64)}`]);
     await expect(applyEnvironmentMigrations(database.pool, { schema: database.schema }))
       .rejects.toMatchObject({ code: "ENVIRONMENT_STORAGE_ERROR" });
+  } finally { await database.cleanup(); }
+});
+
+test("the deployment inbox backfills authenticated events and captures later events once", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await orchestration.ingestEvent(eventContext(), attempt("before-d09", { state: "known", revision: revisionA }));
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    await orchestration.ingestEvent(eventContext(), attempt("after-d09", { state: "known", revision: revisionB }));
+    await orchestration.ingestEvent(eventContext(), attempt("after-d09", { state: "known", revision: revisionB }));
+    const pending = await database.pool.query<{ event_id: string; state: string; attempt_count: string }>(
+      `SELECT event_id,state,attempt_count::text FROM ${schema}.environment_deployment_inbox ORDER BY event_id`,
+    );
+    expect(pending.rows).toEqual([
+      { event_id: "after-d09", state: "pending", attempt_count: "0" },
+      { event_id: "before-d09", state: "pending", attempt_count: "0" },
+    ]);
+  } finally { await database.cleanup(); }
+});
+
+test("inbox workers deliver each authenticated deployment event and recover an expired lease", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    const artA = { artifact_id: "artifact-a", revision: { state: "known" as const, revision: revisionA } };
+    await orchestration.ingestEvent(eventContext(), attempt("a-attempt", { state: "known", revision: revisionA }));
+    await orchestration.ingestEvent(eventContext(), serving("b-serving", "1", [artA]));
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    const inbox = createEnvironmentInboxWorker(database.pool, { schema: database.schema }, environment);
+    await expect(inbox.drain({ ...worker, capabilities: [] }))
+      .rejects.toMatchObject({ code: "WORKER_UNAUTHORIZED" });
+    const concurrent = await Promise.all([inbox.drain(worker, 2), inbox.drain(worker, 2)]);
+    expect(concurrent.flat().map((outcome) => outcome.state)).toEqual(["delivered", "delivered"]);
+    await expect(inbox.drain(worker)).resolves.toEqual([]);
+    expect((await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schema}.environment_deployment_attempts`,
+    )).rows[0]?.count).toBe("1");
+    expect((await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schema}.environment_serving_observations`,
+    )).rows[0]?.count).toBe("1");
+    await orchestration.ingestEvent(eventContext(), attempt("c-after-crash", { state: "known", revision: revisionA },
+      "artifact-c"));
+    await database.pool.query(
+      `UPDATE ${schema}.environment_deployment_inbox SET state='leased',attempt_count=1,
+       lease_token='crashed-worker',lease_expires_at=clock_timestamp()-interval '1 second'
+       WHERE event_id='c-after-crash'`,
+    );
+    await expect(inbox.drain(worker)).resolves.toMatchObject([{ eventId: "c-after-crash", state: "delivered" }]);
+    const queue = await database.pool.query<{ event_id: string; state: string; attempt_count: string }>(
+      `SELECT event_id,state,attempt_count::text FROM ${schema}.environment_deployment_inbox ORDER BY event_id`,
+    );
+    expect(queue.rows).toEqual([
+      { event_id: "a-attempt", state: "delivered", attempt_count: "1" },
+      { event_id: "b-serving", state: "delivered", attempt_count: "1" },
+      { event_id: "c-after-crash", state: "delivered", attempt_count: "2" },
+    ]);
+  } finally { await database.cleanup(); }
+});
+
+test("an artifact conflict exhausts only its event with a safe error code", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await orchestration.ingestEvent(eventContext(), attempt("a-first", { state: "known", revision: revisionA }));
+    await orchestration.ingestEvent(eventContext(), attempt("b-conflict", { state: "known", revision: revisionB }));
+    const inbox = createEnvironmentInboxWorker(database.pool, { schema: database.schema },
+      createEnvironmentRepository(database.pool, { schema: database.schema }));
+    const outcomes = await inbox.drain(worker);
+    expect(outcomes.map((outcome) => outcome.state)).toEqual(["delivered", "exhausted"]);
+    const queue = await database.pool.query<{ event_id: string; safe_last_error_code: string | null }>(
+      `SELECT event_id,safe_last_error_code FROM ${schema}.environment_deployment_inbox ORDER BY event_id`,
+    );
+    expect(queue.rows).toEqual([{ event_id: "a-first", safe_last_error_code: null },
+      { event_id: "b-conflict", safe_last_error_code: "ARTIFACT_BINDING_CONFLICT" }]);
+    expect((await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schema}.environment_deployment_attempts`,
+    )).rows[0]?.count).toBe("1");
+  } finally { await database.cleanup(); }
+});
+
+test("a transient inbox consumption failure is retried without duplicating the attempt", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  try {
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    await applyEnvironmentMigrations(database.pool, { schema: database.schema });
+    const orchestration = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), { fingerprint: "config-a" });
+    await orchestration.ingestEvent(eventContext(), attempt("retry-attempt", { state: "known", revision: revisionA }));
+    const environment = createEnvironmentRepository(database.pool, { schema: database.schema });
+    let failOnce = true;
+    const inbox = createEnvironmentInboxWorker(database.pool, { schema: database.schema }, {
+      recordAttempt: async (workerIdentity, eventIdentity) => {
+        if (failOnce) { failOnce = false; throw new EnvironmentError("ENVIRONMENT_STORAGE_ERROR"); }
+        return environment.recordAttempt(workerIdentity, eventIdentity);
+      },
+      recordServingObservation: environment.recordServingObservation,
+    });
+    await expect(inbox.drain(worker)).resolves.toMatchObject([{ state: "retry_wait" }]);
+    await expect(inbox.drain(worker)).resolves.toEqual([]);
+    await database.pool.query(
+      `UPDATE ${schema}.environment_deployment_inbox SET available_at=clock_timestamp()-interval '1 second'
+       WHERE event_id='retry-attempt'`,
+    );
+    await expect(inbox.drain(worker)).resolves.toMatchObject([{ state: "delivered" }]);
+    const persisted = await database.pool.query<{ state: string; attempt_count: string;
+      safe_last_error_code: string | null }>(
+      `SELECT state,attempt_count::text,safe_last_error_code
+       FROM ${schema}.environment_deployment_inbox WHERE event_id='retry-attempt'`,
+    );
+    expect(persisted.rows).toEqual([{ state: "delivered", attempt_count: "2", safe_last_error_code: null }]);
+    expect((await database.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${schema}.environment_deployment_attempts`,
+    )).rows[0]?.count).toBe("1");
   } finally { await database.cleanup(); }
 });
 

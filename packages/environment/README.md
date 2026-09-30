@@ -27,8 +27,12 @@ deployment attempts and first-seen artifact-to-revision bindings in one
 transaction. Replaying the same event is idempotent; a conflicting binding
 rolls back the attempt. Unknown revisions remain unbound. The D08 event remains
 durable if consumption has not happened yet, so a host can replay it after a
-crash. Automatic delivery from the D08 outbox is a later integration slice;
-no active serving revision is inferred from an attempt.
+crash. The D09 deployment inbox backfills existing D08 events and captures new
+ones in the same ingestion transaction. `createEnvironmentInboxWorker.drain`
+consumes a bounded batch with expiring leases, retries transient storage
+failures, and records safe terminal errors for permanent conflicts. Its host
+must call `drain` on a schedule. No active serving revision is inferred from an
+attempt.
 
 `classifyServingObservation` compares the authoritative source and canonical
 effective order, independently of event arrival time. `recordServingObservation`
@@ -45,7 +49,7 @@ ingests that response through D08 authorization, then confirms it using the
 checkpoint version and active configuration. A stale provider response cannot
 replace a newer checkpoint. Complete known inventory can resolve opaque order;
 unknown or incomplete inventory remains pending. The host must invoke this
-explicit operation; automatic request delivery remains open work. A pending
+explicit operation; automatic provider reconciliation delivery remains open work. A pending
 flag alone is not evidence that reconciliation ran.
 
 `createEnvironmentViewRepository.getEnvironment` reads one tenant, repository,
@@ -63,5 +67,5 @@ From the repository root, run `npm run test:environment` for the focused offline
 suite. Start the fixed local PostgreSQL test service with `npm run test:env:up`,
 run `npm run test:environment:integration`, then stop it with
 `npm run test:env:down`. `npm run check` covers all offline suites. A concrete
-deployment-provider adapter, automatic delivery, and query transports are
+deployment-provider adapter, provider reconciliation scheduling, and query transports are
 later work in the [backlog](../../docs/BACKLOG.md).
