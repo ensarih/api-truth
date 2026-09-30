@@ -1,6 +1,6 @@
 # API Truth — Implementation Plan
 
-**Status:** development; D01–D07, D08 slices 0–6, D09 slices 0–1, and ordered serving checkpoints implemented.
+**Status:** development; D01–D07, D09, and D10 complete; D08 final hardening and D11 shared query access in progress.
 **Updated:** 2026-09-30
 **Project name:** API Truth (`api-truth`).
 **License:** Apache-2.0; see [LICENSE](LICENSE).
@@ -60,14 +60,14 @@ These are logical workstreams, not a requirement for separate teams or services.
 | First Node.js adapter | Express; replace with pilot's actual framework if different | Provisional |
 | First Java adapter | Spring MVC / Spring Boot, separate Java analyzer process | Provisional |
 | IR exchange | Versioned JSON, executable schemas, conformance fixtures | Required approach |
-| Storage/jobs | PostgreSQL catalog core implemented; durable jobs and external immutable artifact storage pending | Partially implemented |
+| Storage/jobs | PostgreSQL catalog, durable jobs, environment lifecycle, and immutable OpenAPI publications implemented | Phase 1 core implemented; query access in progress |
 | Portal | TypeScript client; browse/detail/environment views first | UI framework to select at setup |
 | CI/CD interface | Provider-neutral CLI/event envelope and deployment records | Required |
 | Reference CI | GitHub Actions for public synthetic fixtures | Proposed; enterprise CI remains unconfirmed |
 | Logs | Normalized file fixtures, then one ELK connector if applicable | Backend/version to confirm |
 | Confluence | One read-only connector for pilot edition | Cloud/Data Center to confirm |
 | Semantic inference | Common interface with OpenAI, Gemini, and Claude API adapters | Providers required; model IDs and data policy to configure |
-| Local tests | Native TypeScript/Vitest checks plus isolated Docker PostgreSQL for integration | Implemented for D03–D06; later suites join with their components |
+| Local tests | Native TypeScript/Vitest checks plus isolated Docker PostgreSQL for integration | Implemented through D10; D11 suites join with query access |
 
 Pin runtime/library versions and support ranges when creating the code skeleton. Interfaces in these documents are proposed and not runnable commands.
 
@@ -89,9 +89,9 @@ Task status is shown inline. Split remaining work into smaller reviewable pull r
 | D06 | **Complete:** immutable catalog snapshots, current access scopes/grants, and atomic selected-branch pointers | Real PostgreSQL round-trip; unauthorized and revoked reads denied; provider ordering/CAS verified |
 | D07 | **Complete:** add dependency-aware updates and structured differences | Shared changes reach every affected API; safe full-service fallback and deterministic differences demonstrated |
 | D08 | **In progress (slices 0–6 of 0–7 complete):** events, durable jobs, isolated PR previews, and exact reconciliation | Duplicate, stale, missed-event, absence, closed-PR, and configuration-change cases pass; Slice 7 final gate remains |
-| D09 | **In progress:** pure projection, durable attempts/artifacts, and ordered serving observations implemented; exact reconciliation and authorized views remain | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
-| D10 | Build OpenAPI compiler and publication manifests | Valid exports, faithful route-variant aggregation/scoping, strict rejection of representation gaps, recovery |
-| D11 | Build query layer, minimal portal, initial MCP tools | Same pinned contract/environment across surfaces |
+| D09 | **Complete:** environment resolution, authorized views, lifecycle facts, and exact-scope repair | Merge/deploy separation, UAT-only, partial-rollout failure, authoritative active-set reconciliation, confirmed rollback |
+| D10 | **Complete:** evidence-gated OpenAPI 3.1 compiler and immutable publication | Strict export, safe variant aggregation, branch/environment guards, validation, and local round trip |
+| D11 | **In progress:** shared query contract, authorized retrieval, minimal portal, initial MCP tools | Same pinned contract/environment across surfaces |
 | D12 | Connect reference CI and deployment fixture workflow | Automatic preview, merge, deployment, rollback updates after baseline |
 | D13 | Complete first release gate and setup documentation | Repeatable walkthrough and Phase 1 acceptance suite |
 

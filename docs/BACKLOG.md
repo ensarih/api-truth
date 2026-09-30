@@ -18,7 +18,7 @@ reviewed, and validated; it does not imply that a later phase is complete.
 | D08 | In progress: slices 0–6 of 0–7 complete | PR previews, exact branch/PR reconciliation, durable scheduler requests, and configuration-change races pass the slice 6 gate. Slice 7 remains. |
 | D09 | Complete: slices 0–4 | Deployment facts, serving checkpoints, exact-scope repair, authorized views, and the local lifecycle pass 320 offline and 181 PostgreSQL tests. Independent review findings on request races, removed scopes, migration cutover, and stale views are fixed. |
 | D10 | Complete: slices 0–4 | Evidence-gated OpenAPI 3.1 compilation, safe `consumes` variant aggregation, durable revision/branch/environment publication, offline official-schema validation, and a local round trip pass full suites. |
-| D11–D13 | Open | Authorized access, reference workflow, and release gates remain. |
+| D11–D13 | D11 started; D12–D13 open | Shared authorized access, portal/MCP, reference workflow, and release gates remain. |
 | Phases 2–6 | Planned | Java/framework conformance, runtime evidence, semantic discovery, related documents, and operating readiness follow their roadmap gates. |
 
 The first working release requires the complete Phase 1 loop. D08 progress is
@@ -70,6 +70,23 @@ close a product flow.
 | D10-S2 | Complete | Faithful variant aggregation or explicitly scoped export. | Concrete, disjoint `consumes` variants with matching required bodies and identical non-request contracts aggregate without losing per-media schemas. Selected-single `consumes` is supported when it exactly matches request media. Header/query/produces selectors, overlapping or malformed media, mismatched response/parameter/security facts, weak evidence, optional bodies, and conflicting path names receive diagnostics and are omitted from draft output; strict export rejects them. Independent review's media-overlap finding is fixed; 355 offline tests pass. Explicit variant-scoped export is not yet supported. |
 | D10-S3 | Complete | Immutable validated artifacts and atomic publication manifests. | Pure preparation validates revision/branch/environment assertions and hashes canonical bytes. PostgreSQL stores immutable tenant-scoped artifacts and provenance-bound publications. Revision, branch, and resolved environment publication promote a versioned pointer after checking the authoritative selection, snapshot, grants, and bytes in one transaction. Current reads withhold stale selections, including a deleted branch with a retained catalog pointer. Historical reads recompile and verify manifest provenance; environment reads recheck pinned deployment/source scopes. Migration upgrade, failure rollback, stale CAS, revocation, Unicode scopes, and local UAT publication tests pass. Independent review findings are fixed; 360 offline and 195 PostgreSQL tests pass. External OpenAPI validation is D10-S4. |
 | D10-S4 | Complete | Local compiler/publication round trip and documentation. | A synthetic local CLI and integration test exercise strict preparation, deterministic replay, stale-pointer rejection, recovery, and historical read. The publisher validates offline against a pinned official OAI 3.1 document schema plus local references, JSON Schemas, and verifiable examples. External references and unverifiable examples fail closed. 369 offline and 196 PostgreSQL tests pass; clean dependency install, typecheck, and CLI round trip pass. |
+
+### D11 slices
+
+The portal, MCP tools, and export must read one shared authorized query service.
+Every current selection names an environment, branch, or exact revision; an
+omitted selector never defaults to production. A pending, mixed, unknown, or
+confirmed absent environment has an explicit state and no usable current
+contract. Historical publications require an explicit publication ID and a
+current permission check.
+
+| ID | Status | Work | Acceptance gate |
+|---|---|---|---|
+| D11-S0 | Complete | Versioned query selector and environment-state contract. | Plain-data input validation requires tenant, repository, service, and explicit selector. A pure projection yields a usable snapshot pin only for a resolved, deployed, reconciliation-free environment; all other states carry no usable snapshot. Six focused tests and typecheck pass. No database authorization claim. |
+| D11-S1 | Open | Consistent authorized service discovery and contract reads. | Policy-filtered service search and exact endpoint/schema/changes/environment comparison use one resolved pin. Tenant, grant, source-scope, stale branch, and environment ambiguity tests fail closed. Recheck selection and authorization in a consistent database read; do not join independently timed views. |
+| D11-S2 | Open | Bind query results to published OpenAPI and historical reads. | Query and export agree on publication ID, snapshot, revision, configuration, and selector pin. Strict-export absence and failed publication remain visible; a superseded environment/branch publication is never presented as current. |
+| D11-S3 | Open | Minimal environment-aware portal. | Authenticated service browsing, exact search, endpoint/schema/evidence detail, coverage/freshness, changes, environment comparison, and OpenAPI download use only the shared query layer. Unknown/mixed/UAT-only states and revocation are visible and safe in browser/API tests. |
+| D11-S4 | Open | Read-only MCP tools and cross-surface gate. | Service search, endpoint/schema retrieval, changes, and environment comparison use the same query service and pinned contract as portal/export. MCP has no administrative tools; bounded inputs/results, source permissions, and revocation pass protocol and cross-surface tests. Safe examples wait for Phase 3 evidence. |
 
 ## Later phases and analyzer coverage
 

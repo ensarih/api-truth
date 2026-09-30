@@ -1,10 +1,10 @@
 # API Truth — Architecture and Interface Design
 
-**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration through slice 6, and D09 environment resolution/lifecycle implemented. D10 projection planning, evidence-gated compilation, and safe `consumes` variant aggregation are implemented; D11 remains design, 2026-09-30.
+**Status:** D03 IR, D05 TypeScript analyzer, D06 catalog, D07 updates, D08 orchestration through slice 6, D09 environment resolution/lifecycle, and D10 OpenAPI publication implemented. D11 shared query access is in progress, 2026-09-30.
 **Contract:** [product specification](SPECIFICATION.md).  
 **Sequence:** [roadmap](ROADMAP.md).
 
-Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). D08 durable event/job orchestration and exact reconciliation are implemented in [`packages/orchestration`](../packages/orchestration/README.md). D09's attempt/artifact ledger, ordered serving checkpoints, exact-scope repair, authorized environment views, deployment inbox, and repair worker are in [`packages/environment`](../packages/environment/README.md). D10's method/path planner, evidence-gated compiler, and safe `consumes` variant aggregation are in [`packages/openapi`](../packages/openapi/README.md); publication and query transports remain Phase 1 deliverables.
+Examples below define design intent. The initial executable IR, evidence, view, configuration, event, and analyzer-exchange contracts are implemented in [`packages/ir`](../packages/ir/README.md). The D06 PostgreSQL migrations and catalog package are implemented in [`packages/catalog`](../packages/catalog/README.md). The D07 pure planner, safe full-service executor, deterministic difference engine, and local comparison CLI are implemented in [`packages/updates`](../packages/updates/README.md). D08 durable event/job orchestration and exact reconciliation are implemented in [`packages/orchestration`](../packages/orchestration/README.md). D09's attempt/artifact ledger, ordered serving checkpoints, exact-scope repair, authorized environment views, deployment inbox, and repair worker are in [`packages/environment`](../packages/environment/README.md). D10's method/path planner, evidence-gated compiler, safe `consumes` variant aggregation, immutable publication, branch/environment promotion, and external validation are in [`packages/openapi`](../packages/openapi/README.md). D11 query transport remains a Phase 1 deliverable.
 
 ## 1. Components
 
@@ -94,8 +94,10 @@ requiredness/security/status, unsupported serialization, invalid component
 keys, and conflicting templates. Strict compilation returns no document when
 any diagnostic remains. D10-S2 combines only concrete disjoint `consumes`
 variants with identical non-request contracts; other selector and variant
-groups remain diagnosed and unexportable. D10-S3/S4 add publication and
-external validation.
+groups remain diagnosed and unexportable. D10-S3/S4 implement immutable
+revision publications, guarded branch/environment pointers, access-scoped
+historical reads, and validation against the pinned official OpenAPI 3.1
+document schema plus JSON Schema and inline-example checks.
 
 ### 2.4 Schemas and claims
 
@@ -248,8 +250,9 @@ immediately. A request survives delivery of an older queued observation and is
 cleared only by a complete provider confirmation; scopes inactive at worker
 claim time are retired without provider access. A view with pending
 reconciliation does not offer a previously resolved snapshot or confirmed
-absence as current. Publication/OpenAPI, query transport,
-portal, and MCP behavior remain unimplemented.
+absence as current. D10 publishes and reads validated OpenAPI 3.1 artifacts
+for authorized revision, branch, and resolved single-revision environment
+scopes. Query transport, portal, and MCP behavior remain unimplemented.
 
 1. Validate, persist, and deduplicate the event; create a durable job.
 2. Resolve the immutable source/artifact/configuration scope.
