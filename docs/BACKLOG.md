@@ -18,14 +18,14 @@ reviewed, and validated; it does not imply that a later phase is complete.
 | D08 | Complete: slices 0–7 | PR previews, exact reconciliation, durable scheduling, safe status reads, bounded observer signals, and local lifecycle pass the final gate. |
 | D09 | Complete: slices 0–4 | Deployment facts, serving checkpoints, exact-scope repair, authorized views, and the local lifecycle pass 320 offline and 181 PostgreSQL tests. Independent review findings on request races, removed scopes, migration cutover, and stale views are fixed. |
 | D10 | Complete: slices 0–4 | Evidence-gated OpenAPI 3.1 compilation, safe `consumes` variant aggregation, durable revision/branch/environment publication, offline official-schema validation, and a local round trip pass full suites. |
-| D11–D13 | D11 started; D12–D13 open | Shared authorized access, portal/MCP, reference workflow, and release gates remain. |
+| D11–D13 | D11 complete; D12–D13 in progress | Shared authorized query, portal, and MCP gates pass; provider wiring, full lifecycle publication, and release readiness remain. |
 | Phases 2–6 | Planned | Java/framework conformance, runtime evidence, semantic discovery, related documents, and operating readiness follow their roadmap gates. |
 
-The first working release requires the complete Phase 1 loop. D08 progress is
-not a claim that deployment, OpenAPI publication, the portal, or MCP tools work
-yet. `main` may lag `development` while a task is under review.
+The first working release requires the complete Phase 1 loop. The implemented
+components still need a live provider connection and the full release scenario.
+`main` may lag `development` while a task is under review.
 
-## Now — finish event orchestration
+## Completed event orchestration
 
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
@@ -85,7 +85,7 @@ current permission check.
 | D11-S0 | Complete | Versioned query selector and environment-state contract. | Plain-data input validation requires tenant, repository, service, and explicit selector. A pure projection yields a usable snapshot pin only for a resolved, deployed, reconciliation-free environment; all other states carry no usable snapshot. Six focused tests and typecheck pass. No database authorization claim. |
 | D11-S1 | Complete | Consistent authorized service discovery and contract reads. | Policy-filtered service search and exact endpoint/schema/changes/environment comparison use one resolved pin. Tenant, grant, source-scope, stale branch, and environment ambiguity tests fail closed. The reader checks selection and authorization in one repeatable-read transaction. Eight query unit and ten PostgreSQL integration tests pass; search limits fail explicitly. |
 | D11-S2 | Complete | Bind query results to published OpenAPI and historical reads. | Query and export use the same D10 validator in one transaction and agree on publication ID, snapshot, revision, configuration, and selector pin. Strict-export absence is explicit; superseded branch/environment publication is never current. Historical reads recheck grants and stored environment scopes. Integration tests cover supersession, revocation, and concurrent promotion. |
-| D11-S3 | In progress | Minimal environment-aware portal. | Host-authenticated service browsing, explicit revision/branch/environment selection, contract summary with coverage and analysis time, endpoint/schema/evidence detail, comparison, and scoped immutable OpenAPI download use the shared query layer. Client tenant spoofing is rejected; unknown states expose no contract. Unit and PostgreSQL-backed HTTP tests cover publication bytes and revocation. Browser interaction and cross-surface conformance remain. |
+| D11-S3 | Complete | Minimal environment-aware portal. | Host-authenticated service browsing, explicit revision/branch/environment selection, contract summary with coverage and analysis time, endpoint/schema/evidence detail, comparison, and scoped immutable OpenAPI download use the shared query layer. Client tenant spoofing is rejected; unknown states expose no contract. Unit, PostgreSQL HTTP, and real-browser interaction tests cover the selected service, endpoint detail, publication download, unknown state, and revocation; D11-S4 covers cross-surface conformance. |
 | D11-S4 | Complete | Read-only MCP tools and cross-surface gate. | Five official-protocol MCP tools cover service search, contract, endpoint, schema, and comparison using explicit selectors and the shared query reader. Inputs/results are bounded, identity is supplied only by the host, and no administrative tools are exposed. Linked protocol tests plus PostgreSQL-backed immutable-revision and UAT-environment tests prove the same portal/MCP/export publication pin and revocation. Safe examples wait for Phase 3 evidence. |
 
 ### D12 slices

@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:contract": "vitest run --project contract",
+    "test:browser": "playwright test --config tests/browser/playwright.config.ts",
     "test:updates": "vitest run tests/unit/update-input.test.ts tests/unit/update-planner.test.ts tests/unit/contract-differences.test.ts tests/unit/update-execution.test.ts tests/contract/update-contracts.test.ts tests/contract/contract-changes-cli.test.ts",
     "test:environment": "vitest run tests/unit/environment-resolution.test.ts tests/unit/environment-ordering.test.ts",
     "test:environment:integration": "node scripts/test-environment.ts ready && vitest run --config vitest.integration.config.ts tests/integration/environment-persistence.test.ts tests/integration/environment-view.test.ts --maxWorkers=1",
@@ -36,6 +37,7 @@
     "npm": "11.5.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "24.6.0",
     "@types/pg": "8.23.1",
     "@vitest/coverage-v8": "5.0.1",

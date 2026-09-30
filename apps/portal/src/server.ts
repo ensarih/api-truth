@@ -48,7 +48,8 @@ search.addEventListener('submit',async event=>{event.preventDefault();results.re
         (service.environment?' — '+service.environment.name+': '+service.environment.status:'');
       button.addEventListener('click',()=>{contract.elements.namedItem('repositoryId').value=service.repositoryId;
         contract.elements.namedItem('serviceId').value=service.serviceId;
-        if(service.environment){contract.elements.namedItem('kind').value='environment';contract.elements.namedItem('value').value=service.environment.name;}});
+        if(service.environment){contract.elements.namedItem('kind').value='environment';contract.elements.namedItem('value').value=service.environment.name;}
+        contract.requestSubmit();});
       row.append(button);results.append(row);}}
   catch{status.textContent='The service list is unavailable.';}});
 contract.addEventListener('submit',async event=>{event.preventDefault();summary.replaceChildren();endpoints.replaceChildren();
@@ -209,7 +210,9 @@ export const createPortalServer = (options: PortalOptions): Server => {
         json(response, 200, await options.query.compareContracts(principal, before, after)); return;
       }
       if (url.pathname.startsWith("/api/openapi/")) {
-        const publicationId = url.pathname.slice("/api/openapi/".length);
+        let publicationId: string;
+        try { publicationId = decodeURIComponent(url.pathname.slice("/api/openapi/".length)); }
+        catch { json(response, 400, { error: "INVALID_REQUEST" }); return; }
         const values = params(url, ["repositoryId", "serviceId"]);
         if (!/^sha256:[0-9a-f]{64}$/.test(publicationId) || !values
           || !safeId(values.repositoryId) || !safeId(values.serviceId)) {
