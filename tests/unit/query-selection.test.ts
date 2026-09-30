@@ -100,3 +100,23 @@ test("malformed environment views cannot produce a pin", () => {
     expect(selected).not.toHaveProperty("pin");
   }
 });
+
+test("optional expected pointer and checkpoint versions must be canonical decimals", () => {
+  expect(parseQuerySelection(input({ kind: "branch", branch: "main", expectedPointerVersion: "2" })).selector)
+    .toEqual({ kind: "branch", branch: "main", expectedPointerVersion: "2" });
+  expect(parseQuerySelection(input({ kind: "environment", environment: "uat", expectedCheckpointVersion: "42" })).selector)
+    .toEqual({ kind: "environment", environment: "uat", expectedCheckpointVersion: "42" });
+  for (const version of ["", "0", "01", "-1", "1.0", "9".repeat(20)]) {
+    code(() => parseQuerySelection(input({ kind: "branch", branch: "main", expectedPointerVersion: version })),
+      "INVALID_QUERY_SELECTION");
+    code(() => parseQuerySelection(input({ kind: "environment", environment: "uat", expectedCheckpointVersion: version })),
+      "INVALID_QUERY_SELECTION");
+  }
+});
+
+test("preflight projection with stale expected checkpoint has no pin", () => {
+  const selected = projectEnvironmentSelection(input({ kind: "environment", environment: "uat",
+    expectedCheckpointVersion: "41" }), view());
+  expect(selected.status).toBe("unknown");
+  expect(selected).not.toHaveProperty("pin");
+});

@@ -58,7 +58,9 @@ export const projectEnvironmentSelection = (
   const state = (status: "unavailable" | "transitional" | "unknown"): EnvironmentSelection =>
     Object.freeze({ status, selector });
   if (view.reconciliationRequired !== false || view.deployment === "unknown"
-    || !bounded(view.checkpointVersion)) return state("unknown");
+    || !bounded(view.checkpointVersion)
+    || selector.selector.expectedCheckpointVersion !== undefined
+      && selector.selector.expectedCheckpointVersion !== view.checkpointVersion) return state("unknown");
   if (view.deployment === "transitional") return state("transitional");
   if (view.deployment !== "deployed" || view.contract !== "resolved") return state("unavailable");
   const only = readOnlyActive(view.active);

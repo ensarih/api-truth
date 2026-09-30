@@ -1,6 +1,6 @@
 export type QuerySelector =
-  | Readonly<{ kind: "environment"; environment: string }>
-  | Readonly<{ kind: "branch"; branch: string }>
+  | Readonly<{ kind: "environment"; environment: string; expectedCheckpointVersion?: string }>
+  | Readonly<{ kind: "branch"; branch: string; expectedPointerVersion?: string }>
   | Readonly<{ kind: "revision"; revision: string }>;
 
 export type QuerySelection = Readonly<{
@@ -23,6 +23,10 @@ export class QuerySelectionError extends Error {
 
 const identifier = (value: unknown): value is string =>
   typeof value === "string" && /^[^\u0000-\u001f\u007f]{1,512}$/.test(value);
+
+const version = (value: unknown): value is string =>
+  typeof value === "string" && /^[1-9][0-9]{0,18}$/.test(value)
+  && BigInt(value) <= 9223372036854775807n;
 
 const plainRecord = (input: unknown, fields: readonly string[]): Record<string, unknown> => {
   try {
@@ -51,13 +55,19 @@ export const parseQuerySelection = (input: unknown): QuerySelection => {
     const kind = Object.getOwnPropertyDescriptor(raw, "kind");
     if (kind === undefined || !("value" in kind)) throw new QuerySelectionError("INVALID_QUERY_SELECTION");
     if (kind.value === "environment") {
-      const value = plainRecord(raw, ["kind", "environment"]);
-      if (!identifier(value.environment)) throw new QuerySelectionError("INVALID_QUERY_SELECTION");
-      selector = Object.freeze({ kind: "environment", environment: value.environment });
+      const optional = Object.prototype.hasOwnProperty.call(raw, "expectedCheckpointVersion");
+      const value = plainRecord(raw, optional ? ["kind", "environment", "expectedCheckpointVersion"] : ["kind", "environment"]);
+      if (!identifier(value.environment) || optional && !version(value.expectedCheckpointVersion))
+        throw new QuerySelectionError("INVALID_QUERY_SELECTION");
+      selector = Object.freeze({ kind: "environment", environment: value.environment,
+        ...(optional ? { expectedCheckpointVersion: value.expectedCheckpointVersion as string } : {}) });
     } else if (kind.value === "branch") {
-      const value = plainRecord(raw, ["kind", "branch"]);
-      if (!identifier(value.branch)) throw new QuerySelectionError("INVALID_QUERY_SELECTION");
-      selector = Object.freeze({ kind: "branch", branch: value.branch });
+      const optional = Object.prototype.hasOwnProperty.call(raw, "expectedPointerVersion");
+      const value = plainRecord(raw, optional ? ["kind", "branch", "expectedPointerVersion"] : ["kind", "branch"]);
+      if (!identifier(value.branch) || optional && !version(value.expectedPointerVersion))
+        throw new QuerySelectionError("INVALID_QUERY_SELECTION");
+      selector = Object.freeze({ kind: "branch", branch: value.branch,
+        ...(optional ? { expectedPointerVersion: value.expectedPointerVersion as string } : {}) });
     } else if (kind.value === "revision") {
       const value = plainRecord(raw, ["kind", "revision"]);
       if (!identifier(value.revision)) throw new QuerySelectionError("INVALID_QUERY_SELECTION");

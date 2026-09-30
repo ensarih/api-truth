@@ -7,6 +7,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@api-truth/environment": "0.0.0"
+    "@api-truth/catalog": "0.0.0",
+    "@api-truth/environment": "0.0.0",
+    "@api-truth/ir": "0.0.0",
+    "@api-truth/orchestration": "0.0.0",
+    "@api-truth/updates": "0.0.0",
+    "pg": "8.23.0"
   }
 }
