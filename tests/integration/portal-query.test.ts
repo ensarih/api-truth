@@ -7,6 +7,8 @@ import { applyOrchestrationMigrations } from "../../packages/orchestration/src/m
 import { applyOpenApiMigrations, createOpenApiPublicationStore } from "../../packages/openapi/src/index.js";
 import { createQueryReader } from "../../packages/query/src/index.js";
 import { createPortalServer } from "../../apps/portal/src/server.js";
+import { createApiTruthMcpServer } from "../../apps/mcp/src/server.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createCatalogTestDatabase, quoteCatalogTestSchema, type CatalogTestDatabase } from "./support/database.js";
 
 const context = { tenantId: "tenant-portal-query", principalId: "reader" };
@@ -57,6 +59,11 @@ afterEach(async () => { await database.cleanup(); });
 test("portal HTTP contract and download agree on one published revision and recheck access", async () => {
   const reader = createQueryReader(database.pool, { schema: database.schema });
   const publicationStore = createOpenApiPublicationStore(database.pool, { schema: database.schema });
+  const mcp = createApiTruthMcpServer({ query: reader, authenticate: async () => context });
+  const client = new Client({ name: "api-truth-cross-surface-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await mcp.connect(serverTransport);
+  await client.connect(clientTransport);
   const server = createPortalServer({
     authenticate: async (request) => request.headers.authorization === "Bearer fixture" ? context : undefined,
     query: reader,
@@ -80,6 +87,15 @@ test("portal HTTP contract and download agree on one published revision and rech
     expect(await selected.json()).toMatchObject({ status: "resolved",
       pin: { snapshotId: snapshot.snapshot_id, revision: "rev-b" },
       publication: { status: "current", publicationId: published.publicationId } });
+    const mcpResult = await client.callTool({ name: "api_truth_get_contract", arguments: {
+      repositoryId: "commerce", serviceId: "orders", view: { kind: "revision", revision: "rev-b" },
+    } });
+    expect(mcpResult).toMatchObject({ structuredContent: { ok: true, data: { status: "resolved",
+      pin: { snapshotId: snapshot.snapshot_id, revision: "rev-b" },
+      publication: { status: "current", publicationId: published.publicationId } } } });
+    const exported = await reader.readPublication(context, { tenantId: context.tenantId,
+      repositoryId: "commerce", serviceId: "orders", publicationId: published.publicationId });
+    expect(exported.bytes).toEqual(published.bytes);
     const downloadUrl = `${base}/api/openapi/${published.publicationId}?repositoryId=commerce&serviceId=orders`;
     const download = await fetch(downloadUrl, { headers: auth });
     expect(download.status).toBe(200);
@@ -94,7 +110,14 @@ test("portal HTTP contract and download agree on one published revision and rech
       WHERE tenant_id=$1 AND principal_id=$2`, [context.tenantId, context.principalId]);
     expect((await fetch(`${base}/api/contract?${selection}`, { headers: auth })).status).toBe(404);
     expect((await fetch(downloadUrl, { headers: auth })).status).toBe(404);
+    expect(await client.callTool({ name: "api_truth_get_contract", arguments: {
+      repositoryId: "commerce", serviceId: "orders", view: { kind: "revision", revision: "rev-b" },
+    } })).toMatchObject({ isError: true, structuredContent: { ok: false, error: "NOT_FOUND_OR_DENIED" } });
+    await expect(reader.readPublication(context, { tenantId: context.tenantId,
+      repositoryId: "commerce", serviceId: "orders", publicationId: published.publicationId }))
+      .rejects.toMatchObject({ code: "QUERY_NOT_FOUND_OR_DENIED" });
   } finally {
+    await Promise.allSettled([client.close(), mcp.close()]);
     server.closeAllConnections(); server.close(); await once(server, "close");
   }
 });
