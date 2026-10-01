@@ -81,6 +81,43 @@ test("literal Body required options establish request body presence", async () =
   expect(parseAnalyzerResult(result).ok).toBe(true);
 });
 
+test("whole-object QueryParams expands literal fields without inferring runtime requiredness", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Get, QueryParams, QueryParam, createExpressServer } from "routing-controllers";
+    @JsonController("/orders") class Orders {
+      @Get() list(@QueryParams() search: { q: string; limit?: number },
+        @QueryParam("sort") sort?: string): string { return search.q; }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  const endpoint = result.endpoints[0];
+  expect(endpoint?.parameters).toMatchObject([
+    { in: "query", name: "limit", presence: { state: "unknown" }, schema: { type: "number" } },
+    { in: "query", name: "q", presence: { state: "unknown" }, schema: { type: "string" } },
+    { in: "query", name: "sort", presence: { state: "unknown" }, schema: { type: "string" } },
+  ]);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("parameter_binding_unsupported");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("named and whole-object query bindings with the same key stay unresolved", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Get, QueryParams, QueryParam, createExpressServer } from "routing-controllers";
+    @JsonController() class Orders {
+      @Get("/items") list(@QueryParam("q", { required: true }) q: string,
+        @QueryParams() all: { q: number }): string { return q; }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints[0]?.parameters).toMatchObject([
+    { in: "query", name: "q", presence: { state: "unknown" }, schema: {} },
+  ]);
+  expect(result.diagnostics.map(item => item.code)).toContain("whole_query_parameter_collision");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
 test("unrelated same-named decorators emit no routes", async () => {
   const { adapter } = await service({ "controller.ts": `
     import { Controller, Get } from "unrelated";
@@ -184,7 +221,7 @@ test("unsupported local constructs are diagnosed without dropping a literal sibl
     { status: { kind: "unknown", reason: "No supported status declaration" }, content: [] },
   ]);
   expect(result.diagnostics.map(d => d.code)).toEqual(expect.arrayContaining([
-    "dynamic_route_path_unresolved", "parameter_binding_unsupported", "response_or_request_passthrough_unresolved",
+    "dynamic_route_path_unresolved", "whole_query_type_unresolved", "response_or_request_passthrough_unresolved",
   ]));
   expect(result.coverage.status).toBe("incomplete");
   expect(parseAnalyzerResult(result).ok).toBe(true);

@@ -1,6 +1,6 @@
 # routing-controllers analyzer profile
 
-`nodejs-routing-controllers@0.3.0` reads a bounded service source tree and emits
+`nodejs-routing-controllers@0.4.0` reads a bounded service source tree and emits
 a D03 analyzer result. It never executes project code or resolves packages.
 
 Run it locally with `npm run extract:routing-controllers -- --source <service-tree>
@@ -18,6 +18,12 @@ annotations produce declared schemas. The known JSON behavior of
 `@JsonController` supplies JSON media type; no status is inferred from the
 HTTP method or a return type.
 
+`@QueryParams()` with an inline object type emits its declared fields as query
+parameters. Their runtime requiredness remains unknown, including for fields
+without TypeScript's optional marker. A class or imported type is not expanded
+by this slice. A field also declared through `@QueryParam` is marked unresolved
+rather than choosing one of the two declarations.
+
 The profile requires a direct call to `createExpressServer`, `useExpressServer`,
 `createKoaServer`, or `useKoaServer` imported from `routing-controllers`. Its
 literal options must contain a `controllers` array of direct class references,
@@ -27,8 +33,8 @@ controller and action paths. Unregistered decorated classes emit no endpoints.
 Coverage remains incomplete because the request does not identify a proven
 production startup entry point. Registration in an unused file cannot establish
 runtime exposure. Dynamic or ambiguous registration adds scoped diagnostics.
-Dynamic paths, route arrays and patterns, inheritance, re-exports, whole-object
-parameter bindings, passthrough responses, unsupported decorators, missing
+Dynamic paths, route arrays and patterns, inheritance, re-exports, unsupported
+whole-object parameter bindings, passthrough responses, unsupported decorators, missing
 type metadata, and source syntax errors also produce scoped diagnostics.
 Dynamic route prefixes and version selectors are not applied. A service with
 these features must not treat declared routes as a complete runtime inventory.
