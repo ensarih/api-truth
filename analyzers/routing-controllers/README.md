@@ -1,6 +1,6 @@
 # routing-controllers analyzer profile
 
-`nodejs-routing-controllers@0.1.0` reads a bounded service source tree and emits
+`nodejs-routing-controllers@0.2.0` reads a bounded service source tree and emits
 a D03 analyzer result. It never executes project code or resolves packages.
 
 Run it locally with `npm run extract:routing-controllers -- --source <service-tree>
@@ -17,13 +17,20 @@ annotations produce declared schemas. The known JSON behavior of
 `@JsonController` supplies JSON media type; no status is inferred from the
 HTTP method or a return type.
 
-Coverage remains incomplete when controller registration cannot be established.
+The profile requires a direct call to `createExpressServer`, `useExpressServer`,
+`createKoaServer`, or `useKoaServer` imported from `routing-controllers`. Its
+literal options must contain a `controllers` array of direct class references,
+including contained relative imports. A literal `routePrefix` joins the
+controller and action paths. Unregistered decorated classes emit no endpoints.
+
+Coverage remains incomplete because the request does not identify a proven
+production startup entry point. Registration in an unused file cannot establish
+runtime exposure. Dynamic or ambiguous registration adds scoped diagnostics.
 Dynamic paths, route arrays and patterns, inheritance, re-exports, whole-object
 parameter bindings, passthrough responses, unsupported decorators, missing
 type metadata, and source syntax errors also produce scoped diagnostics.
-Global route prefixes and version selectors are not applied because this
-profile has no verified runtime configuration binding. A service with these
-features must not treat declared routes as a complete runtime inventory.
+Dynamic route prefixes and version selectors are not applied. A service with
+these features must not treat declared routes as a complete runtime inventory.
 
 The analyzer accepts one `source_tree` resolution input at the service root.
 All contained JS, TS, JSON, and YAML files affect the digest. Symbolic links,
@@ -37,7 +44,7 @@ npm run --silent extract:routing-controllers -- --source fixtures/nodejs/routing
 ```
 
 The command writes one D03 JSON result to stdout and diagnostic codes to
-stderr. It will report incomplete coverage until runtime controller registration
-can be verified. The focused tests are
+stderr. It reports incomplete coverage until the startup entry point can be
+verified. The focused tests are
 `tests/unit/routing-controllers-analyzer.test.ts` and
 `tests/contract/routing-controllers-cli.test.ts`.

@@ -128,14 +128,15 @@ it does not substitute for a protected enterprise pilot.
 `nodejs-swagger2-document@0.2.0` reads a selected JSON document and emits
 declared route facts with incomplete coverage. It does not meet the
 `nodejs-swagger-express-mw` conformance gate: middleware binding, YAML, and
-D08 profile selection remain in NB1–NB4. `nodejs-routing-controllers@0.1.0`
-extracts literal decorator declarations but cannot yet prove runtime
-controller registration or global route configuration. It is the first NB5
+D08 profile selection remain in NB1–NB4. `nodejs-routing-controllers@0.2.0`
+extracts literal decorator declarations, binds direct controller
+registrations, and applies literal global prefixes, but cannot prove the
+startup entry point. It is the first NB5
 profile slice, not the completed NB5 conformance gate.
 
 The Node.js backlog is a detailed child backlog. Its NB1 contract and
 authority decisions are prerequisites for full document/decorator conformance; current
-`typescript-express@0.3.0` support does not imply broader adapter coverage. Java,
+`typescript-express@0.4.0` support does not imply broader adapter coverage. Java,
 logs, semantic providers, and Confluence are planned capabilities, not current
 implementation claims.
 

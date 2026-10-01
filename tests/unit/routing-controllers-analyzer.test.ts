@@ -36,7 +36,9 @@ test("import aliases and namespace decorators produce D03-valid declared routes"
       }
       @RC.Post("/orders") create(@RC.Body() input: { title: string }): string { return input.title; }
     }
-  ` });
+  `, "app.ts": `import { createExpressServer } from "routing-controllers";
+    import { Orders } from "./controller";
+    createExpressServer({ controllers: [Orders] });` });
   const first = await adapter.analyze(request());
   const second = await adapter.analyze(request());
   expect(parseAnalyzerResult(first).ok).toBe(true);
@@ -54,7 +56,7 @@ test("import aliases and namespace decorators produce D03-valid declared routes"
     ], responses: [{ status: { kind: "exact", code: 202 }, content: [{ media_type: "application/vnd.order+json" }] }] });
   expect(first.claims.map(claim => claim.predicate)).toEqual(expect.arrayContaining(["route.declaration", "response.status", "response.media_type"]));
   expect(first.status).toBe("partial");
-  expect(first.diagnostics.map(d => d.code)).toContain("controller_registration_unverified");
+  expect(first.diagnostics.map(d => d.code)).not.toContain("controller_registration_unverified");
   expect(first.reproducibility_fingerprint).toBe(second.reproducibility_fingerprint);
   expect(first.endpoints).toEqual(second.endpoints);
 });
@@ -81,15 +83,80 @@ test("a local declaration that conflicts with an imported decorator cannot estab
   expect(parseAnalyzerResult(result).ok).toBe(true);
 });
 
+test("only directly registered classes emit routes, including relative imports and routePrefix", async () => {
+  const { adapter } = await service({
+    "z-app.ts": `import { createExpressServer as boot } from "routing-controllers";
+      import { Active as Renamed } from "./a-controller";
+      boot({ routePrefix: "/v1", controllers: [Renamed] });`,
+    "a-controller.ts": `import { JsonController, Get, HttpCode } from "routing-controllers";
+      @JsonController("/items") export class Active { @Get(":id") @HttpCode(200) read(): string { return "ok"; } }
+      @JsonController("/dead") export class Dead { @Get("/") @HttpCode(200) read(): string { return "dead"; } }`,
+  });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/v1/items/:id"]);
+  expect(result.diagnostics.map(d => d.code)).not.toContain("controller_registration_unverified");
+  expect(result.diagnostics.map(d => d.code)).not.toContain("no_supported_controller");
+  expect(result.diagnostics.map(d => d.code)).toContain("startup_entrypoint_unverified");
+  const startup = result.diagnostics.find(d => d.code === "startup_entrypoint_unverified")!;
+  expect(result.evidence.find(item => item.evidence_id === startup.evidence_ids[0])?.location.path).toBe("z-app.ts");
+  expect(result.status).toBe("partial");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("dynamic registration cannot expose a controller, while a literal sibling remains", async () => {
+  const { adapter } = await service({ "app.ts": `
+    import { useExpressServer, Controller, Get, HttpCode } from "routing-controllers";
+    @Controller("/known") class Known { @Get() @HttpCode(200) read(): string { return "ok"; } }
+    @Controller("/unknown") class Unknown { @Get() read(): string { return "no"; } }
+    const selected = Unknown;
+    useExpressServer({}, { controllers: [Known, selected] });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/known"]);
+  expect(result.diagnostics.map(d => d.code)).toContain("controller_reference_unresolved");
+  expect(result.coverage.status).toBe("incomplete");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("conditional setup, option spreads, and glob selections remain incomplete", async () => {
+  const { adapter } = await service({ "app.ts": `
+    import { createExpressServer, Controller, Get, HttpCode } from "routing-controllers";
+    @Controller("/items") class Items { @Get() @HttpCode(200) read(): string { return "ok"; } }
+    if (process.env.ENABLE) createExpressServer({ controllers: [Items] });
+    createExpressServer({ controllers: [Items], ...{ routePrefix: "/overridden" } });
+    createExpressServer({ controllers: ["controllers/*.js"] });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(d => d.code)).toEqual(expect.arrayContaining([
+    "conditional_registration_unresolved", "registration_options_unresolved", "controller_reference_unresolved",
+  ]));
+  expect(result.status).toBe("partial");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("other runtime options remain visible beside an established route", async () => {
+  const { adapter } = await service({ "app.ts": `
+    import { createKoaServer, Controller, Get, HttpCode } from "routing-controllers";
+    @Controller("/items") class Items { @Get() @HttpCode(200) read(): string { return "ok"; } }
+    createKoaServer({ controllers: [Items], defaults: { nullResultCode: 404 } });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/items"]);
+  expect(result.diagnostics.map(d => d.code)).toContain("registration_option_unsupported");
+  expect(result.status).toBe("partial");
+});
+
 test("unsupported local constructs are diagnosed without dropping a literal sibling", async () => {
   const { adapter } = await service({ "controller.ts": `
-    import { Controller, Get, QueryParams, Res } from "routing-controllers";
+    import { Controller, Get, QueryParams, Res, createExpressServer } from "routing-controllers";
     const computed = "/dynamic";
     @Controller() class Example {
       @Get("/") root() { return "ok"; }
       @Get(computed) dynamic() { return "hidden"; }
       @Get("/passthrough") passthrough(@QueryParams() query: unknown, @Res() response: unknown): string { return "manual"; }
     }
+    createExpressServer({ controllers: [Example] });
   ` });
   const result = await adapter.analyze(request());
   expect(result.endpoints.map(e => e.application_path)).toEqual(["/", "/passthrough"]);

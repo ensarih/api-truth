@@ -148,6 +148,29 @@ test("empty or unresolved imports cannot report complete coverage", async () => 
   expect(result.diagnostics.map(d => d.code)).toContain("import_unresolved");
 });
 
+test("non-source configuration changes invalidate the Express analyzer fingerprint", async () => {
+  const { root, adapter } = await service({
+    "app.ts": 'import express from "express"; const app = express(); app.get("/items", (_req,res)=>res.status(200).end());',
+    "routing.json": '{"prefix":"/v1"}',
+  });
+  const before = await adapter.analyze(request());
+  await writeFile(join(root, "routing.json"), '{"prefix":"/v2"}');
+  const after = await adapter.analyze(request());
+  expect(before.source.source_digest).not.toBe(after.source.source_digest);
+  expect(before.reproducibility_fingerprint).not.toBe(after.reproducibility_fingerprint);
+  expect(before.endpoints.map(endpoint => endpoint.identity.route_key))
+    .toEqual(after.endpoints.map(endpoint => endpoint.identity.route_key));
+  expect(after.diagnostics.map(item => item.code)).not.toContain("source_syntax_unsupported");
+});
+
+test("malformed UTF-8 in affecting configuration is rejected", async () => {
+  const { root, adapter } = await service({
+    "app.ts": 'import express from "express"; const app = express(); app.get("/items", (_req,res)=>res.status(200).end());',
+  });
+  await writeFile(join(root, "routing.json"), Buffer.from([0xff]));
+  await expect(adapter.analyze(request())).rejects.toThrow("Source boundary or input limit rejected");
+});
+
 test("dynamic mount prefixes do not leak guessed application paths", async () => {
   const { adapter } = await service({ "app.ts": 'import express, {Router} from "express"; const app=express(); const r=Router(); r.get("/hidden", (req,res)=>res.json({})); app.use(process.env.PREFIX,r);' });
   const result = await adapter.analyze(request());

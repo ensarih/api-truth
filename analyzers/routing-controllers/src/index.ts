@@ -6,8 +6,8 @@ import {
 } from "../../../packages/ir/src/index.js";
 import { digestSources, hash, inside, readSources } from "./source.js";
 
-/** Literal legacy TypeScript decorators from routing-controllers; registration remains unverified. */
-export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.1.0" };
+/** Literal legacy decorators with directly resolved routing-controllers registration. */
+export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.2.0" };
 const literal = (node: ts.Node | undefined) => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const decorators = (node: ts.Node) => ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
@@ -47,7 +47,7 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 function extract(files: Map<string, string>, root: string, request: AnalyzerRequest, budget: () => void): AnalyzerResult {
   const effectiveMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
   const fingerprint = hash(JSON.stringify({ request: { ...request, extraction_mode: effectiveMode }, analyzer: ANALYZER,
-    compiler: ts.version, profile: "literal-legacy-1" }));
+    compiler: ts.version, profile: "registered-legacy-2" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -120,31 +120,102 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     getDefaultLibFileName: () => "", writeFile: () => { throw new Error("Read-only analyzer"); },
     getCurrentDirectory: () => root, getDirectories: () => [], fileExists: path => files.has(path), readFile: path => files.get(path),
     getCanonicalFileName: path => path, useCaseSensitiveFileNames: () => true, getNewLine: () => "\n",
-    resolveModuleNames: names => names.map(() => undefined),
+    resolveModuleNames: (names, containing) => names.map(name => {
+      if (!name.startsWith(".")) return undefined;
+      const base = resolve(containing, "..", name);
+      if (!inside(root, base)) return undefined;
+      const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mts`, `${base}.cts`,
+        `${base}/index.ts`, `${base}/index.js`, base.replace(/\.js$/, ".ts")];
+      const path = candidates.find(candidate => files.has(candidate) && /\.(?:[cm]?[jt]s|tsx|jsx)$/.test(candidate));
+      if (!path) return undefined;
+      const extension = path.endsWith(".tsx") ? ts.Extension.Tsx : path.endsWith(".js") ? ts.Extension.Js : ts.Extension.Ts;
+      return { resolvedFileName: path, extension };
+    }),
   };
-  const program = ts.createProgram(sourcePaths, { noLib: true, noResolve: true, allowJs: true, target: ts.ScriptTarget.ESNext,
-    module: ts.ModuleKind.ESNext, experimentalDecorators: true }, host);
+  const program = ts.createProgram(sourcePaths, { noLib: true, noResolve: false, allowJs: true, target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Node10,
+    experimentalDecorators: true }, host);
   const checker = program.getTypeChecker();
   const sources = sourcePaths.map(path => program.getSourceFile(path)!).filter(Boolean);
+  const frameworkImport = (identifier: ts.Identifier): { kind: "named" | "namespace"; name: string } | undefined => {
+    const symbol = checker.getSymbolAtLocation(identifier);
+    if (symbol?.declarations?.length !== 1) return undefined;
+    const declaration = symbol.declarations[0]!;
+    if (ts.isImportSpecifier(declaration) && ts.isImportDeclaration(declaration.parent.parent.parent)
+      && literal(declaration.parent.parent.parent.moduleSpecifier) === "routing-controllers")
+      return { kind: "named", name: (declaration.propertyName ?? declaration.name).text };
+    if (ts.isNamespaceImport(declaration) && ts.isImportDeclaration(declaration.parent.parent)
+      && literal(declaration.parent.parent.moduleSpecifier) === "routing-controllers")
+      return { kind: "namespace", name: declaration.name.text };
+    return undefined;
+  };
+  const frameworkFunction = (target: ts.Expression): string | undefined => {
+    if (ts.isIdentifier(target)) {
+      const imported = frameworkImport(target);
+      return imported?.kind === "named" ? imported.name : undefined;
+    }
+    if (ts.isPropertyAccessExpression(target) && ts.isIdentifier(target.expression)
+      && frameworkImport(target.expression)?.kind === "namespace") return target.name.text;
+    return undefined;
+  };
+  type Registration = { prefix: string; call: ts.CallExpression };
+  const registrations = new Map<ts.ClassDeclaration, Registration[]>();
+  let setupCount = 0;
+  let firstSetup: ts.CallExpression | undefined;
+  for (const source of sources) walk(source, node => {
+    if (!ts.isCallExpression(node)) return;
+    const functionName = frameworkFunction(node.expression);
+    if (!["createExpressServer", "useExpressServer", "createKoaServer", "useKoaServer"].includes(functionName ?? "")) return;
+    setupCount++;
+    firstSetup ??= node;
+    for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
+      if (ts.isFunctionLike(parent) || ts.isIfStatement(parent) || ts.isIterationStatement(parent, false)
+        || ts.isSwitchStatement(parent) || ts.isConditionalExpression(parent)
+        || (ts.isBinaryExpression(parent) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(parent.operatorToken.kind))) {
+        diagnostic("conditional_registration_unresolved", node); return;
+      }
+    }
+    const optionIndex = functionName!.startsWith("use") ? 1 : 0;
+    const options = node.arguments[optionIndex];
+    if (!options || !ts.isObjectLiteralExpression(options)) { diagnostic("registration_options_unresolved", node); return; }
+    if (options.properties.some(property => ts.isSpreadAssignment(property) || ts.isComputedPropertyName(property.name))) {
+      diagnostic("registration_options_unresolved", options); return;
+    }
+    for (const property of options.properties) {
+      const key = property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+        ? property.name.text : undefined;
+      if (key && !["controllers", "routePrefix"].includes(key)) diagnostic("registration_option_unsupported", property);
+    }
+    const property = (name: string) => options.properties.filter(item =>
+      ts.isPropertyAssignment(item) && (ts.isIdentifier(item.name) || ts.isStringLiteral(item.name)) && item.name.text === name);
+    const prefixProperties = property("routePrefix");
+    if (prefixProperties.length > 1) { diagnostic("route_prefix_ambiguous", node); return; }
+    const prefix = prefixProperties.length ? literal((prefixProperties[0] as ts.PropertyAssignment).initializer) : "";
+    if (prefix === undefined) { diagnostic("route_prefix_unresolved", prefixProperties[0]!); return; }
+    const controllerProperties = property("controllers");
+    if (controllerProperties.length !== 1) { diagnostic("controller_list_unresolved", node); return; }
+    const selection = (controllerProperties[0] as ts.PropertyAssignment).initializer;
+    if (!ts.isArrayLiteralExpression(selection)) { diagnostic("controller_list_unresolved", selection); return; }
+    for (const entry of selection.elements) {
+      if (!ts.isIdentifier(entry)) { diagnostic("controller_reference_unresolved", entry); continue; }
+      let symbol = checker.getSymbolAtLocation(entry);
+      if (symbol?.flags && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+      const declarations = symbol?.declarations ?? [];
+      const classes = declarations.filter(ts.isClassDeclaration);
+      if (declarations.length !== 1 || classes.length !== 1 || !sourcePaths.includes(classes[0]!.getSourceFile().fileName)) {
+        diagnostic("controller_reference_unresolved", entry); continue;
+      }
+      const refs = registrations.get(classes[0]!) ?? [];
+      refs.push({ prefix, call: node });
+      registrations.set(classes[0]!, refs);
+    }
+  });
   let controllerCount = 0;
   for (const source of sources) {
     budget();
     for (const statement of source.statements) if (ts.isImportDeclaration(statement)
       && literal(statement.moduleSpecifier) === "routing-controllers" && statement.importClause?.name)
       diagnostic("default_framework_import_unsupported", statement);
-    const frameworkImport = (identifier: ts.Identifier): { kind: "named" | "namespace"; name: string } | undefined => {
-      const symbol = checker.getSymbolAtLocation(identifier);
-      // A merged/conflicting symbol cannot prove which runtime value the decorator uses.
-      if (symbol?.declarations?.length !== 1) return undefined;
-      const declaration = symbol.declarations[0]!;
-      if (ts.isImportSpecifier(declaration) && ts.isImportDeclaration(declaration.parent.parent.parent)
-        && literal(declaration.parent.parent.parent.moduleSpecifier) === "routing-controllers")
-        return { kind: "named", name: (declaration.propertyName ?? declaration.name).text };
-      if (ts.isNamespaceImport(declaration) && ts.isImportDeclaration(declaration.parent.parent)
-        && literal(declaration.parent.parent.moduleSpecifier) === "routing-controllers")
-        return { kind: "namespace", name: declaration.name.text };
-      return undefined;
-    };
     const frameworkCall = (decorator: ts.Decorator): { name: string; call?: ts.CallExpression } | undefined => {
       const expression = decorator.expression;
       const target = ts.isCallExpression(expression) ? expression.expression : expression;
@@ -170,6 +241,9 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         continue;
       }
       controllerCount++;
+      const registration = registrations.get(statement) ?? [];
+      if (!registration.length) continue;
+      if (registration.length !== 1) { diagnostic("controller_registration_ambiguous", statement); continue; }
       const controller = controllers[0]!;
       if (controllers.length > 1) { diagnostic("multiple_controller_decorators", statement); continue; }
       if (statement.heritageClauses?.length) diagnostic("controller_inheritance_unresolved", statement);
@@ -200,7 +274,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         if (prefix.includes("*") || suffix.includes("*") || /[?+()]/.test(`${prefix}${suffix}`)) {
           diagnostic("route_pattern_unsupported", route.decorator); continue;
         }
-        const path = `/${prefix}/${suffix}`.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
+        const path = `/${registration[0]!.prefix}/${prefix}/${suffix}`.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
         let identity: Endpoint["identity"];
         try { identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: request.source.service_id,
           method: route.match.name, application_path: path }); }
@@ -209,13 +283,15 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         if (result.endpoints.some(endpoint => endpoint.endpoint_id === endpointId)) { diagnostic("conflicting_route_declarations", route.decorator); continue; }
         const routeEv = evidence(route.decorator, "deterministic_analysis", endpointId);
         const controllerEv = evidence(controller.decorator, "deterministic_analysis", endpointId);
+        const registrationEv = evidence(registration[0]!.call, "deterministic_analysis", endpointId);
         const endpoint: Endpoint = { endpoint_id: endpointId, identity, application_path: path, parameters: [],
           request_bodies: [], responses: [{ status: { kind: "unknown", reason: "No supported status declaration" }, content: [] }],
-          security: { state: "unknown", alternatives: [] }, evidence_ids: [controllerEv, routeEv] };
+          security: { state: "unknown", alternatives: [] }, evidence_ids: [controllerEv, routeEv, registrationEv] };
         result.endpoints.push(endpoint);
         result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: controllerEv }, evidence_ids: [controllerEv] });
+        result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: registrationEv }, evidence_ids: [registrationEv] });
         claim(endpoint, "route.declaration", { method: identity.method, path, controller: statement.name?.text ?? "anonymous", action: member.name.text }, route.decorator);
-        claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, profile: "literal-legacy-1", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
+        claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, profile: "registered-legacy-2", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
         if (statement.heritageClauses?.length) diagnostic("inherited_actions_unresolved", statement, endpoint);
         if (member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.StaticKeyword) || !member.body)
           diagnostic("action_implementation_unresolved", member, endpoint);
@@ -307,8 +383,9 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         diagnostic("relative_reexport_unresolved", node);
     });
   }
-  if (controllerCount) diagnostic("controller_registration_unverified", sources[0]!);
-  else if (sources.length) diagnostic("no_supported_controller", sources[0]!);
+  if (firstSetup) diagnostic("startup_entrypoint_unverified", firstSetup);
+  if (controllerCount && !setupCount) diagnostic("controller_registration_unverified", sources[0]!);
+  else if (!controllerCount && sources.length) diagnostic("no_supported_controller", sources[0]!);
   result.endpoints.sort((a, b) => a.identity.route_key.localeCompare(b.identity.route_key));
   result.evidence.sort((a, b) => a.evidence_id.localeCompare(b.evidence_id));
   result.claims.sort((a, b) => a.claim_id.localeCompare(b.claim_id));

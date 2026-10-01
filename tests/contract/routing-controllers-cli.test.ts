@@ -15,11 +15,12 @@ test("local routing-controllers command emits D03 JSON without executing source"
     await writeFile(sentinel, "untouched");
     await writeFile(join(root, "controller.ts"), `
       import { writeFileSync } from "node:fs";
-      import { JsonController, Get, Param } from "routing-controllers";
+      import { JsonController, Get, Param, createExpressServer } from "routing-controllers";
       writeFileSync(${JSON.stringify(sentinel)}, "EXECUTED");
       @JsonController("/api") class Orders {
         @Get("/orders/:id") find(@Param("id") id: string): string { return id; }
       }
+      createExpressServer({ controllers: [Orders] });
     `);
     const args = ["--source", root, "--service", "orders", "--revision", "a".repeat(40)];
     const output = run(args);
@@ -31,7 +32,7 @@ test("local routing-controllers command emits D03 JSON without executing source"
     expect(result.endpoints[0]).toMatchObject({ application_path: "/api/orders/:id", identity: { method: "GET" },
       responses: [{ status: { kind: "unknown" }, content: [{ media_type: "application/json" }] }] });
     expect(result.status).toBe("partial");
-    expect(output.stderr).toContain("controller_registration_unverified");
+    expect(output.stderr).toContain("response_status_unknown");
     expect(await readFile(sentinel, "utf8")).toBe("untouched");
     const npmOutput = spawnSync("npm", ["run", "--silent", "extract:routing-controllers", "--", ...args],
       { encoding: "utf8", timeout: 30000, cwd: resolve(".") });
@@ -51,4 +52,16 @@ test("local routing-controllers command rejects bad arguments without leaking pa
     expect(output.stderr).not.toContain(source);
     expect(output.stderr).not.toContain("private-secret");
   }
+}, 30000);
+
+test("documented synthetic service command emits its registered routes", () => {
+  const output = run(["--source", resolve("fixtures/nodejs/routing-controllers/orders/src"),
+    "--service", "orders", "--revision", "a".repeat(40)]);
+  expect(output.status).toBe(0);
+  const result = JSON.parse(output.stdout);
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints.map((endpoint: { application_path: string }) => endpoint.application_path)).toEqual([
+    "/api/orders/:id", "/api/orders",
+  ]);
+  expect(result.diagnostics.map((diagnostic: { code: string }) => diagnostic.code)).toContain("startup_entrypoint_unverified");
 }, 30000);

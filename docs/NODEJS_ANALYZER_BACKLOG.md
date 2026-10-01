@@ -1,11 +1,12 @@
 # Node.js analyzer expansion backlog
 
 **Status:** active analyzer priority, 2026-10-01
-**Current implementation:** `typescript-express@0.3.0` covers a bounded static
+**Current implementation:** `typescript-express@0.4.0` covers a bounded static
 Express subset. `nodejs-swagger2-document@0.2.0` reads selected Swagger 2 JSON
 declarations but cannot establish middleware mounting or handler binding.
-`nodejs-routing-controllers@0.1.0` extracts a bounded literal decorator subset
-but does not verify controller registration. OpenAPI 3 and other decorator
+`nodejs-routing-controllers@0.2.0` extracts a bounded literal decorator subset
+and binds direct controller registrations, but cannot prove the startup entry
+point. OpenAPI 3 and other decorator
 frameworks are not currently discovered.
 
 This backlog records the work needed to cover those services without weakening
@@ -21,7 +22,7 @@ repository.
 | Swagger 2 JSON declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions, and D07 update/difference engine |
 | Swagger 2 routes loaded by `swagger-express-mw` | Missing runtime binding | Document-only profile and its bounded JSON parser |
 | OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
-| routing-controllers literal decorators | Initial profile; controller registration unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
+| routing-controllers literal decorators | Initial profile; direct registrations resolved, startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
 | Mixed Express/spec/decorator services | Detection and merge policy missing | D03 identity/provenance and D07 deletion safety provide constraints for a future composite design |
 
@@ -151,7 +152,7 @@ reaches every applicable endpoint through D07.
 **Priority:** P0 when dominant in the pilot, otherwise P1
 
 **Profile choice:** `routing-controllers` is the first family, based on the
-project owner's priority. The `0.1.0` literal profile is an initial slice,
+project owner's priority. The `0.2.0` literal profile is an initial slice,
 not completion of this gate.
 
 - Resolve decorators by import provenance, including aliases and namespaces;

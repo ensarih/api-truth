@@ -12,6 +12,7 @@ export const digestSources = (files: Map<string, string>, root: string) =>
 
 export async function readSources(projectRoot: string, serviceRoot: string, maxFiles: number, budget: () => void) {
   const files = new Map<string, string>();
+  let totalBytes = 0;
   try {
     const project = await realpath(projectRoot);
     const root = await realpath(resolve(projectRoot, serviceRoot));
@@ -23,10 +24,12 @@ export async function readSources(projectRoot: string, serviceRoot: string, maxF
         if (entry.isSymbolicLink()) throw new Error("boundary");
         const path = join(directory, entry.name);
         if (entry.isDirectory()) await collect(path);
-        else if (/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/.test(entry.name)) {
+        else if (/\.(?:[cm]?ts|[cm]?js|tsx|jsx|json|ya?ml)$/.test(entry.name)) {
           if (files.size >= maxFiles) throw new Error("limit");
-          const text = await readFile(path, "utf8");
-          if (text.length > 2_000_000) throw new Error("limit");
+          const buffer = await readFile(path);
+          totalBytes += buffer.byteLength;
+          if (buffer.byteLength > 2_000_000 || totalBytes > 10_000_000) throw new Error("limit");
+          const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
           files.set(path, text);
         }
       }

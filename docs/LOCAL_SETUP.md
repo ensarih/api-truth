@@ -166,7 +166,7 @@ to the repository.
 
 ## 6. Supported source scope and known gaps
 
-The executable Express analyzer is `typescript-express@0.3.0` on TypeScript 5.9.3.
+The executable Express analyzer is `typescript-express@0.4.0` on TypeScript 5.9.3.
 Its checked-in baseline supports literal Express app/router registrations for
 `get`, `post`, `put`, `patch`, `delete`, `options`, and `head`, including exact
 literal `route(path).method(...)` chains on known apps/routers; literal mount
@@ -184,7 +184,7 @@ can also be tried against its synthetic fixture:
 npm run --silent extract:routing-controllers -- --source fixtures/nodejs/routing-controllers/orders/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
 
-Its current output is partial because controller registration is not verified.
+Its current output is partial because the startup entry point is not verified.
 
 Java/Spring and additional Node.js frameworks are not supported by this
 adapter. Runtime-log examples, a production CI/deployment connector, and a

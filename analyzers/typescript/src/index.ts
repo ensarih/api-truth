@@ -5,7 +5,7 @@ import { parseAnalyzerRequest, parseAnalyzerResult, deriveEndpointIdentity,
   type AnalyzerRequest, type AnalyzerResult, type Endpoint, type Evidence, type ApiSchema, type Claim,
 } from "../../../packages/ir/src/index.js";
 
-export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.3.0" };
+export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.4.0" };
 const walk = (node: ts.Node, visit: (node: ts.Node) => void) => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
 const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 
@@ -59,7 +59,8 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     coverage: { status: "complete", analyzed_roots: [request.source.service_root], diagnostic_ids: [] },
     evidence: [], schemas: {}, endpoints: [], claims: [], dependencies: [], diagnostics: [], reproducibility_fingerprint: `sha256:${fingerprint}`,
   };
-  const sources = new Map([...files].map(([path, text]) => [path, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)]));
+  const sources = new Map([...files].filter(([path]) => /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/.test(path))
+    .map(([path, text]) => [path, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)]));
   const compilerOptions: ts.CompilerOptions = { noLib: true, noResolve: false, allowJs: true, strictNullChecks: true, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext };
   const host: ts.CompilerHost = {
     getSourceFile: path => sources.get(path), getDefaultLibFileName: () => "", writeFile: () => { throw new Error("Read-only analyzer"); },
@@ -72,7 +73,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       return candidate ? { resolvedFileName: candidate, extension: candidate.endsWith(".ts") ? ts.Extension.Ts : ts.Extension.Js } : undefined;
     }),
   };
-  const program = ts.createProgram([...files.keys()], compilerOptions, host);
+  const program = ts.createProgram([...sources.keys()], compilerOptions, host);
   const checker = program.getTypeChecker();
   const symbol = (node: ts.Node): ts.Symbol | undefined => {
     let sym = checker.getSymbolAtLocation(node);
