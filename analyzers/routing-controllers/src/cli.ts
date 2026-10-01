@@ -4,7 +4,7 @@ import { ANALYZER, createAnalyzer } from "./index.js";
 
 export async function runCli(args: string[]): Promise<void> {
   const values = new Map<string, string>();
-  const allowed = new Set(["--source", "--service", "--revision", "--ir-version"]);
+  const allowed = new Set(["--source", "--service", "--revision", "--ir-version", "--profile"]);
   for (let index = 0; index < args.length; index += 2) {
     const name = args[index]; const value = args[index + 1];
     if (!name || !allowed.has(name) || values.has(name) || !value || value.startsWith("--"))
@@ -17,7 +17,8 @@ export async function runCli(args: string[]): Promise<void> {
     request_id: "local-routing-controllers-extraction", analyzer: ANALYZER,
     source: { repository_id: "local", service_id: values.get("--service"), service_root: ".",
       immutable_revision: values.get("--revision"), source_digest: "pending", access_label: "local" },
-    resolution_inputs: [{ kind: "source_tree", path: ".", digest: "pending" }],
+    resolution_inputs: [{ kind: "source_tree", path: ".", digest: "pending" },
+      ...(values.has("--profile") ? [{ kind: "type_manifest", path: values.get("--profile"), digest: "pending" }] : [])],
     prior_dependencies: [], changed_paths: [], extraction_mode: "baseline",
     limits: { timeout_ms: 30000, max_files: 1000, max_output_bytes: 10000000 },
     execution_policy: { network_access: false, side_effects: "none" },

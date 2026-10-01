@@ -5,9 +5,10 @@ import {
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
 import { digestSources, hash, inside, readSources } from "./source.js";
+import { parseRoutingProfile, type RoutingProfile } from "./profile.js";
 
 /** Literal legacy decorators with directly resolved routing-controllers registration. */
-export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.4.0" };
+export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.5.0" };
 const literal = (node: ts.Node | undefined) => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const decorators = (node: ts.Node) => ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
@@ -20,19 +21,34 @@ export function createAnalyzer(options: { projectRoot: string }) {
     if (request.analyzer.analyzer_id !== ANALYZER.analyzer_id || request.analyzer.analyzer_version !== ANALYZER.analyzer_version)
       throw new Error("Unsupported analyzer version");
     const selectedRoot = resolve(options.projectRoot, request.source.service_root);
-    if (request.resolution_inputs.length !== 1 || request.resolution_inputs[0]?.kind !== "source_tree"
+    const profileInput = request.resolution_inputs[1];
+    if (request.resolution_inputs.length < 1 || request.resolution_inputs.length > 2
+      || request.resolution_inputs[0]?.kind !== "source_tree"
       || request.resolution_inputs[0].path !== request.source.service_root
+      || (profileInput !== undefined && (profileInput.kind !== "type_manifest" || !profileInput.path.endsWith(".json")
+        || !inside(selectedRoot, resolve(options.projectRoot, profileInput.path))))
       || request.changed_paths.some(path => !inside(selectedRoot, resolve(options.projectRoot, path))))
       throw new Error("Unsupported resolution inputs or changed paths");
     const started = Date.now();
     const budget = () => { if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded"); };
     const { files, root } = await readSources(options.projectRoot, request.source.service_root, request.limits.max_files, budget);
     const digest = digestSources(files, root);
+    const profilePath = profileInput === undefined ? undefined
+      : resolve(root, relative(selectedRoot, resolve(options.projectRoot, profileInput.path)));
+    const profileText = profilePath === undefined ? undefined : files.get(profilePath);
+    if (profilePath !== undefined && profileText === undefined) throw new Error("Invalid routing profile");
+    const profileDigest = profilePath === undefined ? undefined
+      : `sha256:${hash(`${relative(root, profilePath).replaceAll("\\", "/")}\0${profileText}`)}`;
     if ([request.source.source_digest, request.resolution_inputs[0].digest].some(value =>
-      /^sha256:[a-f0-9]{64}$/i.test(value) && value.toLowerCase() !== digest)) throw new Error("Source digest mismatch");
+      /^sha256:[a-f0-9]{64}$/i.test(value) && value.toLowerCase() !== digest)
+      || profileInput && profileDigest && /^sha256:[a-f0-9]{64}$/i.test(profileInput.digest)
+        && profileInput.digest.toLowerCase() !== profileDigest) throw new Error("Source digest mismatch");
+    const profile = profilePath === undefined ? undefined
+      : parseRoutingProfile(relative(root, profilePath).replaceAll("\\", "/"), profileText!);
     request = { ...request, source: { ...request.source, source_digest: digest },
-      resolution_inputs: [{ kind: "source_tree", path: request.source.service_root, digest }] };
-    const result = extract(files, root, request, budget);
+      resolution_inputs: [{ kind: "source_tree", path: request.source.service_root, digest },
+        ...(profileInput && profileDigest ? [{ kind: "type_manifest" as const, path: profileInput.path, digest: profileDigest }] : [])] };
+    const result = extract(files, root, request, budget, profile);
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
     if (!validated.ok) throw new Error("Analyzer produced invalid result");
@@ -44,10 +60,11 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
   return createAnalyzer({ projectRoot: process.cwd() }).analyze(request);
 }
 
-function extract(files: Map<string, string>, root: string, request: AnalyzerRequest, budget: () => void): AnalyzerResult {
+function extract(files: Map<string, string>, root: string, request: AnalyzerRequest, budget: () => void,
+  profile?: RoutingProfile): AnalyzerResult {
   const effectiveMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
   const fingerprint = hash(JSON.stringify({ request: { ...request, extraction_mode: effectiveMode }, analyzer: ANALYZER,
-    compiler: ts.version, profile: "registered-legacy-4" }));
+    compiler: ts.version, profile: "registered-legacy-5" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -71,6 +88,19 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     });
     return id;
   };
+  const profileEvidence = (pointer: "/route_prefix" | "/decorator_modules", endpointId?: string): string => {
+    if (!profile) throw new Error("Missing routing profile");
+    const id = `ev-${hash(`${profile.path}:${pointer}:${endpointId ?? ""}:owner_assertion`).slice(0, 24)}`;
+    if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
+      evidence_id: id, source: { kind: "analysis_profile", source_id: request.source.repository_id },
+      source_version: request.source.immutable_revision, location: { path: profile.path, pointer },
+      method: "owner_assertion", scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+        revision: request.source.immutable_revision, ...(endpointId ? { endpoint_id: endpointId } : {}) },
+      limitations: ["configured mapping; runtime decorator semantics and controller registration unverified"],
+      access_label: request.source.access_label,
+    });
+    return id;
+  };
   const diagnostic = (code: string, node: ts.Node, endpoint?: Endpoint) => {
     const ev = evidence(node, "deterministic_analysis", endpoint?.endpoint_id);
     const id = `diag-${hash(`${code}:${ev}`).slice(0, 24)}`;
@@ -80,11 +110,12 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     });
   };
   const claim = (endpoint: Endpoint, predicate: string, value: unknown, node: ts.Node,
-    verification: "declared" | "established_by_analysis" = "declared") => {
+    verification: "declared" | "established_by_analysis" | "owner_asserted" = "declared",
+    extraEvidenceIds: string[] = []) => {
     const ev = evidence(node, verification === "declared" ? "type_declaration" : "deterministic_analysis", endpoint.endpoint_id);
     result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:${predicate}:${ev}:${JSON.stringify(value)}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate,
-      value: value as any, verification, evidence_ids: [ev] });
+      value: value as any, verification, evidence_ids: [ev, ...extraEvidenceIds] });
   };
   const schema = (type: ts.TypeNode | undefined, owner: ts.Node, endpoint: Endpoint): ApiSchema => {
     if (!type) return {};
@@ -137,25 +168,28 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     experimentalDecorators: true }, host);
   const checker = program.getTypeChecker();
   const sources = sourcePaths.map(path => program.getSourceFile(path)!).filter(Boolean);
-  const frameworkImport = (identifier: ts.Identifier): { kind: "named" | "namespace"; name: string } | undefined => {
+  const allowedDecoratorModules = new Set(["routing-controllers", ...(profile?.decoratorModules ?? [])]);
+  const frameworkImport = (identifier: ts.Identifier): { kind: "named" | "namespace"; name: string; module: string } | undefined => {
     const symbol = checker.getSymbolAtLocation(identifier);
     if (symbol?.declarations?.length !== 1) return undefined;
     const declaration = symbol.declarations[0]!;
     if (ts.isImportSpecifier(declaration) && ts.isImportDeclaration(declaration.parent.parent.parent)
-      && literal(declaration.parent.parent.parent.moduleSpecifier) === "routing-controllers")
-      return { kind: "named", name: (declaration.propertyName ?? declaration.name).text };
+      && allowedDecoratorModules.has(literal(declaration.parent.parent.parent.moduleSpecifier) ?? ""))
+      return { kind: "named", name: (declaration.propertyName ?? declaration.name).text,
+        module: literal(declaration.parent.parent.parent.moduleSpecifier)! };
     if (ts.isNamespaceImport(declaration) && ts.isImportDeclaration(declaration.parent.parent)
-      && literal(declaration.parent.parent.moduleSpecifier) === "routing-controllers")
-      return { kind: "namespace", name: declaration.name.text };
+      && allowedDecoratorModules.has(literal(declaration.parent.parent.moduleSpecifier) ?? ""))
+      return { kind: "namespace", name: declaration.name.text, module: literal(declaration.parent.parent.moduleSpecifier)! };
     return undefined;
   };
   const frameworkFunction = (target: ts.Expression): string | undefined => {
     if (ts.isIdentifier(target)) {
       const imported = frameworkImport(target);
-      return imported?.kind === "named" ? imported.name : undefined;
+      return imported?.kind === "named" && imported.module === "routing-controllers" ? imported.name : undefined;
     }
     if (ts.isPropertyAccessExpression(target) && ts.isIdentifier(target.expression)
-      && frameworkImport(target.expression)?.kind === "namespace") return target.name.text;
+      && frameworkImport(target.expression)?.kind === "namespace"
+      && frameworkImport(target.expression)?.module === "routing-controllers") return target.name.text;
     return undefined;
   };
   type Registration = { prefix: string; call: ts.CallExpression };
@@ -214,22 +248,24 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
   for (const source of sources) {
     budget();
     for (const statement of source.statements) if (ts.isImportDeclaration(statement)
-      && literal(statement.moduleSpecifier) === "routing-controllers" && statement.importClause?.name)
+      && allowedDecoratorModules.has(literal(statement.moduleSpecifier) ?? "") && statement.importClause?.name)
       diagnostic("default_framework_import_unsupported", statement);
-    const frameworkCall = (decorator: ts.Decorator): { name: string; call?: ts.CallExpression } | undefined => {
+    const frameworkCall = (decorator: ts.Decorator): { name: string; module: string; call?: ts.CallExpression } | undefined => {
       const expression = decorator.expression;
       const target = ts.isCallExpression(expression) ? expression.expression : expression;
       if (ts.isIdentifier(target)) {
         const imported = frameworkImport(target);
-        if (imported?.kind === "named") return { name: imported.name, ...(ts.isCallExpression(expression) ? { call: expression } : {}) };
+        if (imported?.kind === "named") return { name: imported.name, module: imported.module,
+          ...(ts.isCallExpression(expression) ? { call: expression } : {}) };
       }
       if (ts.isPropertyAccessExpression(target) && ts.isIdentifier(target.expression)
         && frameworkImport(target.expression)?.kind === "namespace")
-        return { name: target.name.text, ...(ts.isCallExpression(expression) ? { call: expression } : {}) };
+        return { name: target.name.text, module: frameworkImport(target.expression)!.module,
+          ...(ts.isCallExpression(expression) ? { call: expression } : {}) };
       return undefined;
     };
     const matches = (node: ts.Node) => decorators(node).map(decorator => ({ decorator, match: frameworkCall(decorator) }))
-      .filter((entry): entry is { decorator: ts.Decorator; match: { name: string; call?: ts.CallExpression } } => !!entry.match);
+      .filter((entry): entry is { decorator: ts.Decorator; match: { name: string; module: string; call?: ts.CallExpression } } => !!entry.match);
     for (const statement of source.statements) {
       if (!ts.isClassDeclaration(statement)) continue;
       const classDecorators = matches(statement);
@@ -242,10 +278,17 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       }
       controllerCount++;
       const registration = registrations.get(statement) ?? [];
-      if (!registration.length) continue;
-      if (registration.length !== 1) { diagnostic("controller_registration_ambiguous", statement); continue; }
+      const declarationOnly = !registration.length && !!profile;
+      if (!registration.length && !declarationOnly) continue;
+      if (registration.length > 1) { diagnostic("controller_registration_ambiguous", statement); continue; }
       const controller = controllers[0]!;
       if (controllers.length > 1) { diagnostic("multiple_controller_decorators", statement); continue; }
+      const classWrapperSemantics = controller.match.module !== "routing-controllers";
+      if (declarationOnly) {
+        diagnostic("controller_registration_unverified", statement);
+        diagnostic("startup_entrypoint_unverified", statement);
+        diagnostic("configured_route_prefix_unverified", statement);
+      }
       if (statement.heritageClauses?.length) diagnostic("controller_inheritance_unresolved", statement);
       let prefix = "";
       if (controller.match.call?.arguments.length) {
@@ -267,6 +310,8 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         }
         if (routes.length > 1 || !member.name || !ts.isIdentifier(member.name)) { diagnostic("ambiguous_method_declaration", member); continue; }
         const route = routes[0]!;
+        const wrapperSemantics = classWrapperSemantics || methodDecorators.some(entry => entry.match.module !== "routing-controllers")
+          || member.parameters.some(parameter => matches(parameter).some(entry => entry.match.module !== "routing-controllers"));
         if (!route.match.call || route.match.call.arguments.length > 1) { diagnostic("route_decorator_unsupported", route.decorator); continue; }
         const routeArg = route.match.call.arguments[0];
         const suffix = routeArg === undefined ? "" : literal(routeArg);
@@ -274,7 +319,8 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         if (prefix.includes("*") || suffix.includes("*") || /[?+()]/.test(`${prefix}${suffix}`)) {
           diagnostic("route_pattern_unsupported", route.decorator); continue;
         }
-        const path = `/${registration[0]!.prefix}/${prefix}/${suffix}`.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
+        const path = `/${declarationOnly ? profile!.routePrefix : registration[0]!.prefix}/${prefix}/${suffix}`
+          .replace(/\/+/g, "/").replace(/\/$/, "") || "/";
         let identity: Endpoint["identity"];
         try { identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: request.source.service_id,
           method: route.match.name, application_path: path }); }
@@ -283,15 +329,25 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         if (result.endpoints.some(endpoint => endpoint.endpoint_id === endpointId)) { diagnostic("conflicting_route_declarations", route.decorator); continue; }
         const routeEv = evidence(route.decorator, "deterministic_analysis", endpointId);
         const controllerEv = evidence(controller.decorator, "deterministic_analysis", endpointId);
-        const registrationEv = evidence(registration[0]!.call, "deterministic_analysis", endpointId);
+        const bindingEv = declarationOnly ? profileEvidence("/route_prefix", endpointId)
+          : evidence(registration[0]!.call, "deterministic_analysis", endpointId);
+        const decoratorModuleEv = wrapperSemantics ? profileEvidence("/decorator_modules", endpointId) : undefined;
         const endpoint: Endpoint = { endpoint_id: endpointId, identity, application_path: path, parameters: [],
           request_bodies: [], responses: [{ status: { kind: "unknown", reason: "No supported status declaration" }, content: [] }],
-          security: { state: "unknown", alternatives: [] }, evidence_ids: [controllerEv, routeEv, registrationEv] };
+          security: { state: "unknown", alternatives: [] }, evidence_ids: [controllerEv, routeEv, bindingEv,
+            ...(decoratorModuleEv ? [decoratorModuleEv] : [])] };
         result.endpoints.push(endpoint);
+        if (wrapperSemantics) diagnostic("framework_semantics_owner_asserted", route.decorator, endpoint);
         result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: controllerEv }, evidence_ids: [controllerEv] });
-        result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: registrationEv }, evidence_ids: [registrationEv] });
-        claim(endpoint, "route.declaration", { method: identity.method, path, controller: statement.name?.text ?? "anonymous", action: member.name.text }, route.decorator);
-        claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, profile: "registered-legacy-4", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
+        result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: bindingEv }, evidence_ids: [bindingEv] });
+        if (decoratorModuleEv) result.dependencies.push({ from_endpoint_id: endpointId,
+          to: { kind: "evidence", id: decoratorModuleEv }, evidence_ids: [decoratorModuleEv] });
+        claim(endpoint, "route.declaration", { method: identity.method, path,
+          controller: statement.name?.text ?? "anonymous", action: member.name.text }, route.decorator,
+          declarationOnly || wrapperSemantics ? "owner_asserted" : "declared",
+          [bindingEv, ...(decoratorModuleEv ? [decoratorModuleEv] : [])]);
+        claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version,
+          profile: "registered-legacy-5", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
         if (statement.heritageClauses?.length) diagnostic("inherited_actions_unresolved", statement, endpoint);
         if (member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.StaticKeyword) || !member.body)
           diagnostic("action_implementation_unresolved", member, endpoint);

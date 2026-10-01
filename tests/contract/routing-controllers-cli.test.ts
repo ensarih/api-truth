@@ -65,3 +65,23 @@ test("documented synthetic service command emits its registered routes", () => {
   ]);
   expect(result.diagnostics.map((diagnostic: { code: string }) => diagnostic.code)).toContain("startup_entrypoint_unverified");
 }, 30000);
+
+test("local command accepts a contained declaration profile for wrapper imports", async () => {
+  const root = await mkdtemp(join(tmpdir(), "routing-controllers-profile-cli-"));
+  try {
+    await writeFile(join(root, "controller.ts"), `import { JsonController, Get } from "@example/route-kit";
+      @JsonController("/items") class Items { @Get() list(): string { return "ok"; } }`);
+    await writeFile(join(root, "api-truth.routing.json"), JSON.stringify({
+      profile_version: "1.0.0", decorator_modules: ["@example/route-kit"],
+      binding: "declarations_only", route_prefix: "/v1",
+    }));
+    const output = run(["--source", root, "--service", "items", "--revision", "a".repeat(40),
+      "--profile", "api-truth.routing.json"]);
+    expect(output.status).toBe(0);
+    const result = JSON.parse(output.stdout);
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(result.endpoints.map((endpoint: { application_path: string }) => endpoint.application_path)).toEqual(["/v1/items"]);
+    expect(result.diagnostics.map((diagnostic: { code: string }) => diagnostic.code))
+      .toContain("controller_registration_unverified");
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 30000);

@@ -24,6 +24,59 @@ function request(): AnalyzerRequest {
     execution_policy: { network_access: false, side_effects: "none" },
   };
 }
+function profileRequest(): AnalyzerRequest {
+  const input = request();
+  input.resolution_inputs.push({ kind: "type_manifest", path: "service/api-truth.routing.json", digest: "host-supplied-digest" });
+  return input;
+}
+
+test("opt-in declaration profile extracts wrapper decorators without asserting runtime mounting", async () => {
+  const files = {
+    "controller.ts": `import { JsonController as Route, Get, Param } from "@example/route-kit";
+      @Route("/orders") export class Orders {
+        @Get("/:id") read(@Param("id") id: string): string { return id; }
+      }`,
+    "api-truth.routing.json": JSON.stringify({ profile_version: "1.0.0", decorator_modules: ["@example/route-kit"],
+      binding: "declarations_only", route_prefix: "/api" }),
+  };
+  const { root, adapter } = await service(files);
+  const withoutProfile = await adapter.analyze(request());
+  expect(withoutProfile.endpoints).toEqual([]);
+  const result = await adapter.analyze(profileRequest());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints).toMatchObject([{ application_path: "/api/orders/:id", identity: { method: "GET" } }]);
+  expect(result.status).toBe("partial");
+  expect(result.diagnostics.map(item => item.code)).toEqual(expect.arrayContaining([
+    "controller_registration_unverified", "startup_entrypoint_unverified", "framework_semantics_owner_asserted",
+  ]));
+  expect(result.claims).toContainEqual(expect.objectContaining({ predicate: "route.declaration", verification: "owner_asserted" }));
+  expect(result.evidence).toContainEqual(expect.objectContaining({ method: "owner_assertion",
+    location: expect.objectContaining({ path: "api-truth.routing.json" }) }));
+  await writeFile(join(root, "service", "api-truth.routing.json"), JSON.stringify({
+    profile_version: "1.0.0", decorator_modules: ["@example/route-kit"],
+    binding: "declarations_only", route_prefix: "/v2",
+  }));
+  const changed = await adapter.analyze(profileRequest());
+  expect(changed.endpoints[0]?.application_path).toBe("/v2/orders/:id");
+  expect(changed.reproducibility_fingerprint).not.toBe(result.reproducibility_fingerprint);
+});
+
+test("declaration profile rejects unsupported fields and digest mismatches", async () => {
+  const { root, adapter } = await service({ "controller.ts": `import { Controller, Get } from "routing-controllers";
+    @Controller() class Orders { @Get() read(): string { return "ok"; } }`,
+  "api-truth.routing.json": JSON.stringify({ profile_version: "1.0.0", decorator_modules: [],
+    binding: "declarations_only", route_prefix: "", extra: true }) });
+  await expect(adapter.analyze(profileRequest())).rejects.toThrow("Invalid routing profile");
+  await writeFile(join(root, "service", "api-truth.routing.json"),
+    '{"profile_version":"1.0.0","decorator_modules":[],"binding":"declarations_only","route_prefix":"","route_prefix":"/v2"}');
+  await expect(adapter.analyze(profileRequest())).rejects.toThrow("Invalid routing profile");
+  await writeFile(join(root, "service", "api-truth.routing.json"), JSON.stringify({
+    profile_version: "1.0.0", decorator_modules: [], binding: "declarations_only", route_prefix: "",
+  }));
+  const input = profileRequest();
+  input.resolution_inputs[1]!.digest = `sha256:${"0".repeat(64)}`;
+  await expect(adapter.analyze(input)).rejects.toThrow("Source digest mismatch");
+});
 
 test("import aliases and namespace decorators produce D03-valid declared routes", async () => {
   const { adapter } = await service({ "controller.ts": `

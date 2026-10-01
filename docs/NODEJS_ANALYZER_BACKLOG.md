@@ -4,9 +4,11 @@
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
 Express subset. `nodejs-swagger2-document@0.3.0` reads selected Swagger 2 JSON/YAML
 declarations but cannot establish middleware mounting or handler binding.
-`nodejs-routing-controllers@0.4.0` extracts a bounded literal decorator subset
-and binds direct controller registrations, but cannot prove the startup entry
-point. OpenAPI 3 and other decorator
+`nodejs-routing-controllers@0.5.0` extracts a bounded literal decorator subset
+and binds direct controller registrations. An opt-in, source-bound declaration
+profile can identify wrapper imports and emit unregistered candidate routes with
+owner-asserted prefix evidence, but cannot prove the startup entry point or
+wrapper semantics. OpenAPI 3 and other decorator
 frameworks are not currently discovered.
 
 This backlog records the work needed to cover those services without weakening
@@ -22,7 +24,7 @@ repository.
 | Swagger 2 JSON/YAML declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions and basePath claim, and D07 update/difference engine |
 | Swagger 2 routes loaded by `swagger-express-mw` | Missing runtime binding | Document-only profile and its bounded JSON/YAML parsers |
 | OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
-| routing-controllers literal decorators | Initial profile; direct registrations, literal body requiredness, and inline `@QueryParams` fields resolved; startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
+| routing-controllers literal decorators | Initial profile; direct registrations, literal body requiredness, inline `@QueryParams` fields, and opt-in wrapper declarations; startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
 | Mixed Express/spec/decorator services | Detection and merge policy missing | D03 identity/provenance and D07 deletion safety provide constraints for a future composite design |
 
@@ -152,7 +154,7 @@ reaches every applicable endpoint through D07.
 **Priority:** P0 when dominant in the pilot, otherwise P1
 
 **Profile choice:** `routing-controllers` is the first family, based on the
-project owner's priority. The `0.4.0` literal profile is an initial slice,
+project owner's priority. The `0.5.0` literal profile is an initial slice,
 not completion of this gate.
 
 - Resolve decorators by import provenance, including aliases and namespaces;
