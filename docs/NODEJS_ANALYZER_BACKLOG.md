@@ -1,7 +1,7 @@
 # Node.js analyzer expansion backlog
 
 **Status:** reviewed backlog, 2026-09-29
-**Current implementation:** `typescript-express@0.1.0` covers a bounded static
+**Current implementation:** `typescript-express@0.2.0` covers a bounded static
 Express subset. Swagger/OpenAPI-defined middleware routes and class-decorator
 routes are not currently discovered.
 

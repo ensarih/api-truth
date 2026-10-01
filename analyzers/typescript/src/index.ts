@@ -5,7 +5,7 @@ import { parseAnalyzerRequest, parseAnalyzerResult, deriveEndpointIdentity,
   type AnalyzerRequest, type AnalyzerResult, type Endpoint, type Evidence, type ApiSchema, type Claim,
 } from "../../../packages/ir/src/index.js";
 
-export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.1.0" };
+export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.2.0" };
 const walk = (node: ts.Node, visit: (node: ts.Node) => void) => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
 const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 
@@ -125,7 +125,8 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (ts.isPropertyAccessExpression(expression) && expression.name.text === "Router" && importedExpress(expression.expression) === "default") return "router";
     return undefined;
   };
-  type Receiver = { node: ts.VariableDeclaration; app: boolean; routes: ts.CallExpression[]; uses: ts.CallExpression[] };
+  type RouteRegistration = { call: ts.CallExpression; path: ts.Expression | undefined; handlers: ts.Expression[]; builder?: ts.CallExpression };
+  type Receiver = { node: ts.VariableDeclaration; app: boolean; routes: RouteRegistration[]; uses: ts.CallExpression[] };
   const receivers = new Map<ts.Symbol, Receiver>();
   for (const source of sources.values()) walk(source, node => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && ts.isCallExpression(node.initializer)) {
@@ -151,6 +152,21 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (returnsReceiver) factoryScopes.set(receiver, scope);
   }
   const methods = new Set(["get", "post", "put", "patch", "delete", "options", "head", "all"]);
+  const routeBuilder = (call: ts.CallExpression): { receiver: Receiver; builder: ts.CallExpression } | undefined => {
+    let current: ts.Expression = call.expression;
+    if (!ts.isPropertyAccessExpression(current)) return undefined;
+    current = current.expression;
+    while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
+      const name = current.expression.name.text;
+      if (name === "route") {
+        const receiver = receivers.get(symbol(current.expression.expression)!);
+        return receiver ? { receiver, builder: current } : undefined;
+      }
+      if (!methods.has(name) || name === "all") return undefined;
+      current = current.expression.expression;
+    }
+    return undefined;
+  };
   const conditional = (node: ts.Node, staticScope?: ts.FunctionLikeDeclaration): boolean => {
     for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
       if (ts.isIfStatement(parent) || ts.isIterationStatement(parent, false) || ts.isSwitchStatement(parent) || ts.isConditionalExpression(parent)
@@ -163,16 +179,23 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (ts.isImportDeclaration(node) && literal(node.moduleSpecifier) !== "express" && !symbol(node.moduleSpecifier)?.declarations?.some(d => ts.isSourceFile(d))) diagnostic("import_unresolved", node);
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) diagnostic("dynamic_import_unresolved", node);
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
-    const receiver = receivers.get(symbol(node.expression.expression)!);
+    const method = node.expression.name.text;
+    const direct = receivers.get(symbol(node.expression.expression)!);
+    const chain = !direct && methods.has(method) ? routeBuilder(node) : undefined;
+    const receiver = direct ?? chain?.receiver;
     if (!receiver) {
-      if (methods.has(node.expression.name.text) || ["route", "use"].includes(node.expression.name.text)) diagnostic("route_receiver_unsupported", node);
+      if (methods.has(method) || ["route", "use"].includes(method)) diagnostic("route_receiver_unsupported", node);
       return;
     }
     const staticScope = factoryScopes.get(receiver);
     if (conditional(node, staticScope) || conditional(receiver.node, staticScope)) { diagnostic("routing_predicate_unsupported", node); return; }
-    if (node.expression.name.text === "use") receiver.uses.push(node);
-    else if (methods.has(node.expression.name.text) && node.expression.name.text !== "all") receiver.routes.push(node);
-    else diagnostic("routing_construct_unsupported", node);
+    if (method === "use" && direct) receiver.uses.push(node);
+    else if (methods.has(method) && method !== "all") receiver.routes.push({
+      call: node, path: chain ? chain.builder.arguments[0] : node.arguments[0],
+      handlers: chain ? [...node.arguments] : [...node.arguments.slice(1)],
+      ...(chain ? { builder: chain.builder } : {}),
+    });
+    else if (method !== "route") diagnostic("routing_construct_unsupported", node);
   });
   const functionFor = (node: ts.Node): ts.FunctionLikeDeclaration | undefined => {
     if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return node;
@@ -489,8 +512,12 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (ancestors.has(receiver)) { diagnostic("mount_cycle_unresolved", receiver.node); return; }
     visited.add(receiver);
     const next = new Set(ancestors).add(receiver);
-    for (const call of receiver.routes) {
-      const path = literal(call.arguments[0]);
+    for (const registration of [...receiver.routes].sort((left, right) => {
+      const pathOrder = left.call.getSourceFile().fileName.localeCompare(right.call.getSourceFile().fileName);
+      return pathOrder || left.call.getEnd() - right.call.getEnd();
+    })) {
+      const { call } = registration;
+      const path = literal(registration.path);
       if (path === undefined) { diagnostic("computed_route_path_unresolved", call); continue; }
       const applicationPath = `${prefix}/${path}`.replace(/\/+/g, "/");
       let identity: Endpoint["identity"];
@@ -499,14 +526,15 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       const id = `ep-${hash(identity.route_key).slice(0, 24)}`;
       if (result.endpoints.some(e => e.endpoint_id === id)) { diagnostic("conflicting_route_handlers", call, result.endpoints.find(e => e.endpoint_id === id)); continue; }
       const ev = evidence(call);
+      const builderEvidence = registration.builder ? evidence(registration.builder) : undefined;
       const endpoint: Endpoint = { endpoint_id: id, identity, application_path: applicationPath,
         parameters: [...applicationPath.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)].map(match => ({ name: match[1]!, in: "path", presence: { state: "required", evidence_ids: [ev] }, schema: { type: "string" }, serialization: { style: "simple" } })),
-        request_bodies: [], responses: [], security: { alternatives: [] }, evidence_ids: [ev] };
+        request_bodies: [], responses: [], security: { alternatives: [] }, evidence_ids: builderEvidence ? [ev, builderEvidence] : [ev] };
       result.endpoints.push(endpoint);
       claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, config_version: "1.0.0", extraction_mode: effectiveExtractionMode }, receiver.node, "deterministic_analysis");
-      for (const node of [...context, receiver.node, call]) dependency(endpoint, node);
+      for (const node of [...context, receiver.node, ...(registration.builder ? [registration.builder] : []), call]) dependency(endpoint, node);
       const shared = scopedMiddleware(receiver, call, path);
-      const handlers = uniqueExpressions([...inherited, ...shared, ...call.arguments.slice(1)]);
+      const handlers = uniqueExpressions([...inherited, ...shared, ...registration.handlers]);
       for (const [index, arg] of handlers.entries()) {
         const fn = functionFor(arg);
         if (fn) analyzeFunction(fn, endpoint, index < handlers.length - 1, arg);

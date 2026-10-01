@@ -8,7 +8,7 @@ the network, query a database, or call a model.
 The public API is `createAnalyzer({ projectRoot }).analyze(request)` (or the
 working-directory convenience export `analyze(request)`). Both return an
 `AnalyzerResult` validated by `@api-truth/ir`. The adapter identity is
-`typescript-express@0.1.0`; output records TypeScript `5.9.3` and analyzer
+`typescript-express@0.2.0`; output records TypeScript `5.9.3` and analyzer
 configuration `1.0.0` in toolchain claims.
 
 ## Local extraction
@@ -40,7 +40,7 @@ Run the focused suite with `npm run test:extractor`.
 | Area | Supported baseline | Preserved as unknown or diagnostic |
 |---|---|---|
 | Express setup | Default-import `express()` apps; named/aliased `Router()` and default-import `.Router()` receivers; static app/router factories that directly return their receiver | Unknown receivers, runtime factory selection, and route-builder chains |
-| Registration | Literal `get`, `post`, `put`, `patch`, `delete`, `options`, and `head` calls | `all`, computed methods, conditional/loop registrations, and malformed path syntax |
+| Registration | Literal `get`, `post`, `put`, `patch`, `delete`, `options`, and `head` calls on known apps/routers; exact fluent `app.route("/path").get(...).post(...)` forms (also on known routers) | `all`, stored or unrelated route builders, computed methods/paths, conditional/loop registrations, and malformed path syntax |
 | Mounting | Literal prefixes, imported routers, shared middleware, mount-local middleware, and prefix-scoped middleware | Computed prefixes, dynamic imports, and mount cycles |
 | Parameters | Named `:path` fields, accessed query fields, and declared `Request` query generic properties | Runtime query presence without a supported validator remains unknown |
 | Declarations | Request body, response, and query generics; interfaces/type aliases; objects, arrays, primitives, literal enums, null unions, optionals, and recursive references | Inheritance, unsupported type members, unresolved types, and opaque fields |

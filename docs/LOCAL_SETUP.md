@@ -166,9 +166,10 @@ to the repository.
 
 ## 6. Supported source scope and known gaps
 
-The executable analyzer is `typescript-express@0.1.0` on TypeScript 5.9.3.
+The executable analyzer is `typescript-express@0.2.0` on TypeScript 5.9.3.
 Its checked-in baseline supports literal Express app/router registrations for
-`get`, `post`, `put`, `patch`, `delete`, `options`, and `head`; literal mount
+`get`, `post`, `put`, `patch`, `delete`, `options`, and `head`, including exact
+literal `route(path).method(...)` chains on known apps/routers; literal mount
 prefixes and imported routers; named path and accessed query fields; declared
 body/response/query types; selected top-level runtime guards; explicit
 response status/media facts; and source/dependency evidence. It records

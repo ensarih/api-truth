@@ -133,7 +133,7 @@ profile selection remain in NB1–NB4.
 
 The Node.js backlog is a detailed child backlog. Its NB1 contract and
 authority decisions are prerequisites for document/decorator adapters; current
-`typescript-express@0.1.0` support does not imply those adapters exist. Java,
+`typescript-express@0.2.0` support does not imply those adapters exist. Java,
 logs, semantic providers, and Confluence are planned capabilities, not current
 implementation claims.
 
