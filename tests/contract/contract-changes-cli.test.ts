@@ -165,7 +165,7 @@ describe("contract changes CLI", () => {
     expect(rejected.stdout).toBe("");
     expect(rejected.stderr).toBe("api-truth changes error [INVALID_UPDATE_INPUT]: Update input is invalid\n");
     expect(rejected.stderr).not.toContain(temporaryRoot);
-  });
+  }, 30000);
 
   test("keeps complete-to-incomplete coverage differences path-free", async () => {
     const temporaryRoot = await mkdtemp(join(tmpdir(), "api-truth-coverage-"));

@@ -1,0 +1,218 @@
+/** Bounded, pure parser for a Swagger 2.0 JSON document. It never reads files or resolves remote references. */
+
+export type Swagger2Method = "get" | "put" | "post" | "delete" | "options" | "head" | "patch";
+export type Swagger2Diagnostic = {
+  code: "invalid_document" | "unsupported_field" | "unsupported_construct" | "external_ref" | "missing_local_ref";
+  severity: "warning" | "error";
+  message: string;
+  pointer: string;
+};
+
+export type Swagger2Media = { state: "unknown" } | { state: "known"; values: string[] };
+export type Swagger2Security = { state: "unknown" | "anonymous" } | {
+  state: "declared";
+  alternatives: Array<Record<string, string[]>>;
+};
+export type Swagger2Parameter = Record<string, unknown> & { name: string; in: string; pointer: string };
+export type Swagger2Response = {
+  selector: { kind: "exact"; code: number } | { kind: "range"; range: string } | { kind: "default" };
+  description?: string;
+  schema?: unknown;
+  headers?: Record<string, unknown>;
+  media: Swagger2Media;
+  pointer: string;
+};
+export type Swagger2Operation = {
+  method: Swagger2Method;
+  path: string;
+  operationId?: string;
+  pointer: string;
+  evidencePointer: string;
+  parameters: Swagger2Parameter[];
+  requestBodies: Array<Swagger2Parameter & { media: Swagger2Media }>;
+  responses: Swagger2Response[];
+  consumes: Swagger2Media;
+  produces: Swagger2Media;
+  security: Swagger2Security;
+};
+export type Swagger2ParseResult = {
+  status: "success" | "partial" | "failed";
+  operations: Swagger2Operation[];
+  definitions: Record<string, unknown>;
+  securityDefinitions: Record<string, unknown>;
+  diagnostics: Swagger2Diagnostic[];
+};
+
+const methods = new Set<Swagger2Method>(["get", "put", "post", "delete", "options", "head", "patch"]);
+const topFields = new Set(["swagger", "info", "host", "basePath", "schemes", "consumes", "produces", "paths", "definitions", "parameters", "responses", "securityDefinitions", "security", "tags", "externalDocs"]);
+const pathFields = new Set(["$ref", "parameters", ...methods]);
+const operationFields = new Set(["tags", "summary", "description", "externalDocs", "operationId", "consumes", "produces", "parameters", "responses", "schemes", "deprecated", "security"]);
+const parameterFields = new Set(["name", "in", "description", "required", "schema", "type", "format", "allowEmptyValue", "items", "collectionFormat", "default", "maximum", "exclusiveMaximum", "minimum", "exclusiveMinimum", "maxLength", "minLength", "pattern", "maxItems", "minItems", "uniqueItems", "enum", "multipleOf"]);
+const responseFields = new Set(["description", "schema", "headers", "examples"]);
+const schemaFields = new Set(["$ref", "format", "title", "description", "default", "multipleOf", "maximum", "exclusiveMaximum", "minimum", "exclusiveMinimum", "maxLength", "minLength", "pattern", "maxItems", "minItems", "uniqueItems", "enum", "type", "items", "allOf", "properties", "additionalProperties", "required"]);
+const forbiddenKeys = new Set(["__proto__", "prototype", "constructor"]);
+const has = (value: unknown, key: string): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, key);
+const obj = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
+
+/** Parse an already-decoded JSON value. Local schema refs are validated but left intact. */
+export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
+  const diagnostics: Swagger2Diagnostic[] = [];
+  const add = (code: Swagger2Diagnostic["code"], severity: Swagger2Diagnostic["severity"], message: string, pointer: string) =>
+    diagnostics.push({ code, severity, message, pointer });
+  const fail = (message: string, pointer = "") => add("invalid_document", "error", message, pointer);
+  if (!obj(input)) {
+    fail("Document root must be a JSON object.");
+    return result("failed", [], {}, {}, diagnostics);
+  }
+  const inspectKeys = (value: unknown, pointer: string): boolean => {
+    if (Array.isArray(value)) return value.every((item, i) => inspectKeys(item, `${pointer}/${i}`));
+    if (!obj(value)) return true;
+    for (const [key, child] of Object.entries(value)) {
+      const at = `${pointer}/${pointerPart(key)}`;
+      if (forbiddenKeys.has(key)) { fail("Prototype-related keys are not allowed.", at); return false; }
+      if (!inspectKeys(child, at)) return false;
+    }
+    return true;
+  };
+  if (!inspectKeys(input, "")) return result("failed", [], {}, {}, diagnostics);
+  if (input.swagger !== "2.0" || !obj(input.info) || typeof input.info.title !== "string" || typeof input.info.version !== "string" || !obj(input.paths)) {
+    fail("Expected a Swagger 2.0 document with info.title, info.version, and paths.");
+    return result("failed", [], {}, {}, diagnostics);
+  }
+  const noteUnknown = (record: Record<string, unknown>, accepted: Set<string>, pointer: string) => {
+    for (const key of Object.keys(record)) if (!accepted.has(key))
+      add("unsupported_field", "warning", `Unsupported field '${key}' is preserved in the source document but is not interpreted.`, `${pointer}/${pointerPart(key)}`);
+  };
+  noteUnknown(input, topFields, "");
+  for (const field of ["host", "basePath", "schemes"] as const) if (input[field] !== undefined)
+    add("unsupported_construct", "warning", `Document-level '${field}' is preserved but is not applied to application route identity by this document parser.`, `/${field}`);
+  const media = (value: unknown, inherited: unknown, pointer: string): Swagger2Media => {
+    const selected = value === undefined ? inherited : value;
+    if (selected === undefined) return { state: "unknown" };
+    if (!Array.isArray(selected) || selected.some((item) => typeof item !== "string" || item.length === 0)) {
+      add("unsupported_construct", "warning", "Media types must be a list of non-empty strings; the value is unknown.", pointer);
+      return { state: "unknown" };
+    }
+    return { state: "known", values: [...new Set(selected as string[])] };
+  };
+  const security = (value: unknown, inherited: unknown): Swagger2Security => {
+    const selected = value === undefined ? inherited : value;
+    if (selected === undefined) return { state: "unknown" };
+    if (!Array.isArray(selected)) {
+      add("unsupported_construct", "warning", "Security declaration must be an array; security remains unknown.", "/security");
+      return { state: "unknown" };
+    }
+    if (!selected.length) return { state: "anonymous" };
+    if (!selected.every((entry) => obj(entry) && Object.values(entry).every((scopes) => Array.isArray(scopes) && scopes.every((scope) => typeof scope === "string")))) {
+      add("unsupported_construct", "warning", "Security declaration is malformed; security remains unknown.", "/security");
+      return { state: "unknown" };
+    }
+    return { state: "declared", alternatives: selected as Array<Record<string, string[]>> };
+  };
+  const operations: Swagger2Operation[] = [];
+  const definitionMap = obj(input.definitions) ? input.definitions : {};
+  const inspectSchema = (value: unknown, pointer: string): void => {
+    if (Array.isArray(value)) { value.forEach((item, index) => inspectSchema(item, `${pointer}/${index}`)); return; }
+    if (!obj(value)) return;
+    noteUnknown(value, schemaFields, pointer);
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "properties" && obj(child)) {
+        for (const [name, propertySchema] of Object.entries(child)) inspectSchema(propertySchema, `${pointer}/properties/${pointerPart(name)}`);
+      } else if (key !== "properties") inspectSchema(child, `${pointer}/${pointerPart(key)}`);
+    }
+  };
+  for (const [name, schema] of Object.entries(definitionMap)) inspectSchema(schema, `/definitions/${pointerPart(name)}`);
+  const inspectRefs = (value: unknown, pointer: string, seen = new Set<object>()): void => {
+    if (Array.isArray(value)) { value.forEach((item, i) => inspectRefs(item, `${pointer}/${i}`, seen)); return; }
+    if (!obj(value) || seen.has(value)) return;
+    seen.add(value);
+    if (typeof value.$ref === "string") {
+      if (!value.$ref.startsWith("#/")) add("external_ref", "error", "Only document-local JSON Pointer references are allowed.", `${pointer}/$ref`);
+      else {
+        const parts = value.$ref.slice(2).split("/").map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"));
+        let target: unknown = input;
+        for (const part of parts) target = has(target, part) ? target[part] : undefined;
+        if (target === undefined) add("missing_local_ref", "warning", `Local reference '${value.$ref}' does not resolve.`, `${pointer}/$ref`);
+      }
+    }
+    for (const [key, child] of Object.entries(value)) inspectRefs(child, `${pointer}/${pointerPart(key)}`, seen);
+  };
+  inspectRefs(input, "");
+  if (diagnostics.some((item) => item.code === "external_ref")) return result("failed", [], {}, {}, diagnostics);
+
+  for (const [path, pathItem] of Object.entries(input.paths)) {
+    const pathPointer = `/paths/${pointerPart(path)}`;
+    if (!path.startsWith("/") || !obj(pathItem)) { add("unsupported_construct", "warning", "Path entry must have an absolute path and object value.", pathPointer); continue; }
+    noteUnknown(pathItem, pathFields, pathPointer);
+    if (pathItem.$ref !== undefined) add("unsupported_construct", "warning", "Path Item references are not expanded by this parser.", `${pathPointer}/$ref`);
+    const pathParameters = Array.isArray(pathItem.parameters) ? pathItem.parameters : [];
+    pathParameters.forEach((parameter, index) => { if (obj(parameter) && parameter.schema !== undefined) inspectSchema(parameter.schema, `${pathPointer}/parameters/${index}/schema`); });
+    for (const [method, rawOperation] of Object.entries(pathItem)) {
+      if (!methods.has(method as Swagger2Method)) continue;
+      const pointer = `${pathPointer}/${method}`;
+      if (!obj(rawOperation)) { add("unsupported_construct", "warning", "Operation must be an object.", pointer); continue; }
+      noteUnknown(rawOperation, operationFields, pointer);
+      const merged = new Map<string, Swagger2Parameter>();
+      const addParameters = (list: unknown, sourcePointer: string) => {
+        if (!Array.isArray(list)) { add("unsupported_construct", "warning", "Parameters must be an array.", sourcePointer); return; }
+        list.forEach((raw, index) => {
+          const at = `${sourcePointer}/${index}`;
+          if (!obj(raw) || typeof raw.name !== "string" || typeof raw.in !== "string") {
+            add("unsupported_construct", "warning", "Parameter requires string name and in fields.", at); return;
+          }
+          noteUnknown(raw, parameterFields, at);
+          if (!new Set(["path", "query", "header", "formData", "body"]).has(raw.in)) {
+            add("unsupported_construct", "warning", `Unsupported parameter location '${raw.in}'.`, `${at}/in`); return;
+          }
+          if (raw.in === "path" && raw.required !== true)
+            add("unsupported_construct", "warning", "Swagger path parameters must be required; optional path parameter was retained with a diagnostic.", `${at}/required`);
+          const normalized = { ...raw, name: raw.name, in: raw.in, pointer: at } as Swagger2Parameter;
+          merged.set(`${raw.name}\u0000${raw.in}`, normalized);
+        });
+      };
+      addParameters(pathParameters, `${pathPointer}/parameters`);
+      if (rawOperation.parameters !== undefined) addParameters(rawOperation.parameters, `${pointer}/parameters`);
+      if (Array.isArray(rawOperation.parameters)) rawOperation.parameters.forEach((parameter, index) => {
+        if (obj(parameter) && parameter.schema !== undefined) inspectSchema(parameter.schema, `${pointer}/parameters/${index}/schema`);
+      });
+      const parameters = [...merged.values()];
+      const requestBodies = parameters.filter((item) => item.in === "body" || item.in === "formData")
+        .map((item) => ({ ...item, media: media(rawOperation.consumes, input.consumes, `${pointer}/consumes`) }));
+      const responses: Swagger2Response[] = [];
+      if (!obj(rawOperation.responses)) add("unsupported_construct", "warning", "Operation has no valid responses map.", `${pointer}/responses`);
+      else for (const [status, rawResponse] of Object.entries(rawOperation.responses)) {
+        const at = `${pointer}/responses/${pointerPart(status)}`;
+        if (!obj(rawResponse)) { add("unsupported_construct", "warning", "Response must be an object.", at); continue; }
+        noteUnknown(rawResponse, responseFields, at);
+        if (rawResponse.schema !== undefined) inspectSchema(rawResponse.schema, `${at}/schema`);
+        if (rawResponse.examples !== undefined) add("unsupported_construct", "warning", "Response examples are retained by the source but are not interpreted.", `${at}/examples`);
+        let selector: Swagger2Response["selector"];
+        if (status === "default") selector = { kind: "default" };
+        else if (/^[1-5]XX$/.test(status)) selector = { kind: "range", range: status };
+        else if (/^[1-5][0-9]{2}$/.test(status)) selector = { kind: "exact", code: Number(status) };
+        else { add("unsupported_construct", "warning", `Unsupported response selector '${status}'.`, at); continue; }
+        responses.push({ selector, ...(typeof rawResponse.description === "string" ? { description: rawResponse.description } : {}),
+          ...(rawResponse.schema !== undefined ? { schema: rawResponse.schema } : {}),
+          ...(obj(rawResponse.headers) ? { headers: rawResponse.headers } : {}),
+          media: rawResponse.schema === undefined ? { state: "unknown" } : media(rawOperation.produces, input.produces, `${pointer}/produces`), pointer: at });
+      }
+      if (!responses.length) add("unsupported_construct", "warning", "Operation has no supported response selectors.", `${pointer}/responses`);
+      const operation: Swagger2Operation = {
+        method: method as Swagger2Method, path, ...(typeof rawOperation.operationId === "string" ? { operationId: rawOperation.operationId } : {}),
+        pointer, evidencePointer: pointer, parameters: parameters.filter((item) => item.in !== "body" && item.in !== "formData"), requestBodies, responses,
+        consumes: media(rawOperation.consumes, input.consumes, `${pointer}/consumes`),
+        produces: media(rawOperation.produces, input.produces, `${pointer}/produces`),
+        security: security(rawOperation.security, input.security),
+      };
+      operations.push(operation);
+    }
+  }
+  const status = diagnostics.some((item) => item.severity === "error") ? "failed" : diagnostics.length ? "partial" : "success";
+  return result(status, operations, definitionMap, obj(input.securityDefinitions) ? input.securityDefinitions : {}, diagnostics);
+}
+
+function result(status: Swagger2ParseResult["status"], operations: Swagger2Operation[], definitions: Record<string, unknown>, securityDefinitions: Record<string, unknown>, diagnostics: Swagger2Diagnostic[]): Swagger2ParseResult {
+  return { status, operations, definitions, securityDefinitions, diagnostics };
+}

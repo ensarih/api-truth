@@ -1,0 +1,229 @@
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
+import {
+  deriveEndpointIdentity, parseAnalyzerRequest, parseAnalyzerResult,
+  type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
+} from "../../../packages/ir/src/index.js";
+import { readSelectedDocument } from "./source.js";
+import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
+
+/** Document facts only. Middleware mounting and handler binding require a separate profile. */
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.1.0" };
+const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
+const safePointer = (pointer: string) => pointer || "/";
+
+export function createAnalyzer(options: { projectRoot: string }) {
+  return { async analyze(input: unknown): Promise<AnalyzerResult> {
+    const parsed = parseAnalyzerRequest(input);
+    if (!parsed.ok) throw new Error("Invalid analyzer request");
+    const request = parsed.value;
+    if (request.analyzer.analyzer_id !== ANALYZER.analyzer_id || request.analyzer.analyzer_version !== ANALYZER.analyzer_version)
+      throw new Error("Unsupported analyzer version");
+    if (request.resolution_inputs.length !== 1 || request.resolution_inputs[0]?.kind !== "type_manifest")
+      throw new Error("Unsupported resolution inputs");
+    const selected = request.resolution_inputs[0];
+    if (request.changed_paths.some(path => path !== selected.path)) throw new Error("Unsupported changed paths");
+    const started = Date.now();
+    const source = await readSelectedDocument(resolve(options.projectRoot), request.source.service_root, selected.path,
+      Math.min(request.limits.max_output_bytes, 2_000_000));
+    if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
+    for (const digest of [request.source.source_digest, selected.digest]) {
+      if (/^sha256:[a-f0-9]{64}$/i.test(digest) && digest.toLowerCase() !== source.digest)
+        throw new Error("Source digest mismatch");
+    }
+    const normalized: AnalyzerRequest = {
+      ...request, source: { ...request.source, source_digest: source.digest },
+      resolution_inputs: [{ ...selected, digest: source.digest }],
+    };
+    const result = extract(normalized, source.path, source.text);
+    if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
+    if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
+    const validated = parseAnalyzerResult(result);
+    if (!validated.ok) throw new Error("Analyzer produced invalid result");
+    return validated.value;
+  } };
+}
+
+export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult> {
+  return createAnalyzer({ projectRoot: process.cwd() }).analyze(request);
+}
+
+function extract(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
+  const fingerprint = hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-1", documentPath }));
+  const result: AnalyzerResult = {
+    exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
+    result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
+    status: "success", completed_at: new Date().toISOString(),
+    coverage: { status: "complete", analyzed_roots: [documentPath], diagnostic_ids: [] },
+    evidence: [], schemas: {}, endpoints: [], claims: [], dependencies: [], diagnostics: [],
+    reproducibility_fingerprint: `sha256:${fingerprint}`,
+  };
+  const evidence = (pointer: string, endpointId?: string): string => {
+    const id = `ev-${hash(`${documentPath}:${pointer}:${endpointId ?? ""}`).slice(0, 24)}`;
+    if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
+      evidence_id: id, source: { kind: "api_document", source_id: request.source.repository_id },
+      source_version: request.source.immutable_revision, location: { path: documentPath, pointer: safePointer(pointer) },
+      method: "type_declaration", scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+        revision: request.source.immutable_revision, ...(endpointId ? { endpoint_id: endpointId } : {}) },
+      limitations: ["document declaration; middleware binding not verified"], access_label: request.source.access_label,
+    });
+    return id;
+  };
+  const diagnostic = (code: string, pointer: string, severity: "warning" | "error" = "warning", endpointId?: string) => {
+    const ev = evidence(pointer, endpointId);
+    const id = `diag-${hash(`${code}:${pointer}:${endpointId ?? ""}`).slice(0, 24)}`;
+    if (!result.diagnostics.some(item => item.diagnostic_id === id)) result.diagnostics.push({
+      diagnostic_id: id, code, severity, message: code.replaceAll("_", " "),
+      affected_endpoint_ids: endpointId ? [endpointId] : [], evidence_ids: [ev],
+    });
+  };
+  const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], pointer: string) => {
+    const ev = evidence(pointer, endpoint.endpoint_id);
+    result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:${predicate}:${pointer}:${JSON.stringify(value)}`).slice(0, 24)}`,
+      subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate, value,
+      verification: "declared", evidence_ids: [ev] });
+  };
+  let document: unknown;
+  try { document = JSON.parse(text); }
+  catch { diagnostic("invalid_json_document", "", "error"); return failed(result, documentPath); }
+  let parsed: ReturnType<typeof parseSwagger2Document>;
+  try { parsed = parseSwagger2Document(document); }
+  catch { diagnostic("document_structure_limit_exceeded", "", "error"); return failed(result, documentPath); }
+  for (const item of parsed.diagnostics) diagnostic(item.code, item.pointer, item.severity);
+  if (parsed.status === "failed") return failed(result, documentPath);
+
+  const raw = document as Record<string, unknown>;
+  if (raw.basePath !== undefined) diagnostic("base_path_requires_middleware_profile", "/basePath");
+  if (raw.host !== undefined || raw.schemes !== undefined) diagnostic("server_exposure_not_analyzed", "/host");
+  // JSON.parse cannot report duplicate keys. Keep coverage incomplete until the strict JSON reader lands.
+  diagnostic("json_duplicate_keys_unverified", "");
+
+  const definitionIds = new Map(Object.keys(parsed.definitions).sort().map(name => [name, `schema-${hash(name).slice(0, 24)}`]));
+  const convertSchema = (value: unknown, pointer: string, depth = 0): ApiSchema => {
+    if (depth > 32 || !value || typeof value !== "object" || Array.isArray(value)) {
+      diagnostic("schema_unsupported", pointer); return {};
+    }
+    const input = value as Record<string, unknown>;
+    if (typeof input.$ref === "string") {
+      const name = input.$ref.startsWith("#/definitions/") ? input.$ref.slice("#/definitions/".length).replaceAll("~1", "/").replaceAll("~0", "~") : undefined;
+      const id = name && definitionIds.get(name);
+      if (!id) { diagnostic("schema_ref_unsupported", `${pointer}/$ref`); return {}; }
+      return { $ref: `#/schemas/${id}` };
+    }
+    const output: ApiSchema = {};
+    if (typeof input.type === "string" && ["string", "integer", "number", "boolean", "object", "array", "null"].includes(input.type))
+      output.type = input.type as NonNullable<ApiSchema["type"]>;
+    else if (input.type !== undefined) diagnostic("schema_type_unsupported", `${pointer}/type`);
+    if (typeof input.format === "string") output.format = input.format;
+    if (typeof input.title === "string") output.title = input.title;
+    if (typeof input.description === "string") output.description = input.description;
+    if (Array.isArray(input.required) && input.required.every(item => typeof item === "string")) output.required = input.required as string[];
+    if (Array.isArray(input.enum) && input.enum.length) output.enum = input.enum as NonNullable<ApiSchema["enum"]>;
+    if (input.properties && typeof input.properties === "object" && !Array.isArray(input.properties))
+      output.properties = Object.fromEntries(Object.entries(input.properties).sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, child]) => [name, convertSchema(child, `${pointer}/properties/${pointerPart(name)}`, depth + 1)]));
+    if (input.items !== undefined) output.items = convertSchema(input.items, `${pointer}/items`, depth + 1);
+    for (const key of Object.keys(input)) if (!["type", "format", "description", "required", "enum", "properties", "items", "title"].includes(key))
+      diagnostic("schema_keyword_unsupported", `${pointer}/${pointerPart(key)}`);
+    return output;
+  };
+  for (const [name, schema] of Object.entries(parsed.definitions).sort(([a], [b]) => a.localeCompare(b))) {
+    const id = definitionIds.get(name)!;
+    const pointer = `/definitions/${pointerPart(name)}`;
+    result.schemas[id] = { schema_id: id, schema: convertSchema(schema, pointer), evidence_ids: [evidence(pointer)] };
+  }
+  const definitionNames = new Map([...definitionIds].map(([name, id]) => [id, name]));
+  for (const operation of parsed.operations) addOperation(operation);
+  if (parsed.status === "partial" || result.diagnostics.length) {
+    result.status = "partial";
+    result.coverage = { status: "incomplete", analyzed_roots: [documentPath], unresolved_roots: [documentPath],
+      reason: "Selected document contains unsupported or unverified facts", diagnostic_ids: result.diagnostics.map(item => item.diagnostic_id) };
+  }
+  return result;
+
+  function addOperation(operation: Swagger2Operation) {
+    let identity: Endpoint["identity"];
+    try { identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: request.source.service_id,
+      method: operation.method, application_path: operation.path }); }
+    catch { diagnostic("route_path_unsupported", operation.pointer); return; }
+    const endpointId = `endpoint-${hash(identity.route_key).slice(0, 24)}`;
+    if (result.endpoints.some(item => item.endpoint_id === endpointId)) {
+      diagnostic("conflicting_route_declarations", operation.pointer);
+      return;
+    }
+    const ev = evidence(operation.pointer, endpointId);
+    const endpoint: Endpoint = {
+      endpoint_id: endpointId, identity, application_path: operation.path, parameters: [], request_bodies: [],
+      responses: [], security: { state: "unknown", alternatives: [] }, evidence_ids: [ev],
+    };
+    claim(endpoint, "route.declaration", { method: identity.method, path: operation.path,
+      ...(operation.operationId ? { operationId: operation.operationId } : {}) }, operation.pointer);
+    for (const parameter of operation.parameters) {
+      if (!["path", "query", "header"].includes(parameter.in)) { diagnostic("parameter_location_unsupported", parameter.pointer, "warning", endpointId); continue; }
+      const paramEv = evidence(parameter.pointer, endpointId);
+      const presence = parameter.required === true ? "required" : parameter.required === false ? "optional" : "unknown";
+      const parameterSchema = parameter.schema ?? Object.fromEntries(["type", "format", "description", "items", "enum"]
+        .filter(key => parameter[key] !== undefined).map(key => [key, parameter[key]]));
+      for (const key of Object.keys(parameter)) if (!["name", "in", "pointer", "required", "schema", "type", "format", "description", "items", "enum"].includes(key))
+        diagnostic("parameter_keyword_unsupported", `${parameter.pointer}/${pointerPart(key)}`, "warning", endpointId);
+      endpoint.parameters.push({ name: parameter.name, in: parameter.in as "path" | "query" | "header",
+        presence: { state: presence, evidence_ids: [paramEv] },
+        schema: convertSchema(parameterSchema, parameter.pointer), serialization: { format: "swagger2" } });
+      claim(endpoint, "parameter.presence", presence, parameter.pointer);
+    }
+    for (const body of operation.requestBodies) {
+      if (body.in !== "body" || body.media.state !== "known" || body.media.values.length === 0) {
+        diagnostic("request_body_media_or_form_unresolved", body.pointer, "warning", endpointId); continue;
+      }
+      const bodyEv = evidence(body.pointer, endpointId);
+      for (const mediaType of body.media.values) endpoint.request_bodies.push({ media_type: mediaType,
+        schema: convertSchema(body.schema, `${body.pointer}/schema`), serialization: { format: mediaType },
+        presence: { state: body.required === true ? "required" : body.required === false ? "optional" : "unknown", evidence_ids: [bodyEv] } });
+    }
+    for (const response of operation.responses) {
+      const content = response.schema !== undefined && response.media.state === "known"
+        ? response.media.values.map(mediaType => ({ media_type: mediaType,
+          schema: convertSchema(response.schema, `${response.pointer}/schema`), serialization: { format: mediaType } })) : [];
+      if (response.schema !== undefined && response.media.state === "unknown")
+        diagnostic("response_media_unknown", response.pointer, "warning", endpointId);
+      endpoint.responses.push({ status: response.selector, content });
+      claim(endpoint, "response.status", response.selector, response.pointer);
+    }
+    if (!endpoint.responses.length) endpoint.responses.push({ status: { kind: "unknown", reason: "document response unresolved" }, content: [] });
+    if (operation.security.state === "anonymous") {
+      const secEv = evidence(`${operation.pointer}/security`, endpointId);
+      endpoint.security = { state: "anonymous", alternatives: [], evidence_ids: [secEv] };
+    } else if (operation.security.state === "declared") {
+      diagnostic("security_mapping_unresolved", `${operation.pointer}/security`, "warning", endpointId);
+      claim(endpoint, "security.declaration", operation.security.alternatives, `${operation.pointer}/security`);
+    }
+    const seenSchemas = new Set<string>();
+    const addSchemaDependencies = (schema: ApiSchema) => {
+      if (schema.$ref?.startsWith("#/schemas/")) {
+        const id = schema.$ref.slice("#/schemas/".length);
+        if (seenSchemas.has(id)) return;
+        seenSchemas.add(id);
+        const name = definitionNames.get(id);
+        if (name) {
+          const ev = evidence(`/definitions/${pointerPart(name)}`);
+          result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "schema", id }, evidence_ids: [ev] });
+          addSchemaDependencies(result.schemas[id]!.schema);
+        }
+      }
+      for (const child of Object.values(schema.properties ?? {})) addSchemaDependencies(child);
+      if (schema.items) addSchemaDependencies(schema.items);
+    };
+    for (const parameter of endpoint.parameters) addSchemaDependencies(parameter.schema);
+    for (const body of endpoint.request_bodies) addSchemaDependencies(body.schema);
+    for (const response of endpoint.responses) for (const content of response.content) addSchemaDependencies(content.schema);
+    result.endpoints.push(endpoint);
+  }
+}
+
+function failed(result: AnalyzerResult, path: string): AnalyzerResult {
+  result.status = "failed";
+  result.coverage = { status: "incomplete", analyzed_roots: [path], unresolved_roots: [path],
+    reason: "Selected document cannot be analyzed", diagnostic_ids: result.diagnostics.map(item => item.diagnostic_id) };
+  return result;
+}
