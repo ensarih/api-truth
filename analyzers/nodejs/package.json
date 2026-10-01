@@ -1,13 +1,15 @@
 {
   "name": "@api-truth/analyzer-nodejs-swagger2-document",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./middleware": "./src/middleware.ts"
   },
   "dependencies": {
     "@api-truth/ir": "0.0.0",
+    "typescript": "5.9.3",
     "yaml": "2.9.1"
   }
 }

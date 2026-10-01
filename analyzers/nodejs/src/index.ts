@@ -8,6 +8,9 @@ import { readSelectedDocument } from "./source.js";
 import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
+import type { MiddlewareBinding } from "./middleware-binding.js";
+
+export type MiddlewareContext = { kind: "verified"; binding: MiddlewareBinding } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
 export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.3.0" };
@@ -38,7 +41,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
       ...request, source: { ...request.source, source_digest: source.digest },
       resolution_inputs: [{ ...selected, digest: source.digest }],
     };
-    const result = extract(normalized, source.path, source.text);
+    const result = extractSwagger2Document(normalized, source.path, source.text);
     if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
@@ -51,11 +54,14 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
   return createAnalyzer({ projectRoot: process.cwd() }).analyze(request);
 }
 
-function extract(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
-  const fingerprint = hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-1", documentPath }));
+export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
+  middleware?: MiddlewareContext): AnalyzerResult {
+  const fingerprint = middleware === undefined
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-1", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-1", documentPath, middleware }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
-    result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
+    result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: request.analyzer, source: request.source,
     status: "success", completed_at: new Date().toISOString(),
     coverage: { status: "complete", analyzed_roots: [documentPath], diagnostic_ids: [] },
     evidence: [], schemas: {}, endpoints: [], claims: [], dependencies: [], diagnostics: [],
@@ -69,6 +75,20 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
       method: "type_declaration", scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id,
         revision: request.source.immutable_revision, ...(endpointId ? { endpoint_id: endpointId } : {}) },
       limitations: ["document declaration; middleware binding not verified"], access_label: request.source.access_label,
+    });
+    return id;
+  };
+  const middlewareEvidence = (endpointId?: string): string => {
+    if (middleware?.kind !== "verified") throw new Error("Missing middleware binding");
+    const binding = middleware.binding;
+    const id = `ev-${hash(`${binding.path}:${binding.span}:${endpointId ?? ""}:registration`).slice(0, 24)}`;
+    if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
+      evidence_id: id, source: { kind: "source_code", source_id: request.source.repository_id },
+      source_version: request.source.immutable_revision,
+      location: { path: binding.path, line: binding.line, pointer: binding.span },
+      method: "deterministic_analysis", scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+        revision: request.source.immutable_revision, ...(endpointId ? { endpoint_id: endpointId } : {}) },
+      limitations: ["startup entrypoint and controller handler binding unverified"], access_label: request.source.access_label,
     });
     return id;
   };
@@ -86,6 +106,10 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate, value,
       verification: "declared", evidence_ids: [ev] });
   };
+  if (middleware?.kind === "unverified") {
+    diagnostic("middleware_registration_unverified", "", "error");
+    return failed(result, documentPath);
+  }
   let document: unknown;
   try { document = /\.ya?ml$/.test(documentPath) ? parseStrictYaml(text) : parseStrictJson(text); }
   catch (error) {
@@ -95,12 +119,24 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
   let parsed: ReturnType<typeof parseSwagger2Document>;
   try { parsed = parseSwagger2Document(document); }
   catch { diagnostic("document_structure_limit_exceeded", "", "error"); return failed(result, documentPath); }
-  for (const item of parsed.diagnostics) diagnostic(item.code, item.pointer, item.severity);
+  for (const item of parsed.diagnostics) {
+    if (middleware?.kind === "verified" && item.code === "unsupported_construct" && item.pointer === "/basePath") continue;
+    diagnostic(item.code, item.pointer, item.severity);
+  }
   if (parsed.status === "failed") return failed(result, documentPath);
 
   const raw = document as Record<string, unknown>;
+  let basePath = "";
+  if (middleware?.kind === "verified" && raw.basePath !== undefined) {
+    if (typeof raw.basePath !== "string" || !/^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?\/?$/.test(raw.basePath)
+      || raw.basePath.split("/").some(segment => segment === "." || segment === "..")) {
+      diagnostic("base_path_unresolved", "/basePath", "error");
+      return failed(result, documentPath);
+    }
+    basePath = raw.basePath === "/" ? "" : raw.basePath.replace(/\/$/, "");
+  }
   if (raw.basePath !== undefined) {
-    diagnostic("base_path_requires_middleware_profile", "/basePath");
+    if (!middleware) diagnostic("base_path_requires_middleware_profile", "/basePath");
     if (typeof raw.basePath === "string" && raw.basePath.startsWith("/")) {
       const ev = evidence("/basePath");
       result.claims.push({ claim_id: `claim-${hash(`basePath:${ev}:${raw.basePath}`).slice(0, 24)}`,
@@ -109,7 +145,12 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
     } else diagnostic("base_path_invalid", "/basePath");
   }
   if (raw.host !== undefined || raw.schemes !== undefined) diagnostic("server_exposure_not_analyzed", "/host");
-  diagnostic("middleware_binding_unverified", "");
+  if (!middleware) diagnostic("middleware_binding_unverified", "");
+  else {
+    diagnostic("handler_binding_unverified", "");
+    diagnostic("startup_entrypoint_unverified", "");
+    middlewareEvidence();
+  }
 
   // Swagger 2 basic and apiKey map exactly to the D03 security vocabulary.
   // OAuth 2 needs a richer IR definition; retaining an unknown operation is
@@ -183,8 +224,10 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
 
   function addOperation(operation: Swagger2Operation) {
     let identity: Endpoint["identity"];
+    const applicationPath = middleware?.kind === "verified"
+      ? `${basePath}${operation.path}` : operation.path;
     try { identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: request.source.service_id,
-      method: operation.method, application_path: operation.path }); }
+      method: operation.method, application_path: applicationPath }); }
     catch { diagnostic("route_path_unsupported", operation.pointer); return; }
     const endpointId = `endpoint-${hash(identity.route_key).slice(0, 24)}`;
     if (result.endpoints.some(item => item.endpoint_id === endpointId)) {
@@ -192,12 +235,23 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
       return;
     }
     const ev = evidence(operation.pointer, endpointId);
+    const bindingEv = middleware?.kind === "verified" ? middlewareEvidence(endpointId) : undefined;
     const endpoint: Endpoint = {
-      endpoint_id: endpointId, identity, application_path: operation.path, parameters: [], request_bodies: [],
-      responses: [], security: { state: "unknown", alternatives: [] }, evidence_ids: [ev],
+      endpoint_id: endpointId, identity, application_path: applicationPath, parameters: [], request_bodies: [],
+      responses: [], security: { state: "unknown", alternatives: [] },
+      evidence_ids: [ev, ...(bindingEv ? [bindingEv] : []),
+        ...(bindingEv && raw.basePath !== undefined ? [evidence("/basePath", endpointId)] : [])],
     };
     claim(endpoint, "route.declaration", { method: identity.method, path: operation.path,
       ...(operation.operationId ? { operationId: operation.operationId } : {}) }, operation.pointer);
+    if (bindingEv) result.claims.push({
+      claim_id: `claim-${hash(`${endpointId}:route.binding:${bindingEv}:${applicationPath}`).slice(0, 24)}`,
+      subject: { service_id: request.source.service_id, endpoint_id: endpointId }, predicate: "route.binding",
+      value: { path: applicationPath, middleware: "swagger-express-mw" }, verification: "inferred",
+      evidence_ids: [ev, bindingEv, ...(raw.basePath === undefined ? [] : [evidence("/basePath", endpointId)])],
+    });
+    if (bindingEv) result.dependencies.push({ from_endpoint_id: endpointId,
+      to: { kind: "evidence", id: bindingEv }, evidence_ids: [bindingEv] });
     for (const parameter of operation.parameters) {
       if (!["path", "query", "header"].includes(parameter.in)) { diagnostic("parameter_location_unsupported", parameter.pointer, "warning", endpointId); continue; }
       const paramEv = evidence(parameter.pointer, endpointId);

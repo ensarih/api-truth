@@ -1,4 +1,4 @@
-# Node.js Swagger 2 document analyzer (initial slice)
+# Node.js Swagger 2 analyzers
 
 `nodejs-swagger2-document@0.3.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
@@ -24,10 +24,10 @@ Middleware binding is unverified, so even otherwise valid documents receive
 incomplete coverage. Swagger 2 `apiKey` and `basic` security definitions and
 requirements retain document evidence; OAuth 2, missing definitions, and
 unrepresentable scopes leave operation security unknown with diagnostics.
-Unsupported security mapping,
-serialization details, form data, and unknown response media remain visible
-through diagnostics. Middleware binding and CI orchestration selection are
-subsequent backlog slices.
+Unsupported security mapping, serialization details, form data, and unknown
+response media remain visible through diagnostics. The separate direct
+middleware profile below covers one registration shape; broader binding and
+CI orchestration selection remain backlog items.
 
 ## Try it locally
 
@@ -49,3 +49,33 @@ Run the local checks with `npm run check`. The focused tests are in
 `tests/unit/swagger2-document.test.ts`,
 `tests/unit/nodejs-document-source.test.ts`, and
 `tests/unit/nodejs-swagger-analyzer.test.ts`.
+
+## Direct swagger-express-mw registration
+
+`nodejs-swagger-express-mw@0.1.0` is a separate, explicitly selected profile.
+It reads a bounded service tree and the exact default file
+`api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
+that imports `express` and `swagger-express-mw`, creates an Express app, and
+calls `SwaggerExpress.create({ appRoot: __dirname }, callback)` with a direct
+`middleware.register(app)` inside the callback. A missing, conditional,
+ambiguous, or dynamic registration emits no routes and fails the selected
+analysis. Other configuration shapes remain outside this profile.
+
+For that supported registration, the Swagger document's valid literal
+`basePath` is composed with each operation path. A missing `basePath` adds no
+prefix. Invalid or dynamic prefixes emit no route identity. `host` and
+`schemes` are exposure declarations, not application path segments. All
+collected source/configuration files and the selected document affect the
+fingerprint; the adapter does not execute the service or import packages.
+Controller handlers and the production startup entrypoint are still unverified,
+so successful extraction remains **partial**. It must not be treated as a
+complete runtime inventory or strictly publishable OpenAPI contract.
+
+Try the synthetic fixture:
+
+```sh
+npm run --silent extract:swagger2-middleware -- --source fixtures/nodejs/swagger2/middleware/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+```
+
+The focused tests are `tests/unit/swagger2-middleware-analyzer.test.ts` and
+`tests/contract/swagger2-middleware-cli.test.ts`.

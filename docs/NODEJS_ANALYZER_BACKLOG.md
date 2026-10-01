@@ -1,9 +1,11 @@
 # Node.js analyzer expansion backlog
 
-**Status:** active analyzer priority, 2026-10-01
+**Status:** active analyzer priority, 2026-10-02
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
 Express subset. `nodejs-swagger2-document@0.3.0` reads selected Swagger 2 JSON/YAML
-declarations but cannot establish middleware mounting or handler binding.
+declarations. `nodejs-swagger-express-mw@0.1.0` recognizes one direct default-file
+registration shape and composes a valid literal `basePath`; controller handler
+and production startup binding remain unverified.
 `nodejs-routing-controllers@0.7.0` extracts a bounded literal decorator subset
 and binds direct controller registrations. An opt-in, source-bound declaration
 profile can identify wrapper imports and emit unregistered candidate routes with
@@ -24,7 +26,7 @@ repository.
 |---|---|---|
 | Literal Express app/router registrations | Implemented within the published D05 support matrix | Endpoint identity, mounted routers, DTO schemas, selected validators, response serialization, evidence, dependencies, diagnostics |
 | Swagger 2 JSON/YAML declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions and basePath claim, and D07 update/difference engine |
-| Swagger 2 routes loaded by `swagger-express-mw` | Missing runtime binding | Document-only profile and its bounded JSON/YAML parsers |
+| Swagger 2 routes loaded by `swagger-express-mw` | Initial direct default-file registration profile; handler/startup binding and non-default configurations remain open | Document-only profile and its bounded JSON/YAML parsers |
 | OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
 | routing-controllers literal decorators | Initial profile; direct and bounded glob registrations, literal body requiredness, inline `@QueryParams` and `@HeaderParams` fields, and opt-in wrapper declarations; startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
@@ -124,6 +126,10 @@ installation, network, database, log, or model access occurs.
 
 **Priority:** P0 when present in the pilot, otherwise P1
 **Adapter identity:** a distinct versioned `nodejs-swagger-express-mw` profile
+
+The `0.1.0` profile proves one direct default-file registration and composes
+`basePath` under that policy. It does not complete the handler-binding or
+framework-version conformance gate below.
 
 - Parse bounded Swagger 2 operations, path-level and operation-level parameter
   overrides, body parameters, `consumes`/`produces`, exact/range/default
