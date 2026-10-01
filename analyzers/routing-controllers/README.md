@@ -1,6 +1,6 @@
 # routing-controllers analyzer profile
 
-`nodejs-routing-controllers@0.2.0` reads a bounded service source tree and emits
+`nodejs-routing-controllers@0.3.0` reads a bounded service source tree and emits
 a D03 analyzer result. It never executes project code or resolves packages.
 
 Run it locally with `npm run extract:routing-controllers -- --source <service-tree>
@@ -11,7 +11,8 @@ The profile recognizes legacy TypeScript decorator syntax imported directly
 from `routing-controllers`, including named aliases and namespace imports.
 It supports literal `@Controller` and `@JsonController` prefixes; literal
 `@Get`, `@Post`, `@Put`, `@Patch`, `@Delete`, `@Head`, and `@Options` paths;
-named `@Param`, `@QueryParam`, and `@HeaderParam`; `@Body`; and literal
+named `@Param`, `@QueryParam`, and `@HeaderParam`; `@Body` with literal
+`required: true` or `required: false` options; and literal
 `@HttpCode` and `@ContentType`. Primitive, array, and inline object type
 annotations produce declared schemas. The known JSON behavior of
 `@JsonController` supplies JSON media type; no status is inferred from the

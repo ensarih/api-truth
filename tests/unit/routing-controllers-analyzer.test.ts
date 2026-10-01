@@ -61,6 +61,26 @@ test("import aliases and namespace decorators produce D03-valid declared routes"
   expect(first.endpoints).toEqual(second.endpoints);
 });
 
+test("literal Body required options establish request body presence", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Post, Body, createExpressServer } from "routing-controllers";
+    const dynamic = { required: true };
+    @JsonController("/orders") class Orders {
+      @Post("/required") required(@Body({ required: true }) input: { title: string }): string { return input.title; }
+      @Post("/optional") optional(@Body({ required: false }) input: { title: string }): string { return input.title; }
+      @Post("/unknown") unknown(@Body(dynamic) input: { title: string }): string { return input.title; }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  const body = (path: string) => result.endpoints.find(endpoint => endpoint.application_path === path)?.request_bodies[0];
+  expect(body("/orders/required")?.presence.state).toBe("required");
+  expect(body("/orders/optional")?.presence.state).toBe("optional");
+  expect(body("/orders/unknown")?.presence.state).toBe("unknown");
+  expect(result.diagnostics.map(item => item.code)).toContain("body_options_unresolved");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
 test("unrelated same-named decorators emit no routes", async () => {
   const { adapter } = await service({ "controller.ts": `
     import { Controller, Get } from "unrelated";

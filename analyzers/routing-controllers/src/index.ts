@@ -7,7 +7,7 @@ import {
 import { digestSources, hash, inside, readSources } from "./source.js";
 
 /** Literal legacy decorators with directly resolved routing-controllers registration. */
-export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.2.0" };
+export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.3.0" };
 const literal = (node: ts.Node | undefined) => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const decorators = (node: ts.Node) => ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
@@ -47,7 +47,7 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 function extract(files: Map<string, string>, root: string, request: AnalyzerRequest, budget: () => void): AnalyzerResult {
   const effectiveMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
   const fingerprint = hash(JSON.stringify({ request: { ...request, extraction_mode: effectiveMode }, analyzer: ANALYZER,
-    compiler: ts.version, profile: "registered-legacy-2" }));
+    compiler: ts.version, profile: "registered-legacy-3" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -291,7 +291,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: controllerEv }, evidence_ids: [controllerEv] });
         result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: registrationEv }, evidence_ids: [registrationEv] });
         claim(endpoint, "route.declaration", { method: identity.method, path, controller: statement.name?.text ?? "anonymous", action: member.name.text }, route.decorator);
-        claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, profile: "registered-legacy-2", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
+        claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, profile: "registered-legacy-3", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
         if (statement.heritageClauses?.length) diagnostic("inherited_actions_unresolved", statement, endpoint);
         if (member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.StaticKeyword) || !member.body)
           diagnostic("action_implementation_unresolved", member, endpoint);
@@ -312,12 +312,24 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
             }
             if (name === "Body") {
               if (!call || call.arguments.length > 1) { diagnostic("body_binding_unsupported", entry.decorator, endpoint); continue; }
-              if (call.arguments.length) diagnostic("body_options_unresolved", entry.decorator, endpoint);
+              let required: boolean | undefined;
+              const option = call.arguments[0];
+              if (option !== undefined) {
+                if (ts.isObjectLiteralExpression(option) && option.properties.length === 1
+                  && ts.isPropertyAssignment(option.properties[0]!)
+                  && (ts.isIdentifier(option.properties[0]!.name) || ts.isStringLiteral(option.properties[0]!.name))
+                  && option.properties[0]!.name.text === "required"
+                  && [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(option.properties[0]!.initializer.kind))
+                  required = option.properties[0]!.initializer.kind === ts.SyntaxKind.TrueKeyword;
+                else diagnostic("body_options_unresolved", entry.decorator, endpoint);
+              }
               claim(endpoint, "request.body.declaration", schema(parameter.type, parameter, endpoint), parameter);
+              if (required !== undefined) claim(endpoint, "request.body.presence", required ? "required" : "optional", entry.decorator);
               if (controller.match.name === "JsonController") {
                 const ev = evidence(entry.decorator, "type_declaration", endpointId);
                 endpoint.request_bodies.push({ media_type: "application/json", schema: schema(parameter.type, parameter, endpoint),
-                  serialization: { format: "application/json" }, presence: { state: "unknown", evidence_ids: [ev] } });
+                  serialization: { format: "application/json" },
+                  presence: { state: required === true ? "required" : required === false ? "optional" : "unknown", evidence_ids: [ev] } });
               } else diagnostic("request_media_type_unknown", entry.decorator, endpoint);
               continue;
             }

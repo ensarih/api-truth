@@ -128,7 +128,7 @@ it does not substitute for a protected enterprise pilot.
 `nodejs-swagger2-document@0.3.0` reads a selected JSON or YAML document and emits
 declared route facts with incomplete coverage. It does not meet the
 `nodejs-swagger-express-mw` conformance gate: middleware binding and
-D08 profile selection remain in NB1–NB4. `nodejs-routing-controllers@0.2.0`
+D08 profile selection remain in NB1–NB4. `nodejs-routing-controllers@0.3.0`
 extracts literal decorator declarations, binds direct controller
 registrations, and applies literal global prefixes, but cannot prove the
 startup entry point. It is the first NB5
