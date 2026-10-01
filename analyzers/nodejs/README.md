@@ -13,8 +13,9 @@ This is a document profile, not yet the `nodejs-swagger-express-mw` runtime
 profile from [the backlog](../../docs/NODEJS_ANALYZER_BACKLOG.md). It does not
 establish that the middleware mounts a route or resolve a handler. Swagger
 `host`, `schemes`, and `basePath` are not joined into the route identity.
-Current JSON reading does not detect duplicate object keys, so even otherwise
-valid documents receive incomplete coverage. Unsupported security mapping,
+JSON parsing rejects duplicate decoded object keys and overly deep structures.
+Middleware binding is unverified, so even otherwise valid documents receive
+incomplete coverage. Unsupported security mapping,
 serialization details, form data, and unknown response media remain visible
 through diagnostics. YAML, middleware binding, and CI orchestration selection
 are subsequent backlog slices.

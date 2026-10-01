@@ -5,6 +5,7 @@ import {
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
 import { readSelectedDocument } from "./source.js";
+import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
@@ -85,8 +86,11 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
       verification: "declared", evidence_ids: [ev] });
   };
   let document: unknown;
-  try { document = JSON.parse(text); }
-  catch { diagnostic("invalid_json_document", "", "error"); return failed(result, documentPath); }
+  try { document = parseStrictJson(text); }
+  catch (error) {
+    diagnostic(error instanceof StrictJsonError ? error.code : "invalid_json_document", "", "error");
+    return failed(result, documentPath);
+  }
   let parsed: ReturnType<typeof parseSwagger2Document>;
   try { parsed = parseSwagger2Document(document); }
   catch { diagnostic("document_structure_limit_exceeded", "", "error"); return failed(result, documentPath); }
@@ -96,8 +100,7 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
   const raw = document as Record<string, unknown>;
   if (raw.basePath !== undefined) diagnostic("base_path_requires_middleware_profile", "/basePath");
   if (raw.host !== undefined || raw.schemes !== undefined) diagnostic("server_exposure_not_analyzed", "/host");
-  // JSON.parse cannot report duplicate keys. Keep coverage incomplete until the strict JSON reader lands.
-  diagnostic("json_duplicate_keys_unverified", "");
+  diagnostic("middleware_binding_unverified", "");
 
   const definitionIds = new Map(Object.keys(parsed.definitions).sort().map(name => [name, `schema-${hash(name).slice(0, 24)}`]));
   const convertSchema = (value: unknown, pointer: string, depth = 0): ApiSchema => {

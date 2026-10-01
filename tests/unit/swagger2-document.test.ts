@@ -78,6 +78,16 @@ test("reports unsupported constructs and rejects prototype-pollution keys", () =
   expect(parseSwagger2Document(polluted).status).toBe("failed");
 });
 
+test("duplicate operation IDs and undeclared path placeholders remain visible", () => {
+  const document = structuredClone(base) as any;
+  document.paths["/orders/{missing}"] = { get: { operationId: "getOrder", responses: { "200": { description: "ok" } } } };
+  const parsed = parseSwagger2Document(document);
+  expect(parsed.status).toBe("partial");
+  expect(parsed.operations).toHaveLength(2);
+  expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: "unsupported_construct", pointer: "/paths/~1orders~1{missing}/get/operationId" }));
+  expect(parsed.diagnostics).toContainEqual(expect.objectContaining({ code: "unsupported_construct", pointer: "/paths/~1orders~1{missing}/get/parameters" }));
+});
+
 test("diagnoses unhandled base paths and malformed security", () => {
   const document = structuredClone(base) as any;
   document.basePath = "/v1";

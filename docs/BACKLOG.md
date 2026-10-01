@@ -124,7 +124,7 @@ it does not substitute for a protected enterprise pilot.
 The initial `nodejs-swagger2-document@0.1.0` slice reads a selected JSON
 document and emits declared route facts with incomplete coverage. It does not
 meet the `nodejs-swagger-express-mw` conformance gate: middleware binding,
-duplicate-key detection, YAML, full serialization/security mapping, and D08
+YAML, full serialization/security mapping, and D08
 profile selection remain in NB1–NB4.
 | P3-LOGS | 3 | Sanitized runtime evidence, deployed URL correlation, and examples. | Ambiguous mappings stay unresolved, sensitive values never persist, and documentation still works when logs or bodies are unavailable. |
 | P4-SEMANTICS | 4 | Intent search and semantic understanding using configurable OpenAI, Gemini, and Claude adapters. | Grounded environment-specific answers pass the question evaluation; deterministic tests verify adapters and models neither run nor grade tests. |

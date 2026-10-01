@@ -45,10 +45,23 @@ test("selected Swagger 2 document yields a separate D03-valid declared route", a
   });
   expect(first.evidence.find(item => item.location.pointer === "/paths/~1orders~1{id}/get")).toMatchObject({ method: "type_declaration" });
   expect(first.claims).toContainEqual(expect.objectContaining({ predicate: "route.declaration", verification: "declared" }));
+  expect(first.diagnostics.map(item => item.code)).toContain("middleware_binding_unverified");
+  expect(first.diagnostics.map(item => item.code)).not.toContain("json_duplicate_keys_unverified");
   expect(first.dependencies).toContainEqual(expect.objectContaining({ from_endpoint_id: first.endpoints[0]?.endpoint_id,
     to: { kind: "schema", id: expect.stringMatching(/^schema-/) } }));
   expect(first.reproducibility_fingerprint).toBe(second.reproducibility_fingerprint);
   expect(first.endpoints).toEqual(second.endpoints);
+});
+
+test("duplicate document keys fail analysis before any operation is emitted", async () => {
+  const { root, adapter } = await service(document);
+  await writeFile(join(root, "service", "api", "swagger", "swagger.json"),
+    '{"swagger":"2.0","info":{"title":"Orders","version":"1"},"paths":{},"paths":{"/hidden":{"get":{"responses":{"200":{"description":"ok"}}}}}}');
+  const result = await adapter.analyze(request());
+  expect(result.status).toBe("failed");
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toContain("duplicate_json_key");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
 });
 
 test("unsupported document facts remain visible and prevent complete coverage", async () => {

@@ -112,6 +112,7 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
     return { state: "declared", alternatives: selected as Array<Record<string, string[]>> };
   };
   const operations: Swagger2Operation[] = [];
+  const operationIds = new Set<string>();
   const definitionMap = obj(input.definitions) ? input.definitions : {};
   const inspectSchema = (value: unknown, pointer: string): void => {
     if (Array.isArray(value)) { value.forEach((item, index) => inspectSchema(item, `${pointer}/${index}`)); return; }
@@ -154,6 +155,13 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
       const pointer = `${pathPointer}/${method}`;
       if (!obj(rawOperation)) { add("unsupported_construct", "warning", "Operation must be an object.", pointer); continue; }
       noteUnknown(rawOperation, operationFields, pointer);
+      if (rawOperation.operationId !== undefined) {
+        if (typeof rawOperation.operationId !== "string" || rawOperation.operationId.length === 0)
+          add("unsupported_construct", "warning", "Operation ID must be a non-empty string.", `${pointer}/operationId`);
+        else if (operationIds.has(rawOperation.operationId))
+          add("unsupported_construct", "warning", "Operation ID is repeated in this document.", `${pointer}/operationId`);
+        else operationIds.add(rawOperation.operationId);
+      }
       const merged = new Map<string, Swagger2Parameter>();
       const addParameters = (list: unknown, sourcePointer: string) => {
         if (!Array.isArray(list)) { add("unsupported_construct", "warning", "Parameters must be an array.", sourcePointer); return; }
@@ -178,6 +186,11 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
         if (obj(parameter) && parameter.schema !== undefined) inspectSchema(parameter.schema, `${pointer}/parameters/${index}/schema`);
       });
       const parameters = [...merged.values()];
+      const placeholders = [...path.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1]!);
+      for (const name of placeholders) if (!parameters.some((parameter) => parameter.in === "path" && parameter.name === name))
+        add("unsupported_construct", "warning", "Path placeholder has no matching path parameter declaration.", `${pointer}/parameters`);
+      for (const parameter of parameters) if (parameter.in === "path" && !placeholders.includes(parameter.name))
+        add("unsupported_construct", "warning", "Path parameter does not occur in route template.", parameter.pointer);
       const requestBodies = parameters.filter((item) => item.in === "body" || item.in === "formData")
         .map((item) => ({ ...item, media: media(rawOperation.consumes, input.consumes, `${pointer}/consumes`) }));
       const responses: Swagger2Response[] = [];
