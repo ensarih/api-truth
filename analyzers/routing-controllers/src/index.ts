@@ -9,7 +9,7 @@ import { parseRoutingProfile, type RoutingProfile } from "./profile.js";
 import { matchControllerGlob, resolveStaticExpression, resolveStaticPath } from "./controller-selection.js";
 
 /** Literal legacy decorators with directly resolved routing-controllers registration. */
-export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.6.0" };
+export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.7.0" };
 const literal = (node: ts.Node | undefined) => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const decorators = (node: ts.Node) => ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
@@ -65,7 +65,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
   profile?: RoutingProfile): AnalyzerResult {
   const effectiveMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
   const fingerprint = hash(JSON.stringify({ request: { ...request, extraction_mode: effectiveMode }, analyzer: ANALYZER,
-    compiler: ts.version, profile: "registered-legacy-6" }));
+    compiler: ts.version, profile: "registered-legacy-7" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -375,13 +375,13 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
             : registration[0]?.glob ? "inferred" : "declared",
           [bindingEv, ...(prefixEv ? [prefixEv] : []), ...(decoratorModuleEv ? [decoratorModuleEv] : [])]);
         claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version,
-          profile: "registered-legacy-6", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
+          profile: "registered-legacy-7", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
         if (statement.heritageClauses?.length) diagnostic("inherited_actions_unresolved", statement, endpoint);
         if (member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.StaticKeyword) || !member.body)
           diagnostic("action_implementation_unresolved", member, endpoint);
         const namedPath = new Set([...path.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)].map(match => match[1]!));
         let responseUnresolved = unsupportedControllerDecorators;
-        const wholeQueryNames = new Set<string>();
+        const wholeObjectNames = new Set<string>();
         for (const name of [...namedPath].sort()) endpoint.parameters.push({ name, in: "path",
           presence: { state: "required", evidence_ids: [routeEv] }, schema: {}, serialization: { style: "simple" } });
         for (const parameter of member.parameters) {
@@ -392,32 +392,36 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
               responseUnresolved = true;
               diagnostic("response_or_request_passthrough_unresolved", entry.decorator, endpoint); continue;
             }
-            if (name === "QueryParams") {
+            if (name === "QueryParams" || name === "HeaderParams") {
+              const location = name === "QueryParams" ? "query" : "header";
+              const scope = location === "query" ? "whole_query" : "whole_header";
               if (!call || call.arguments.length || !parameter.type || !ts.isTypeLiteralNode(parameter.type)) {
-                diagnostic("whole_query_type_unresolved", entry.decorator, endpoint); continue;
+                diagnostic(`${scope}_type_unresolved`, entry.decorator, endpoint); continue;
               }
               for (const member of parameter.type.members) {
                 if (!ts.isPropertySignature(member) || !member.name
                   || !(ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))) {
-                  diagnostic("whole_query_member_unsupported", member, endpoint); continue;
+                  diagnostic(`${scope}_member_unsupported`, member, endpoint); continue;
                 }
                 const key = member.name.text;
-                const existing = endpoint.parameters.find(item => item.in === "query" && item.name === key);
+                const normalized = location === "header" ? key.toLowerCase() : key;
+                const existing = endpoint.parameters.find(item => item.in === location
+                  && (location === "header" ? item.name.toLowerCase() : item.name) === normalized);
                 if (existing) {
                   existing.schema = {};
                   existing.presence = { state: "unknown", evidence_ids: [evidence(entry.decorator, "type_declaration", endpointId)] };
-                  diagnostic("whole_query_parameter_collision", member, endpoint);
+                  diagnostic(`${scope}_parameter_collision`, member, endpoint);
                   continue;
                 }
-                wholeQueryNames.add(key);
+                wholeObjectNames.add(`${location}:${normalized}`);
                 const ev = evidence(member, "type_declaration", endpointId);
-                endpoint.parameters.push({ name: key, in: "query", presence: { state: "unknown", evidence_ids: [ev] },
-                  schema: schema(member.type, member, endpoint), serialization: { style: "form" } });
-                claim(endpoint, "parameter.declaration", { name: key, in: "query", binding: "whole_query_object" }, member);
+                endpoint.parameters.push({ name: key, in: location, presence: { state: "unknown", evidence_ids: [ev] },
+                  schema: schema(member.type, member, endpoint), serialization: { style: location === "header" ? "simple" : "form" } });
+                claim(endpoint, "parameter.declaration", { name: key, in: location, binding: `${scope}_object` }, member);
               }
               continue;
             }
-            if (["Params", "HeaderParams", "CookieParams", "BodyParam", "UploadedFile", "UploadedFiles", "CookieParam", "Session", "SessionParam", "State"].includes(name)) {
+            if (["Params", "CookieParams", "BodyParam", "UploadedFile", "UploadedFiles", "CookieParam", "Session", "SessionParam", "State"].includes(name)) {
               diagnostic("parameter_binding_unsupported", entry.decorator, endpoint); continue;
             }
             if (name === "Body") {
@@ -459,11 +463,13 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
             }
             const ev = evidence(entry.decorator, "type_declaration", endpointId);
             const parameterSchema = schema(parameter.type, parameter, endpoint);
-            const existing = endpoint.parameters.find(item => item.in === location && item.name === key);
-            if (location === "query" && wholeQueryNames.has(key) && existing) {
+            const normalized = location === "header" ? key.toLowerCase() : key;
+            const existing = endpoint.parameters.find(item => item.in === location
+              && (location === "header" ? item.name.toLowerCase() : item.name) === normalized);
+            if (wholeObjectNames.has(`${location}:${normalized}`) && existing) {
               existing.schema = {};
               existing.presence = { state: "unknown", evidence_ids: [ev] };
-              diagnostic("whole_query_parameter_collision", entry.decorator, endpoint);
+              diagnostic(location === "header" ? "whole_header_parameter_collision" : "whole_query_parameter_collision", entry.decorator, endpoint);
               continue;
             }
             if (existing) {
@@ -471,7 +477,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
               if (location === "path" && required === false) diagnostic("optional_path_parameter_unsupported", entry.decorator, endpoint);
             } else endpoint.parameters.push({ name: key, in: location,
               presence: { state: required === true ? "required" : required === false ? "optional" : "unknown", evidence_ids: [ev] },
-              schema: parameterSchema, serialization: { style: location === "path" ? "simple" : "form" } });
+              schema: parameterSchema, serialization: { style: location === "query" ? "form" : "simple" } });
             claim(endpoint, "parameter.presence", location === "path" ? "required" : required === true ? "required" : required === false ? "optional" : "unknown", entry.decorator);
           }
         }

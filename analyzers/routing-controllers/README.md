@@ -1,6 +1,6 @@
 # routing-controllers analyzer profile
 
-`nodejs-routing-controllers@0.6.0` reads a bounded service source tree and emits
+`nodejs-routing-controllers@0.7.0` reads a bounded service source tree and emits
 a D03 analyzer result. It never executes project code or resolves packages.
 
 Run it locally with `npm run extract:routing-controllers -- --source <service-tree>
@@ -18,11 +18,12 @@ annotations produce declared schemas. The known JSON behavior of
 `@JsonController` supplies JSON media type; no status is inferred from the
 HTTP method or a return type.
 
-`@QueryParams()` with an inline object type emits its declared fields as query
-parameters. Their runtime requiredness remains unknown, including for fields
-without TypeScript's optional marker. A class or imported type is not expanded
-by this slice. A field also declared through `@QueryParam` is marked unresolved
-rather than choosing one of the two declarations.
+`@QueryParams()` and `@HeaderParams()` with inline object types emit declared
+query and header fields. Their runtime requiredness remains unknown, including
+for fields without TypeScript's optional marker. A class or imported type is
+not expanded by this slice. A field also declared through the matching named
+decorator is marked unresolved rather than choosing one of the declarations.
+Header name collisions are compared without case sensitivity.
 
 The default profile requires a direct call to `createExpressServer`, `useExpressServer`,
 `createKoaServer`, or `useKoaServer` imported from `routing-controllers`. Its

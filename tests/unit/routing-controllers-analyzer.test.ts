@@ -221,6 +221,60 @@ test("named and whole-object query bindings with the same key stay unresolved", 
   expect(parseAnalyzerResult(result).ok).toBe(true);
 });
 
+test("whole-object HeaderParams expands inline fields without inferring requiredness", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Get, HeaderParams, HeaderParam, createExpressServer } from "routing-controllers";
+    @JsonController("/orders") class Orders {
+      @Get() list(@HeaderParams() headers: { "x-trace-id": string; "x-client-version"?: number },
+        @HeaderParam("x-region") region?: string): string { return headers["x-trace-id"]; }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints[0]?.parameters).toMatchObject([
+    { in: "header", name: "x-client-version", presence: { state: "unknown" }, schema: { type: "number" }, serialization: { style: "simple" } },
+    { in: "header", name: "x-region", presence: { state: "unknown" }, schema: { type: "string" } },
+    { in: "header", name: "x-trace-id", presence: { state: "unknown" }, schema: { type: "string" }, serialization: { style: "simple" } },
+  ]);
+  expect(result.claims).toContainEqual(expect.objectContaining({ predicate: "parameter.declaration",
+    value: { name: "x-trace-id", in: "header", binding: "whole_header_object" } }));
+  expect(result.diagnostics.map(item => item.code)).not.toContain("parameter_binding_unsupported");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("named and whole-object header bindings collide case-insensitively", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Get, HeaderParams, HeaderParam, createExpressServer } from "routing-controllers";
+    @JsonController() class Orders {
+      @Get("/items") list(@HeaderParam("X-Trace-ID", { required: true }) id: string,
+        @HeaderParams() headers: { "x-trace-id": number }): string { return id; }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints[0]?.parameters).toMatchObject([
+    { in: "header", name: "X-Trace-ID", presence: { state: "unknown" }, schema: {} },
+  ]);
+  expect(result.diagnostics.map(item => item.code)).toContain("whole_header_parameter_collision");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("unsupported whole-header DTOs do not invent fields", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Get, HeaderParams, createExpressServer } from "routing-controllers";
+    interface Headers { "x-trace-id": string }
+    @JsonController() class Orders {
+      @Get("/items") list(@HeaderParams() headers: Headers): string { return headers["x-trace-id"]; }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints[0]?.parameters).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toContain("whole_header_type_unresolved");
+  expect(result.coverage.status).toBe("incomplete");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
 test("unrelated same-named decorators emit no routes", async () => {
   const { adapter } = await service({ "controller.ts": `
     import { Controller, Get } from "unrelated";
