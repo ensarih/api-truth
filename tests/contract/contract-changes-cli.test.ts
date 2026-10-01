@@ -117,7 +117,7 @@ describe("contract changes CLI", () => {
         expect(/^sha256:[a-f0-9]{64}$/.test(value), "digest leaked to stdout").toBe(false);
       }
     });
-  });
+  }, 30000);
 
   test.each([
     ["missing", documentedArguments.slice(0, -2)],

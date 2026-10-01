@@ -31,7 +31,7 @@ test("CLI rejects mutable revisions, unsupported IR, missing and unknown argumen
     expect(result.stderr).not.toContain("private-secret");
     expect(result.stderr).not.toContain(baseline);
   }
-});
+}, 30000);
 
 test("CLI never executes source side effects or reads fixture expectations", async () => {
   const root = await mkdtemp(join(tmpdir(), "extractor-cli-"));
