@@ -5,7 +5,7 @@ import { parseAnalyzerRequest, parseAnalyzerResult, deriveEndpointIdentity,
   type AnalyzerRequest, type AnalyzerResult, type Endpoint, type Evidence, type ApiSchema, type Claim,
 } from "../../../packages/ir/src/index.js";
 
-export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.2.0" };
+export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.3.0" };
 const walk = (node: ts.Node, visit: (node: ts.Node) => void) => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
 const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 
@@ -167,6 +167,13 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     }
     return undefined;
   };
+  const storedRouteBuilder = (expression: ts.Expression): boolean => {
+    const declaration = symbol(expression)?.valueDeclaration;
+    if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer
+      || !ts.isCallExpression(declaration.initializer) || !ts.isPropertyAccessExpression(declaration.initializer.expression)
+      || declaration.initializer.expression.name.text !== "route") return false;
+    return receivers.has(symbol(declaration.initializer.expression.expression)!);
+  };
   const conditional = (node: ts.Node, staticScope?: ts.FunctionLikeDeclaration): boolean => {
     for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
       if (ts.isIfStatement(parent) || ts.isIterationStatement(parent, false) || ts.isSwitchStatement(parent) || ts.isConditionalExpression(parent)
@@ -176,7 +183,8 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     return false;
   };
   for (const source of sources.values()) walk(source, node => {
-    if (ts.isImportDeclaration(node) && literal(node.moduleSpecifier) !== "express" && !symbol(node.moduleSpecifier)?.declarations?.some(d => ts.isSourceFile(d))) diagnostic("import_unresolved", node);
+    if (ts.isImportDeclaration(node) && literal(node.moduleSpecifier)?.startsWith(".")
+      && !symbol(node.moduleSpecifier)?.declarations?.some(d => ts.isSourceFile(d))) diagnostic("import_unresolved", node);
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) diagnostic("dynamic_import_unresolved", node);
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
     const method = node.expression.name.text;
@@ -184,7 +192,11 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     const chain = !direct && methods.has(method) ? routeBuilder(node) : undefined;
     const receiver = direct ?? chain?.receiver;
     if (!receiver) {
-      if (methods.has(method) || ["route", "use"].includes(method)) diagnostic("route_receiver_unsupported", node);
+      const path = literal(node.arguments[0]);
+      const routeShaped = (methods.has(method) || method === "use")
+        && node.arguments.length >= 2 && path?.startsWith("/");
+      if (routeShaped || methods.has(method) && storedRouteBuilder(node.expression.expression))
+        diagnostic("route_receiver_unsupported", node);
       return;
     }
     const staticScope = factoryScopes.get(receiver);

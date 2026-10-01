@@ -1,6 +1,6 @@
 # Node.js Swagger 2 document analyzer (initial slice)
 
-`nodejs-swagger2-document@0.1.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.2.0` reads one explicitly selected, contained
 Swagger 2 **JSON** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -15,7 +15,10 @@ establish that the middleware mounts a route or resolve a handler. Swagger
 `host`, `schemes`, and `basePath` are not joined into the route identity.
 JSON parsing rejects duplicate decoded object keys and overly deep structures.
 Middleware binding is unverified, so even otherwise valid documents receive
-incomplete coverage. Unsupported security mapping,
+incomplete coverage. Swagger 2 `apiKey` and `basic` security definitions and
+requirements retain document evidence; OAuth 2, missing definitions, and
+unrepresentable scopes leave operation security unknown with diagnostics.
+Unsupported security mapping,
 serialization details, form data, and unknown response media remain visible
 through diagnostics. YAML, middleware binding, and CI orchestration selection
 are subsequent backlog slices.

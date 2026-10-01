@@ -97,3 +97,14 @@ test("diagnoses unhandled base paths and malformed security", () => {
   expect(parsed.operations[0]?.security).toEqual({ state: "unknown" });
   expect(parsed.diagnostics.map((item) => item.code)).toContain("unsupported_construct");
 });
+
+test("points malformed operation security at the overriding declaration", () => {
+  const document = structuredClone(base) as any;
+  document.security = [];
+  document.paths["/orders/{id}"].get.security = "invalid";
+  const parsed = parseSwagger2Document(document);
+  expect(parsed.operations[0]?.security).toEqual({ state: "unknown" });
+  expect(parsed.diagnostics).toContainEqual(expect.objectContaining({
+    code: "unsupported_construct", pointer: "/paths/~1orders~1{id}/get/security",
+  }));
+});

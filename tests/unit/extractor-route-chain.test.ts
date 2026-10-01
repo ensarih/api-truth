@@ -62,3 +62,17 @@ test("stored route builders and unrelated fluent APIs are not treated as Express
   expect(result.endpoints).toEqual([]);
   expect(result.diagnostics.map(item => item.code)).toContain("route_receiver_unsupported");
 });
+
+test("ordinary get and post calls do not degrade Express coverage", async () => {
+  const result = await analyze(`import express from "express"; import { trace } from "observability-package";
+    const app = express();
+    trace("request");
+    const values = new Map<string, string>();
+    values.get("key");
+    const client = { post: (_value: string) => true, route: (_path: string) => ({ get: () => true }) };
+    client.post("payload"); client.route("/not-an-express-route").get();
+    app.get("/real", (_req, res) => res.status(200).end());`);
+  expect(result.endpoints.map(item => item.application_path)).toEqual(["/real"]);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("route_receiver_unsupported");
+  expect(result.diagnostics.map(item => item.code)).not.toContain("import_unresolved");
+});

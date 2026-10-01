@@ -1,9 +1,12 @@
 # Node.js analyzer expansion backlog
 
-**Status:** reviewed backlog, 2026-09-29
-**Current implementation:** `typescript-express@0.2.0` covers a bounded static
-Express subset. Swagger/OpenAPI-defined middleware routes and class-decorator
-routes are not currently discovered.
+**Status:** active analyzer priority, 2026-10-01
+**Current implementation:** `typescript-express@0.3.0` covers a bounded static
+Express subset. `nodejs-swagger2-document@0.2.0` reads selected Swagger 2 JSON
+declarations but cannot establish middleware mounting or handler binding.
+`nodejs-routing-controllers@0.1.0` extracts a bounded literal decorator subset
+but does not verify controller registration. OpenAPI 3 and other decorator
+frameworks are not currently discovered.
 
 This backlog records the work needed to cover those services without weakening
 the project's evidence, identity, isolation, or update guarantees. It was
@@ -15,9 +18,11 @@ repository.
 | Flow | Status | Existing capability to reuse |
 |---|---|---|
 | Literal Express app/router registrations | Implemented within the published D05 support matrix | Endpoint identity, mounted routers, DTO schemas, selected validators, response serialization, evidence, dependencies, diagnostics |
-| Swagger 2 routes loaded by `swagger-express-mw` | Missing | D03 endpoint/schema/evidence contracts and D07 update/difference engine |
+| Swagger 2 JSON declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions, and D07 update/difference engine |
+| Swagger 2 routes loaded by `swagger-express-mw` | Missing runtime binding | Document-only profile and its bounded JSON parser |
 | OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
-| NestJS, routing-controllers, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
+| routing-controllers literal decorators | Initial profile; controller registration unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
+| NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
 | Mixed Express/spec/decorator services | Detection and merge policy missing | D03 identity/provenance and D07 deletion safety provide constraints for a future composite design |
 
 D07 is already analyzer-neutral. Once a new adapter emits a valid D03 result,
@@ -144,7 +149,10 @@ reaches every applicable endpoint through D07.
 ### NB5 — First decorator framework profile
 
 **Priority:** P0 when dominant in the pilot, otherwise P1
-**Profile choice:** select exactly one named framework/version family from NB2.
+
+**Profile choice:** `routing-controllers` is the first family, based on the
+project owner's priority. The `0.1.0` literal profile is an initial slice,
+not completion of this gate.
 
 - Resolve decorators by import provenance, including aliases and namespaces;
   never match a bare name from an unrelated package.
@@ -200,7 +208,7 @@ produce diagnostics, and no environment URL becomes an application route.
 - Trace transparent relative re-export chains inside the selected service.
 - Represent external/custom aliases with a closed, digest-bound profile or
   manifest. Do not crawl arbitrary `node_modules` or trust same-named exports.
-- Add NestJS, routing-controllers, tsoa, and inversify profiles one at a time,
+- Complete routing-controllers, then add NestJS, tsoa, and inversify profiles one at a time,
   each with pinned versions and an independent support matrix.
 - Cover framework-specific global prefixes, generated metadata, default status
   behavior, response/security decorators, middleware, inheritance, and

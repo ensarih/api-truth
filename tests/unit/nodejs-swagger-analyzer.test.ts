@@ -96,3 +96,56 @@ test("local unsupported routes do not suppress a valid operation or create dupli
   expect(result.diagnostics.map(item => item.code)).toEqual(expect.arrayContaining(["unsupported_construct", "conflicting_route_declarations"]));
   expect(parseAnalyzerResult(result).ok).toBe(true);
 });
+
+test("maps declared Swagger 2 API-key and basic security with document evidence", async () => {
+  const secured = structuredClone(document) as any;
+  secured.securityDefinitions = {
+    apiToken: { type: "apiKey", name: "X-API-Token", in: "header" },
+    basic: { type: "basic" },
+  };
+  secured.security = [{ apiToken: [], basic: [] }, { basic: [] }];
+  const { adapter } = await service(secured);
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.security_schemes).toEqual({
+    apiToken: { definition: { type: "apiKey", name: "X-API-Token", in: "header" },
+      evidence_ids: [expect.any(String)] },
+    basic: { definition: { type: "http", scheme: "basic" }, evidence_ids: [expect.any(String)] },
+  });
+  expect(result.endpoints[0]?.security).toMatchObject({ state: "declared", alternatives: [
+    { requirements: [{ scheme: "apiToken", scopes: [] }, { scheme: "basic", scopes: [] }] },
+    { requirements: [{ scheme: "basic", scopes: [] }] },
+  ] });
+  expect(result.evidence).toContainEqual(expect.objectContaining({ location: expect.objectContaining({
+    pointer: "/securityDefinitions/apiToken",
+  }) }));
+  expect(result.diagnostics.map(item => item.code)).not.toContain("security_mapping_unresolved");
+});
+
+test("unsupported or missing Swagger security schemes keep operation security unknown", async () => {
+  const secured = structuredClone(document) as any;
+  secured.securityDefinitions = {
+    token: { type: "apiKey", name: "key", in: "header" },
+    oauth: { type: "oauth2", flow: "implicit", authorizationUrl: "https://example.test/auth", scopes: {} },
+  };
+  secured.security = [{ token: [], oauth: [] }, { missing: [] }];
+  const { adapter } = await service(secured);
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints[0]?.security).toEqual({ state: "unknown", alternatives: [] });
+  expect(result.diagnostics.map(item => item.code)).toContain("security_mapping_unresolved");
+  expect(result.security_schemes?.token?.definition).toEqual({ type: "apiKey", name: "key", in: "header" });
+  expect(result.security_schemes?.oauth).toBeUndefined();
+});
+
+test("operation-level anonymous security overrides inherited requirements", async () => {
+  const secured = structuredClone(document) as any;
+  secured.securityDefinitions = { token: { type: "apiKey", name: "key", in: "query" } };
+  secured.security = [{ token: [] }];
+  secured.paths["/orders/{id}"].get.security = [];
+  const { adapter } = await service(secured);
+  const result = await adapter.analyze(request());
+  expect(result.endpoints[0]?.security).toMatchObject({ state: "anonymous", alternatives: [] });
+  const securityEvidence = result.evidence.find(item => result.endpoints[0]?.security.evidence_ids?.includes(item.evidence_id));
+  expect(securityEvidence?.location.pointer).toBe("/paths/~1orders~1{id}/get/security");
+});

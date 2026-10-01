@@ -97,16 +97,17 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
     }
     return { state: "known", values: [...new Set(selected as string[])] };
   };
-  const security = (value: unknown, inherited: unknown): Swagger2Security => {
+  const security = (value: unknown, inherited: unknown, pointer: string): Swagger2Security => {
     const selected = value === undefined ? inherited : value;
+    const selectedPointer = value === undefined ? "/security" : pointer;
     if (selected === undefined) return { state: "unknown" };
     if (!Array.isArray(selected)) {
-      add("unsupported_construct", "warning", "Security declaration must be an array; security remains unknown.", "/security");
+      add("unsupported_construct", "warning", "Security declaration must be an array; security remains unknown.", selectedPointer);
       return { state: "unknown" };
     }
     if (!selected.length) return { state: "anonymous" };
     if (!selected.every((entry) => obj(entry) && Object.values(entry).every((scopes) => Array.isArray(scopes) && scopes.every((scope) => typeof scope === "string")))) {
-      add("unsupported_construct", "warning", "Security declaration is malformed; security remains unknown.", "/security");
+      add("unsupported_construct", "warning", "Security declaration is malformed; security remains unknown.", selectedPointer);
       return { state: "unknown" };
     }
     return { state: "declared", alternatives: selected as Array<Record<string, string[]>> };
@@ -217,7 +218,7 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
         pointer, evidencePointer: pointer, parameters: parameters.filter((item) => item.in !== "body" && item.in !== "formData"), requestBodies, responses,
         consumes: media(rawOperation.consumes, input.consumes, `${pointer}/consumes`),
         produces: media(rawOperation.produces, input.produces, `${pointer}/produces`),
-        security: security(rawOperation.security, input.security),
+        security: security(rawOperation.security, input.security, `${pointer}/security`),
       };
       operations.push(operation);
     }

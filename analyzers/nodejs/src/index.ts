@@ -9,7 +9,7 @@ import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.1.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.2.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -101,6 +101,33 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
   if (raw.basePath !== undefined) diagnostic("base_path_requires_middleware_profile", "/basePath");
   if (raw.host !== undefined || raw.schemes !== undefined) diagnostic("server_exposure_not_analyzed", "/host");
   diagnostic("middleware_binding_unverified", "");
+
+  // Swagger 2 basic and apiKey map exactly to the D03 security vocabulary.
+  // OAuth 2 needs a richer IR definition; retaining an unknown operation is
+  // safer than dropping its scopes or claiming that it is anonymous.
+  const securityDefinitions = parsed.securityDefinitions;
+  result.security_schemes = {};
+  for (const [name, value] of Object.entries(securityDefinitions).sort(([a], [b]) => a.localeCompare(b))) {
+    const pointer = `/securityDefinitions/${pointerPart(name)}`;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      diagnostic("security_scheme_unsupported", pointer);
+      continue;
+    }
+    const definition = value as Record<string, unknown>;
+    const allowed = definition.type === "basic" ? ["type", "description"]
+      : definition.type === "apiKey" ? ["type", "name", "in", "description"] : [];
+    if (allowed.length === 0 || Object.keys(definition).some(key => !allowed.includes(key))) {
+      diagnostic("security_scheme_unsupported", pointer);
+      continue;
+    }
+    if (definition.type === "basic") {
+      result.security_schemes[name] = { definition: { type: "http", scheme: "basic" }, evidence_ids: [evidence(pointer)] };
+    } else if (typeof definition.name === "string" && definition.name.length > 0
+      && (definition.in === "header" || definition.in === "query")) {
+      result.security_schemes[name] = { definition: { type: "apiKey", name: definition.name, in: definition.in },
+        evidence_ids: [evidence(pointer)] };
+    } else diagnostic("security_scheme_unsupported", pointer);
+  }
 
   const definitionIds = new Map(Object.keys(parsed.definitions).sort().map(name => [name, `schema-${hash(name).slice(0, 24)}`]));
   const convertSchema = (value: unknown, pointer: string, depth = 0): ApiSchema => {
@@ -194,12 +221,22 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
       claim(endpoint, "response.status", response.selector, response.pointer);
     }
     if (!endpoint.responses.length) endpoint.responses.push({ status: { kind: "unknown", reason: "document response unresolved" }, content: [] });
+    const securityPointer = (raw.paths as Record<string, Record<string, Record<string, unknown>>>)[operation.path]?.[operation.method]?.security !== undefined
+      ? `${operation.pointer}/security` : "/security";
     if (operation.security.state === "anonymous") {
-      const secEv = evidence(`${operation.pointer}/security`, endpointId);
+      const secEv = evidence(securityPointer, endpointId);
       endpoint.security = { state: "anonymous", alternatives: [], evidence_ids: [secEv] };
     } else if (operation.security.state === "declared") {
-      diagnostic("security_mapping_unresolved", `${operation.pointer}/security`, "warning", endpointId);
-      claim(endpoint, "security.declaration", operation.security.alternatives, `${operation.pointer}/security`);
+      const alternatives = operation.security.alternatives.map(alternative => Object.entries(alternative)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([scheme, scopes]) => ({ scheme, scopes })));
+      const representable = alternatives.every(requirements => requirements.length > 0 && requirements.every(requirement =>
+        result.security_schemes?.[requirement.scheme] !== undefined && requirement.scopes.length === 0));
+      if (representable) {
+        endpoint.security = { state: "declared", alternatives: alternatives.map(requirements => ({ requirements })),
+          evidence_ids: [evidence(securityPointer, endpointId)] };
+      } else diagnostic("security_mapping_unresolved", securityPointer, "warning", endpointId);
+      claim(endpoint, "security.declaration", operation.security.alternatives, securityPointer);
     }
     const seenSchemas = new Set<string>();
     const addSchemaDependencies = (schema: ApiSchema) => {

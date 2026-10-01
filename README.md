@@ -47,6 +47,8 @@ Start with:
 - [Phased roadmap](docs/ROADMAP.md)
 - [Testing and local validation](docs/TESTING.md)
 - [TypeScript/Express analyzer and support matrix](analyzers/typescript/README.md)
+- [routing-controllers decorator analyzer](analyzers/routing-controllers/README.md)
+- [Swagger 2 document analyzer](analyzers/nodejs/README.md)
 - [Catalog package and local round-trip](packages/catalog/README.md)
 - [Orchestration package and local lifecycle test](packages/orchestration/README.md)
 - [Environment-resolution core](packages/environment/README.md)
