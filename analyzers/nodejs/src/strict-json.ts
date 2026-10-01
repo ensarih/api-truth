@@ -1,6 +1,8 @@
 export class StrictJsonError extends Error {
-  constructor(readonly code: "invalid_json_document" | "duplicate_json_key" | "document_structure_limit_exceeded") {
+  readonly code: "invalid_json_document" | "duplicate_json_key" | "document_structure_limit_exceeded";
+  constructor(code: StrictJsonError["code"]) {
     super("Selected JSON document rejected");
+    this.code = code;
   }
 }
 

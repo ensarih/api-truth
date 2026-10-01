@@ -20,6 +20,20 @@ serialization details, form data, and unknown response media remain visible
 through diagnostics. YAML, middleware binding, and CI orchestration selection
 are subsequent backlog slices.
 
+## Try it locally
+
+From the repository root:
+
+```sh
+npm run --silent extract:swagger2 -- --source fixtures/nodejs/swagger2/orders --document api/swagger/swagger.json --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+```
+
+`--source` is the selected service directory; `--document` is a path inside
+that directory. The command writes one D03 JSON result to stdout and diagnostic
+codes to stderr. `--revision` must be an immutable 12–128 character hex
+revision. This fixture produces one declared GET route and a visible
+`middleware_binding_unverified` diagnostic.
+
 Run the local checks with `npm run check`. The focused tests are in
 `tests/unit/swagger2-document.test.ts`,
 `tests/unit/nodejs-document-source.test.ts`, and

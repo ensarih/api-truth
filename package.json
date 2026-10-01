@@ -20,6 +20,7 @@
     "test:orchestration": "node scripts/test-environment.ts ready && vitest run --config vitest.integration.config.ts tests/integration/orchestration-execution.test.ts tests/integration/orchestration-persistence.test.ts tests/integration/orchestration-scheduling.test.ts tests/integration/orchestration-workers.test.ts --maxWorkers=2",
     "test:extractor": "vitest run tests/unit/extractor.test.ts tests/contract/extractor-cli.test.ts",
     "extract": "node scripts/extract.mjs",
+    "extract:swagger2": "node scripts/extract-swagger2.mjs",
     "catalog:roundtrip": "node scripts/catalog-roundtrip.ts",
     "openapi:roundtrip": "node scripts/test-environment.ts ready && node --disable-warning=ExperimentalWarning --experimental-transform-types scripts/openapi-roundtrip.ts",
     "changes": "node scripts/contract-changes.ts",
