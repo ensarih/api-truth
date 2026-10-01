@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { ANALYZER, createAnalyzer } from "../../analyzers/routing-controllers/src/index.js";
 import { parseAnalyzerResult, type AnalyzerRequest } from "../../packages/ir/src/index.js";
@@ -10,7 +10,11 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, {
 async function service(files: Record<string, string>) {
   const root = await mkdtemp(join(tmpdir(), "api-truth-routing-controllers-")); roots.push(root);
   await mkdir(join(root, "service"));
-  for (const [name, text] of Object.entries(files)) await writeFile(join(root, "service", name), text);
+  for (const [name, text] of Object.entries(files)) {
+    const path = join(root, "service", name);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text);
+  }
   return { root, adapter: createAnalyzer({ projectRoot: root }) };
 }
 function request(): AnalyzerRequest {
@@ -76,6 +80,52 @@ test("declaration profile rejects unsupported fields and digest mismatches", asy
   const input = profileRequest();
   input.resolution_inputs[1]!.digest = `sha256:${"0".repeat(64)}`;
   await expect(adapter.analyze(input)).rejects.toThrow("Source digest mismatch");
+});
+
+test("a contained controller glob selects only matching source files through imported static config", async () => {
+  const { adapter } = await service({
+    "loader.ts": `import { createExpressServer } from "routing-controllers";
+      import { env } from "./env";
+      createExpressServer({ routePrefix: "/api", controllers: env.app.dirs.controllers });`,
+    "env.ts": `import path from "node:path";
+      export const env = { app: { dirs: { controllers: [path.join(__dirname, "api/controllers/**/*Controller{.js,.ts}")] } } };`,
+    "api/controllers/PetController.ts": `import { JsonController, Get, Param } from "routing-controllers";
+      @JsonController("/pets") export class PetController {
+        @Get("/:id") one(@Param("id") id: string): string { return id; }
+      }`,
+    "other/DeadController.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/dead") export class DeadController { @Get() list(): string { return "dead"; } }`,
+  });
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/api/pets/:id"]);
+  expect(result.diagnostics.map(item => item.code)).toContain("controller_glob_source_projection_unverified");
+  expect(result.diagnostics.map(item => item.code)).not.toContain("controller_list_unresolved");
+});
+
+test("a dynamic route prefix needs an explicit profile before glob-selected routes get an identity", async () => {
+  const { adapter } = await service({
+    "loader.ts": `import { createExpressServer } from "routing-controllers";
+      import { env } from "./env";
+      createExpressServer({ routePrefix: env.app.routePrefix, controllers: env.app.dirs.controllers });`,
+    "env.ts": `import path from "node:path";
+      export const env = { app: { routePrefix: process.env.API_ROUTE_PREFIX,
+        dirs: { controllers: [path.join(__dirname, "api/controllers/**/*Controller{.js,.ts}")] } } };`,
+    "api/controllers/PetController.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/pets") export class PetController { @Get() list(): string { return "ok"; } }`,
+    "other/DeadController.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/dead") export class DeadController { @Get() list(): string { return "dead"; } }`,
+    "api-truth.routing.json": JSON.stringify({ profile_version: "1.0.0", decorator_modules: [],
+      binding: "declarations_only", route_prefix: "/v1" }),
+  });
+  const unconfigured = await adapter.analyze(request());
+  expect(unconfigured.endpoints).toEqual([]);
+  expect(unconfigured.diagnostics.map(item => item.code)).toContain("route_prefix_unresolved");
+  const result = await adapter.analyze(profileRequest());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/v1/pets"]);
+  expect(result.claims).toContainEqual(expect.objectContaining({ predicate: "route.declaration", verification: "owner_asserted" }));
+  expect(result.diagnostics.map(item => item.code)).toContain("configured_route_prefix_unverified");
 });
 
 test("import aliases and namespace decorators produce D03-valid declared routes", async () => {
@@ -239,7 +289,7 @@ test("conditional setup, option spreads, and glob selections remain incomplete",
   const result = await adapter.analyze(request());
   expect(result.endpoints).toEqual([]);
   expect(result.diagnostics.map(d => d.code)).toEqual(expect.arrayContaining([
-    "conditional_registration_unresolved", "registration_options_unresolved", "controller_reference_unresolved",
+    "conditional_registration_unresolved", "registration_options_unresolved", "controller_glob_unsupported",
   ]));
   expect(result.status).toBe("partial");
   expect(parseAnalyzerResult(result).ok).toBe(true);

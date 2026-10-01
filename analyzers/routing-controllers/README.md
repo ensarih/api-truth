@@ -1,6 +1,6 @@
 # routing-controllers analyzer profile
 
-`nodejs-routing-controllers@0.5.0` reads a bounded service source tree and emits
+`nodejs-routing-controllers@0.6.0` reads a bounded service source tree and emits
 a D03 analyzer result. It never executes project code or resolves packages.
 
 Run it locally with `npm run extract:routing-controllers -- --source <service-tree>
@@ -26,10 +26,15 @@ rather than choosing one of the two declarations.
 
 The default profile requires a direct call to `createExpressServer`, `useExpressServer`,
 `createKoaServer`, or `useKoaServer` imported from `routing-controllers`. Its
-literal options must contain a `controllers` array of direct class references,
-including contained relative imports. A literal `routePrefix` joins the
-controller and action paths. Without an explicitly selected declaration profile,
-unregistered decorated classes emit no endpoints.
+options must contain a `controllers` array of direct class references or a
+bounded absolute glob. The array may be reached through imported static `const`
+objects. Globs built with an imported `path.join(__dirname, ...)` can select
+matching files inside the selected source tree; unsupported or out-of-service
+patterns produce diagnostics. A literal or statically resolved `routePrefix`
+joins the controller and action paths. Source-to-runtime glob projection remains
+unverified, so glob-derived routes have incomplete coverage and inferred route
+claims. Without an explicitly selected declaration profile, unregistered
+decorated classes emit no endpoints.
 
 For services that bootstrap controllers through a separate wrapper, place a
 profile JSON file inside the selected production source tree and pass its
@@ -55,6 +60,12 @@ path and content are included in the source fingerprint, and malformed,
 duplicate-key, or out-of-service profiles are rejected. No package is loaded or
 executed during analysis.
 
+The same selected profile can supply `route_prefix` when a direct registration
+reads its prefix from an environment variable. In that case, the analyzer still
+uses only controllers matched by the static registration list or glob; it does
+not emit every decorated class. Without an explicit prefix value, it reports
+`route_prefix_unresolved` and emits no potentially incorrect full route path.
+
 Coverage remains incomplete because the request does not identify a proven
 production startup entry point. Registration in an unused file cannot establish
 runtime exposure. Dynamic or ambiguous registration adds scoped diagnostics.
@@ -77,6 +88,12 @@ npm run --silent extract:routing-controllers -- --source fixtures/nodejs/routing
 
 To use a declaration profile, add `--profile api-truth.routing.json` when that
 file is inside the directory supplied by `--source`.
+
+The synthetic glob and environment-prefix example can be checked with:
+
+```sh
+npm run --silent extract:routing-controllers -- --source fixtures/nodejs/routing-controllers/glob/src --service pets --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --profile api-truth.routing.json
+```
 
 The command writes one D03 JSON result to stdout and diagnostic codes to
 stderr. It reports incomplete coverage until the startup entry point can be

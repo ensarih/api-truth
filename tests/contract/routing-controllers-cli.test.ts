@@ -85,3 +85,15 @@ test("local command accepts a contained declaration profile for wrapper imports"
       .toContain("controller_registration_unverified");
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 30000);
+
+test("local command selects a static controller glob and an asserted environment prefix", () => {
+  const output = run(["--source", resolve("fixtures/nodejs/routing-controllers/glob/src"),
+    "--service", "pets", "--revision", "a".repeat(40), "--profile", "api-truth.routing.json"]);
+  expect(output.status).toBe(0);
+  const result = JSON.parse(output.stdout);
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints.map((endpoint: { application_path: string }) => endpoint.application_path))
+    .toEqual(["/v1/pets/:id"]);
+  expect(result.diagnostics.map((diagnostic: { code: string }) => diagnostic.code))
+    .toContain("controller_glob_source_projection_unverified");
+}, 30000);

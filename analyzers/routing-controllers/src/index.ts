@@ -6,9 +6,10 @@ import {
 } from "../../../packages/ir/src/index.js";
 import { digestSources, hash, inside, readSources } from "./source.js";
 import { parseRoutingProfile, type RoutingProfile } from "./profile.js";
+import { matchControllerGlob, resolveStaticExpression, resolveStaticPath } from "./controller-selection.js";
 
 /** Literal legacy decorators with directly resolved routing-controllers registration. */
-export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.5.0" };
+export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.6.0" };
 const literal = (node: ts.Node | undefined) => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const decorators = (node: ts.Node) => ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
@@ -64,7 +65,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
   profile?: RoutingProfile): AnalyzerResult {
   const effectiveMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
   const fingerprint = hash(JSON.stringify({ request: { ...request, extraction_mode: effectiveMode }, analyzer: ANALYZER,
-    compiler: ts.version, profile: "registered-legacy-5" }));
+    compiler: ts.version, profile: "registered-legacy-6" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -110,9 +111,10 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     });
   };
   const claim = (endpoint: Endpoint, predicate: string, value: unknown, node: ts.Node,
-    verification: "declared" | "established_by_analysis" | "owner_asserted" = "declared",
+    verification: "declared" | "established_by_analysis" | "owner_asserted" | "inferred" = "declared",
     extraEvidenceIds: string[] = []) => {
-    const ev = evidence(node, verification === "declared" ? "type_declaration" : "deterministic_analysis", endpoint.endpoint_id);
+    const ev = evidence(node, verification === "declared" ? "type_declaration"
+      : verification === "inferred" ? "inference" : "deterministic_analysis", endpoint.endpoint_id);
     result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:${predicate}:${ev}:${JSON.stringify(value)}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate,
       value: value as any, verification, evidence_ids: [ev, ...extraEvidenceIds] });
@@ -192,7 +194,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       && frameworkImport(target.expression)?.module === "routing-controllers") return target.name.text;
     return undefined;
   };
-  type Registration = { prefix: string; call: ts.CallExpression };
+  type Registration = { prefix: string; call: ts.CallExpression; glob: boolean; prefixFromProfile: boolean };
   const registrations = new Map<ts.ClassDeclaration, Registration[]>();
   let setupCount = 0;
   let firstSetup: ts.CallExpression | undefined;
@@ -224,24 +226,43 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       ts.isPropertyAssignment(item) && (ts.isIdentifier(item.name) || ts.isStringLiteral(item.name)) && item.name.text === name);
     const prefixProperties = property("routePrefix");
     if (prefixProperties.length > 1) { diagnostic("route_prefix_ambiguous", node); return; }
-    const prefix = prefixProperties.length ? literal((prefixProperties[0] as ts.PropertyAssignment).initializer) : "";
+    const prefix = prefixProperties.length
+      ? resolveStaticPath((prefixProperties[0] as ts.PropertyAssignment).initializer, checker) ?? profile?.routePrefix : "";
     if (prefix === undefined) { diagnostic("route_prefix_unresolved", prefixProperties[0]!); return; }
+    const prefixFromProfile = prefixProperties.length > 0
+      && resolveStaticPath((prefixProperties[0] as ts.PropertyAssignment).initializer, checker) === undefined;
+    if (prefixFromProfile) diagnostic("configured_route_prefix_unverified", prefixProperties[0]!);
     const controllerProperties = property("controllers");
     if (controllerProperties.length !== 1) { diagnostic("controller_list_unresolved", node); return; }
-    const selection = (controllerProperties[0] as ts.PropertyAssignment).initializer;
-    if (!ts.isArrayLiteralExpression(selection)) { diagnostic("controller_list_unresolved", selection); return; }
+    const selectionNode = (controllerProperties[0] as ts.PropertyAssignment).initializer;
+    const selection = resolveStaticExpression(selectionNode, checker);
+    if (!selection || !ts.isArrayLiteralExpression(selection)) { diagnostic("controller_list_unresolved", selectionNode); return; }
     for (const entry of selection.elements) {
-      if (!ts.isIdentifier(entry)) { diagnostic("controller_reference_unresolved", entry); continue; }
-      let symbol = checker.getSymbolAtLocation(entry);
-      if (symbol?.flags && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-      const declarations = symbol?.declarations ?? [];
-      const classes = declarations.filter(ts.isClassDeclaration);
-      if (declarations.length !== 1 || classes.length !== 1 || !sourcePaths.includes(classes[0]!.getSourceFile().fileName)) {
-        diagnostic("controller_reference_unresolved", entry); continue;
+      if (ts.isIdentifier(entry)) {
+        let symbol = checker.getSymbolAtLocation(entry);
+        if (symbol?.flags && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+        const declarations = symbol?.declarations ?? [];
+        const classes = declarations.filter(ts.isClassDeclaration);
+        if (declarations.length === 1 && classes.length === 1 && sourcePaths.includes(classes[0]!.getSourceFile().fileName)) {
+          const refs = registrations.get(classes[0]!) ?? [];
+          refs.push({ prefix, call: node, glob: false, prefixFromProfile });
+          registrations.set(classes[0]!, refs);
+          continue;
+        }
       }
-      const refs = registrations.get(classes[0]!) ?? [];
-      refs.push({ prefix, call: node });
-      registrations.set(classes[0]!, refs);
+      const glob = resolveStaticPath(entry, checker);
+      if (glob === undefined) { diagnostic("controller_reference_unresolved", entry); continue; }
+      const matches = matchControllerGlob(glob, root, sourcePaths);
+      if (matches === undefined) { diagnostic("controller_glob_unsupported", entry); continue; }
+      if (!matches.length) { diagnostic("controller_glob_no_source_match", entry); continue; }
+      for (const path of matches) {
+        const file = program.getSourceFile(path);
+        for (const statement of file?.statements ?? []) if (ts.isClassDeclaration(statement)) {
+          const refs = registrations.get(statement) ?? [];
+          refs.push({ prefix, call: node, glob: true, prefixFromProfile });
+          registrations.set(statement, refs);
+        }
+      }
     }
   });
   let controllerCount = 0;
@@ -278,7 +299,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       }
       controllerCount++;
       const registration = registrations.get(statement) ?? [];
-      const declarationOnly = !registration.length && !!profile;
+      const declarationOnly = !registration.length && !!profile && setupCount === 0;
       if (!registration.length && !declarationOnly) continue;
       if (registration.length > 1) { diagnostic("controller_registration_ambiguous", statement); continue; }
       const controller = controllers[0]!;
@@ -331,23 +352,30 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         const controllerEv = evidence(controller.decorator, "deterministic_analysis", endpointId);
         const bindingEv = declarationOnly ? profileEvidence("/route_prefix", endpointId)
           : evidence(registration[0]!.call, "deterministic_analysis", endpointId);
+        const prefixEv = !declarationOnly && registration[0]!.prefixFromProfile
+          ? profileEvidence("/route_prefix", endpointId) : undefined;
         const decoratorModuleEv = wrapperSemantics ? profileEvidence("/decorator_modules", endpointId) : undefined;
         const endpoint: Endpoint = { endpoint_id: endpointId, identity, application_path: path, parameters: [],
           request_bodies: [], responses: [{ status: { kind: "unknown", reason: "No supported status declaration" }, content: [] }],
           security: { state: "unknown", alternatives: [] }, evidence_ids: [controllerEv, routeEv, bindingEv,
+            ...(prefixEv ? [prefixEv] : []),
             ...(decoratorModuleEv ? [decoratorModuleEv] : [])] };
         result.endpoints.push(endpoint);
         if (wrapperSemantics) diagnostic("framework_semantics_owner_asserted", route.decorator, endpoint);
+        if (registration[0]?.glob) diagnostic("controller_glob_source_projection_unverified", route.decorator, endpoint);
         result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: controllerEv }, evidence_ids: [controllerEv] });
         result.dependencies.push({ from_endpoint_id: endpointId, to: { kind: "evidence", id: bindingEv }, evidence_ids: [bindingEv] });
+        if (prefixEv) result.dependencies.push({ from_endpoint_id: endpointId,
+          to: { kind: "evidence", id: prefixEv }, evidence_ids: [prefixEv] });
         if (decoratorModuleEv) result.dependencies.push({ from_endpoint_id: endpointId,
           to: { kind: "evidence", id: decoratorModuleEv }, evidence_ids: [decoratorModuleEv] });
         claim(endpoint, "route.declaration", { method: identity.method, path,
           controller: statement.name?.text ?? "anonymous", action: member.name.text }, route.decorator,
-          declarationOnly || wrapperSemantics ? "owner_asserted" : "declared",
-          [bindingEv, ...(decoratorModuleEv ? [decoratorModuleEv] : [])]);
+          declarationOnly || wrapperSemantics || registration[0]?.prefixFromProfile ? "owner_asserted"
+            : registration[0]?.glob ? "inferred" : "declared",
+          [bindingEv, ...(prefixEv ? [prefixEv] : []), ...(decoratorModuleEv ? [decoratorModuleEv] : [])]);
         claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version,
-          profile: "registered-legacy-5", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
+          profile: "registered-legacy-6", extraction_mode: effectiveMode }, route.decorator, "established_by_analysis");
         if (statement.heritageClauses?.length) diagnostic("inherited_actions_unresolved", statement, endpoint);
         if (member.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.StaticKeyword) || !member.body)
           diagnostic("action_implementation_unresolved", member, endpoint);

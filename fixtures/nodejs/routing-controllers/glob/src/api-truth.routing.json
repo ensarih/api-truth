@@ -1,0 +1,6 @@
+{
+  "profile_version": "1.0.0",
+  "decorator_modules": [],
+  "binding": "declarations_only",
+  "route_prefix": "/v1"
+}
