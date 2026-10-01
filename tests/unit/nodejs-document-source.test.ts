@@ -31,3 +31,15 @@ test("rejects traversal, symlinks, excess bytes, and invalid UTF-8 without readi
   }
   await expect(readSelectedDocument(root, "service", "service/invalid.json", 100)).rejects.toThrow("Document source rejected");
 });
+
+test("accepts selected YAML extensions with the same contained-byte digest rule", async () => {
+  const root = await mkdtemp(join(tmpdir(), "api-truth-nodejs-source-")); roots.push(root);
+  await mkdir(join(root, "service"));
+  await writeFile(join(root, "service", "swagger.yaml"), "swagger: '2.0'\n");
+  await writeFile(join(root, "service", "swagger.yml"), "swagger: '2.0'\n");
+  const yaml = await readSelectedDocument(root, "service", "service/swagger.yaml", 1000);
+  const yml = await readSelectedDocument(root, "service", "service/swagger.yml", 1000);
+  expect(yaml.digest).not.toBe(yml.digest);
+  expect(yaml.path).toBe("service/swagger.yaml");
+  expect(yml.path).toBe("service/swagger.yml");
+});

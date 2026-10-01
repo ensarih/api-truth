@@ -125,9 +125,9 @@ it does not substitute for a protected enterprise pilot.
 | P5-DOCS | 5 | Permission-scoped read-only Confluence links and discrepancies. | Findings retain both sources, versions, scopes, and review state; revocation invalidates dependent views. |
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
-`nodejs-swagger2-document@0.2.0` reads a selected JSON document and emits
+`nodejs-swagger2-document@0.3.0` reads a selected JSON or YAML document and emits
 declared route facts with incomplete coverage. It does not meet the
-`nodejs-swagger-express-mw` conformance gate: middleware binding, YAML, and
+`nodejs-swagger-express-mw` conformance gate: middleware binding and
 D08 profile selection remain in NB1–NB4. `nodejs-routing-controllers@0.2.0`
 extracts literal decorator declarations, binds direct controller
 registrations, and applies literal global prefixes, but cannot prove the

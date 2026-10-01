@@ -13,6 +13,17 @@ async function service(document: unknown) {
   await writeFile(join(root, "service", "api", "swagger", "swagger.json"), JSON.stringify(document));
   return { root, adapter: createAnalyzer({ projectRoot: root }) };
 }
+async function yamlService(text: string) {
+  const root = await mkdtemp(join(tmpdir(), "api-truth-nodejs-yaml-")); roots.push(root);
+  await mkdir(join(root, "service", "api", "swagger"), { recursive: true });
+  await writeFile(join(root, "service", "api", "swagger", "swagger.yaml"), text);
+  return { root, adapter: createAnalyzer({ projectRoot: root }) };
+}
+function yamlRequest(): AnalyzerRequest {
+  const input = request();
+  input.resolution_inputs = [{ kind: "type_manifest", path: "service/api/swagger/swagger.yaml", digest: "host-supplied-digest" }];
+  return input;
+}
 function request(): AnalyzerRequest {
   return {
     exchange_version: "1.0.0", ir_version: "1.0.0", request_id: "swagger-test", analyzer: ANALYZER,
@@ -51,6 +62,46 @@ test("selected Swagger 2 document yields a separate D03-valid declared route", a
     to: { kind: "schema", id: expect.stringMatching(/^schema-/) } }));
   expect(first.reproducibility_fingerprint).toBe(second.reproducibility_fingerprint);
   expect(first.endpoints).toEqual(second.endpoints);
+});
+
+test("selected Swagger 2 YAML yields declared routes while preserving basePath separately", async () => {
+  const { adapter } = await yamlService(`swagger: '2.0'
+info:
+  title: Orders
+  version: '1'
+basePath: /api/v1
+paths:
+  /orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        type: string
+    get:
+      responses:
+        '200':
+          description: ok
+`);
+  const result = await adapter.analyze(yamlRequest());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints).toHaveLength(1);
+  expect(result.endpoints[0]?.application_path).toBe("/orders/{id}");
+  expect(result.claims).toContainEqual(expect.objectContaining({ predicate: "exposure.base_path.declaration", value: "/api/v1" }));
+  expect(result.diagnostics.map(item => item.code)).toContain("base_path_requires_middleware_profile");
+});
+
+test.each([
+  ["duplicate key", "swagger: '2.0'\nswagger: '2.0'\n"],
+  ["multiple documents", "swagger: '2.0'\n---\nswagger: '2.0'\n"],
+  ["alias", "swagger: '2.0'\ninfo: &details {title: Orders, version: '1'}\ncopy: *details\npaths: {}\n"],
+  ["custom tag", "swagger: '2.0'\ninfo: !custom {title: Orders, version: '1'}\npaths: {}\n"],
+])("rejects unsafe YAML %s without emitting routes", async (_case, text) => {
+  const { adapter } = await yamlService(text);
+  const result = await adapter.analyze(yamlRequest());
+  expect(result.status).toBe("failed");
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.length).toBeGreaterThan(0);
+  expect(parseAnalyzerResult(result).ok).toBe(true);
 });
 
 test("duplicate document keys fail analysis before any operation is emitted", async () => {

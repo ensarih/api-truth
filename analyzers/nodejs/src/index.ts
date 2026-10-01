@@ -6,10 +6,11 @@ import {
 } from "../../../packages/ir/src/index.js";
 import { readSelectedDocument } from "./source.js";
 import { parseStrictJson, StrictJsonError } from "./strict-json.js";
+import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.2.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.3.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -51,7 +52,7 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 }
 
 function extract(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
-  const fingerprint = hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-1", documentPath }));
+  const fingerprint = hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-1", documentPath }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -86,9 +87,9 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
       verification: "declared", evidence_ids: [ev] });
   };
   let document: unknown;
-  try { document = parseStrictJson(text); }
+  try { document = /\.ya?ml$/.test(documentPath) ? parseStrictYaml(text) : parseStrictJson(text); }
   catch (error) {
-    diagnostic(error instanceof StrictJsonError ? error.code : "invalid_json_document", "", "error");
+    diagnostic(error instanceof StrictJsonError || error instanceof StrictYamlError ? error.code : "invalid_document", "", "error");
     return failed(result, documentPath);
   }
   let parsed: ReturnType<typeof parseSwagger2Document>;
@@ -98,7 +99,15 @@ function extract(request: AnalyzerRequest, documentPath: string, text: string): 
   if (parsed.status === "failed") return failed(result, documentPath);
 
   const raw = document as Record<string, unknown>;
-  if (raw.basePath !== undefined) diagnostic("base_path_requires_middleware_profile", "/basePath");
+  if (raw.basePath !== undefined) {
+    diagnostic("base_path_requires_middleware_profile", "/basePath");
+    if (typeof raw.basePath === "string" && raw.basePath.startsWith("/")) {
+      const ev = evidence("/basePath");
+      result.claims.push({ claim_id: `claim-${hash(`basePath:${ev}:${raw.basePath}`).slice(0, 24)}`,
+        subject: { service_id: request.source.service_id }, predicate: "exposure.base_path.declaration",
+        value: raw.basePath, verification: "declared", evidence_ids: [ev] });
+    } else diagnostic("base_path_invalid", "/basePath");
+  }
   if (raw.host !== undefined || raw.schemes !== undefined) diagnostic("server_exposure_not_analyzed", "/host");
   diagnostic("middleware_binding_unverified", "");
 

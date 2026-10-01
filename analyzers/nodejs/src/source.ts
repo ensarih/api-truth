@@ -13,7 +13,7 @@ const inside = (root: string, path: string): boolean => {
 
 export async function readSelectedDocument(projectRoot: string, serviceRoot: string, documentPath: string, maxBytes: number) {
   try {
-    if (!normalizedPath(serviceRoot) || !normalizedPath(documentPath) || !documentPath.endsWith(".json")
+    if (!normalizedPath(serviceRoot) || !normalizedPath(documentPath) || !/\.(?:json|ya?ml)$/.test(documentPath)
       || !Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error("invalid selection");
     const project = await realpath(projectRoot);
     const service = resolve(project, serviceRoot);

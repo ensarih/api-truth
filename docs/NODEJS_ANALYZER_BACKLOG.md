@@ -2,7 +2,7 @@
 
 **Status:** active analyzer priority, 2026-10-01
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
-Express subset. `nodejs-swagger2-document@0.2.0` reads selected Swagger 2 JSON
+Express subset. `nodejs-swagger2-document@0.3.0` reads selected Swagger 2 JSON/YAML
 declarations but cannot establish middleware mounting or handler binding.
 `nodejs-routing-controllers@0.2.0` extracts a bounded literal decorator subset
 and binds direct controller registrations, but cannot prove the startup entry
@@ -19,8 +19,8 @@ repository.
 | Flow | Status | Existing capability to reuse |
 |---|---|---|
 | Literal Express app/router registrations | Implemented within the published D05 support matrix | Endpoint identity, mounted routers, DTO schemas, selected validators, response serialization, evidence, dependencies, diagnostics |
-| Swagger 2 JSON declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions, and D07 update/difference engine |
-| Swagger 2 routes loaded by `swagger-express-mw` | Missing runtime binding | Document-only profile and its bounded JSON parser |
+| Swagger 2 JSON/YAML declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions and basePath claim, and D07 update/difference engine |
+| Swagger 2 routes loaded by `swagger-express-mw` | Missing runtime binding | Document-only profile and its bounded JSON/YAML parsers |
 | OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
 | routing-controllers literal decorators | Initial profile; direct registrations resolved, startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
