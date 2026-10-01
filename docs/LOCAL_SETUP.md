@@ -155,8 +155,10 @@ environment are examples, not defaults for new tenants.
 | Catalog and query reads | A host-authenticated tenant/principal plus current source-scope grants. Query reads recheck authorization and the selected snapshot in one database transaction. |
 | Portal and MCP | The embedding host supplies `authenticate` callbacks that return a tenant/principal. Neither surface treats a client-provided tenant or arbitrary header as authority. |
 
-There is no production identity provider, GitHub webhook signature verifier,
+There is no production identity provider, deployed GitHub webhook host,
 artifact provenance service, or general installation CLI in this checkout.
+The bounded GitHub HMAC verifier checks signed raw bytes in local tests; it is
+not wired to a live provider or deployment source.
 The local fixture policy file is operator supplied and does not confer
 authority. A deployment host must implement those ports before it can accept
 real events. Do not paste credentials into fixtures or configuration committed
