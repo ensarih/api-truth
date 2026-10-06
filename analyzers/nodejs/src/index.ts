@@ -9,8 +9,11 @@ import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
 import type { MiddlewareBinding } from "./middleware-binding.js";
+import type { HandlerCandidateResolver } from "./handler-candidates.js";
 
-export type MiddlewareContext = { kind: "verified"; binding: MiddlewareBinding } | { kind: "unverified" };
+export type MiddlewareContext = {
+  kind: "verified"; binding: MiddlewareBinding; handlerResolver?: HandlerCandidateResolver;
+} | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
 export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.3.0" };
@@ -58,7 +61,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-1", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-1", documentPath, middleware }));
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-2", documentPath,
+      middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
+        ? "default-controller-source-candidates-1" : "none" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: request.analyzer, source: request.source,
@@ -252,6 +257,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     });
     if (bindingEv) result.dependencies.push({ from_endpoint_id: endpointId,
       to: { kind: "evidence", id: bindingEv }, evidence_ids: [bindingEv] });
+    if (middleware?.kind === "verified" && middleware.handlerResolver) addHandlerCandidate(endpoint, operation);
     for (const parameter of operation.parameters) {
       if (!["path", "query", "header"].includes(parameter.in)) { diagnostic("parameter_location_unsupported", parameter.pointer, "warning", endpointId); continue; }
       const paramEv = evidence(parameter.pointer, endpointId);
@@ -321,6 +327,69 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     for (const body of endpoint.request_bodies) addSchemaDependencies(body.schema);
     for (const response of endpoint.responses) for (const content of response.content) addSchemaDependencies(content.schema);
     result.endpoints.push(endpoint);
+  }
+
+  function addHandlerCandidate(endpoint: Endpoint, operation: Swagger2Operation): void {
+    if (middleware?.kind !== "verified" || !middleware.handlerResolver) return;
+    const pathItem = (raw.paths as Record<string, Record<string, unknown>>)[operation.path]!;
+    const rawOperation = pathItem[operation.method] as Record<string, unknown>;
+    const mappingAt = rawOperation["x-swagger-router-controller"] !== undefined
+      ? `${operation.pointer}/x-swagger-router-controller`
+      : `/paths/${pointerPart(operation.path)}/x-swagger-router-controller`;
+    const controller = rawOperation["x-swagger-router-controller"] !== undefined
+      ? rawOperation["x-swagger-router-controller"] : pathItem["x-swagger-router-controller"];
+    if (typeof controller !== "string" || !controller.length) {
+      diagnostic("handler_controller_unresolved", mappingAt, "warning", endpoint.endpoint_id);
+      return;
+    }
+    claim(endpoint, "handler.controller.declaration", controller, mappingAt);
+    if (rawOperation["x-swagger-pipe"] !== undefined || pathItem["x-swagger-pipe"] !== undefined) {
+      diagnostic("handler_pipe_unverified", rawOperation["x-swagger-pipe"] !== undefined
+        ? `${operation.pointer}/x-swagger-pipe` : `/paths/${pointerPart(operation.path)}/x-swagger-pipe`,
+      "warning", endpoint.endpoint_id);
+      return;
+    }
+    if (!operation.operationId) {
+      diagnostic("handler_operation_id_unresolved", `${operation.pointer}/operationId`, "warning", endpoint.endpoint_id);
+      return;
+    }
+    const candidate = middleware.handlerResolver(controller, operation.operationId);
+    if (candidate.kind === "unresolved") {
+      diagnostic(candidate.code, mappingAt, "warning", endpoint.endpoint_id);
+      return;
+    }
+    const id = `ev-${hash(`${candidate.path}:${candidate.span}:${endpoint.endpoint_id}:handler-candidate`).slice(0, 24)}`;
+    result.evidence.push({ evidence_id: id,
+      source: { kind: "source_code", source_id: request.source.repository_id }, source_version: request.source.immutable_revision,
+      location: { path: candidate.path, line: candidate.line, pointer: candidate.span }, method: "deterministic_analysis",
+      scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+        revision: request.source.immutable_revision, endpoint_id: endpoint.endpoint_id },
+      limitations: ["candidate only; runtime routing configuration and module initialization unverified",
+        "framework version and production startup unverified; no handler-derived contract facts"],
+      access_label: request.source.access_label });
+    endpoint.evidence_ids.push(id);
+    let scopeId: string | undefined;
+    if (candidate.package_scope) {
+      scopeId = `ev-${hash(`${candidate.package_scope}:${endpoint.endpoint_id}:handler-module-scope`).slice(0, 24)}`;
+      result.evidence.push({ evidence_id: scopeId,
+        source: {kind: "configuration", source_id: request.source.repository_id}, source_version: request.source.immutable_revision,
+        location: {path: candidate.package_scope, pointer: "/"}, method: "deterministic_analysis",
+        scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+          revision: request.source.immutable_revision, endpoint_id: endpoint.endpoint_id},
+        limitations: ["contained package scope only; runtime flags and module initialization unverified"],
+        access_label: request.source.access_label });
+      endpoint.evidence_ids.push(scopeId);
+    }
+    const evidenceIds = [evidence(mappingAt, endpoint.endpoint_id),
+      evidence(`${operation.pointer}/operationId`, endpoint.endpoint_id), id, ...(scopeId ? [scopeId] : [])];
+    result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.candidate:${id}`).slice(0, 24)}`,
+      subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate: "handler.candidate",
+      value: { controller, operationId: operation.operationId, path: candidate.path, export_name: candidate.export_name,
+        ...(candidate.package_scope ? {package_scope: candidate.package_scope} : {}),
+        policy: "default-controller-source-candidates-1" }, verification: "inferred", evidence_ids: evidenceIds });
+    result.diagnostics.push({ diagnostic_id: `diag-${hash(`${endpoint.endpoint_id}:handler_candidate_unverified:${id}`).slice(0, 24)}`,
+      code: "handler_candidate_unverified", severity: "warning", message: "Handler source candidate; runtime binding unverified",
+      affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: evidenceIds });
   }
 }
 

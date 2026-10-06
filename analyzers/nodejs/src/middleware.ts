@@ -5,10 +5,11 @@ import {
 } from "../../../packages/ir/src/index.js";
 import { extractSwagger2Document } from "./index.js";
 import { findSwaggerMiddlewareBinding } from "./middleware-binding.js";
+import { createHandlerCandidateResolver } from "./handler-candidates.js";
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
 /** Direct swagger-express-mw default-file registration; handler binding remains unresolved. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.1.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.2.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;
@@ -54,7 +55,9 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const binding = findSwaggerMiddlewareBinding(tree.files, tree.root);
     budget();
     const result = extractSwagger2Document(request, expectedDocument, text,
-      binding ? { kind: "verified", binding } : { kind: "unverified" });
+      binding ? { kind: "verified", binding, handlerResolver: createHandlerCandidateResolver(tree.files, tree.root) }
+        : { kind: "unverified" });
+    budget();
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
     if (!validated.ok) throw new Error("Analyzer produced invalid result");

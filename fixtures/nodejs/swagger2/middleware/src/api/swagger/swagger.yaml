@@ -5,6 +5,7 @@ info:
 basePath: /api/v1
 paths:
   /orders/{id}:
+    x-swagger-router-controller: orders
     parameters:
       - name: id
         in: path

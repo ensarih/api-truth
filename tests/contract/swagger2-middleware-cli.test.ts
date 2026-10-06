@@ -18,6 +18,9 @@ test("local middleware command emits one bound, still incomplete route", () => {
     .toEqual(["/api/v1/orders/{id}"]);
   expect(result.status).toBe("partial");
   expect(output.stderr).toContain("handler_binding_unverified");
+  expect(result.claims).toContainEqual(expect.objectContaining({ predicate: "handler.candidate", verification: "inferred",
+    value: expect.objectContaining({path: "api/controllers/orders.js", export_name: "getOrder"}) }));
+  expect(output.stderr).toContain("handler_candidate_unverified");
 }, 30000);
 
 test("local middleware command rejects invalid input without echoing paths", () => {

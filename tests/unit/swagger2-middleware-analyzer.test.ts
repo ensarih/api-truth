@@ -162,3 +162,63 @@ test("source digest mismatches and symlinks cannot bypass the selected service b
   await symlink("/etc/passwd", join(root, "service", "unrelated.json"));
   await expect(adapter.analyze(request())).rejects.toThrow("Source boundary or input limit rejected");
 });
+
+test("exact controller declarations retain separate source candidates without handler binding", async () => {
+  const yaml = document.replace("    get:", "    x-swagger-router-controller: orders\n    get:");
+  const { adapter } = await service({ "app.js": entry, "api/swagger/swagger.yaml": yaml,
+    "package.json": '{"type":"commonjs"}',
+    "api/controllers/orders.js": "module.exports = { getOrder };\nfunction getOrder(req, res) { res.status(201).json({extra: true}); }" });
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.claims).toContainEqual(expect.objectContaining({predicate: "handler.candidate", verification: "inferred",
+    value: expect.objectContaining({ controller: "orders", operationId: "getOrder", path: "api/controllers/orders.js" })}));
+  const candidate = result.claims.find(item => item.predicate === "handler.candidate")!;
+  const evidence = result.evidence.filter(item => candidate.evidence_ids.includes(item.evidence_id));
+  expect(evidence.map(item => item.source.kind)).toEqual(expect.arrayContaining(["api_document", "source_code"]));
+  expect(evidence).toContainEqual(expect.objectContaining({source: {kind: "source_code", source_id: "example-repo"},
+    location: expect.objectContaining({path: "api/controllers/orders.js", line: 2}),
+    scope: expect.objectContaining({endpoint_id: result.endpoints[0]!.endpoint_id}),
+    limitations: expect.arrayContaining(["candidate only; runtime routing configuration and module initialization unverified"])}));
+  expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  expect(result.dependencies.some(item => item.evidence_ids.includes(evidence.find(item => item.source.kind === "source_code")!.evidence_id))).toBe(false);
+  expect(result.endpoints[0]!.responses.map(item => item.status)).toEqual([{kind: "exact", code: 200}]);
+  expect(result.diagnostics.map(item => item.code)).toContain("handler_candidate_unverified");
+  expect(result.status).toBe("partial");
+});
+
+test("operation controller overrides path controller and source changes invalidate candidates", async () => {
+  const yaml = document.replace("    get:", "    x-swagger-router-controller: fallback\n    get:\n      x-swagger-router-controller: orders");
+  const { root, adapter } = await service({ "app.js": entry, "api/swagger/swagger.yaml": yaml,
+    "package.json": '{"type":"commonjs"}',
+    "api/controllers/orders.js": "exports.getOrder = function () {};",
+    "api/controllers/fallback.js": "exports.getOrder = function () {};" });
+  const first = await adapter.analyze(request());
+  expect(first.claims.filter(item => item.predicate === "handler.candidate")).toHaveLength(1);
+  expect(first.claims.find(item => item.predicate === "handler.candidate")!.value).toMatchObject({controller: "orders"});
+  await writeFile(join(root, "service/api/controllers/orders.js"), "exports.other = function () {};");
+  const second = await adapter.analyze(request());
+  expect(second.endpoints).toHaveLength(1);
+  expect(second.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+  expect(second.diagnostics.map(item => item.code)).toContain("handler_export_unresolved");
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+});
+
+test("unresolved mappings and explicit pipes preserve document routes without candidate guesses", async () => {
+  const cases = [
+    {yaml: document, code: "handler_controller_unresolved"},
+    {yaml: document.replace("    get:", "    x-swagger-router-controller: orders\n    get:").replace("      operationId: getOrder\n", ""), code: "handler_operation_id_unresolved"},
+    {yaml: document.replace("    get:", "    x-swagger-router-controller: orders\n    x-swagger-pipe: custom\n    get:"), code: "handler_pipe_unverified"},
+    {yaml: document.replace("    get:", "    x-swagger-router-controller: orders\n    get:\n      x-swagger-router-controller: null"), code: "handler_controller_unresolved"},
+    {yaml: document.replace("    get:", "    x-swagger-router-controller: missing\n    get:"), code: "handler_source_unresolved"},
+    {yaml: document.replace("    get:", "    x-swagger-router-controller: ../orders\n    get:"), code: "handler_mapping_unsupported"},
+  ];
+  for (const {yaml, code} of cases) {
+    const { adapter } = await service({ "app.js": entry, "api/swagger/swagger.yaml": yaml,
+      "api/controllers/orders.js": "exports.getOrder = function () {};" });
+    const result = await adapter.analyze(request());
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(result.endpoints).toHaveLength(1);
+    expect(result.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+    expect(result.diagnostics.map(item => item.code)).toContain(code);
+  }
+});

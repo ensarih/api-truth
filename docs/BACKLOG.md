@@ -126,9 +126,10 @@ it does not substitute for a protected enterprise pilot.
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
 `nodejs-swagger2-document@0.3.0` reads a selected JSON or YAML document and emits
-declared route facts with incomplete coverage. `nodejs-swagger-express-mw@0.1.0`
+declared route facts with incomplete coverage. `nodejs-swagger-express-mw@0.2.0`
 binds one direct default-file registration and composes valid literal
-`basePath`, but handler/startup binding and D08 profile selection remain in
+`basePath`, and records exact CommonJS handler source candidates, but effective
+configuration, handler/startup binding, and D08 profile selection remain in
 NB1–NB4. `nodejs-routing-controllers@0.7.0`
 extracts literal decorator declarations, binds direct controller
 registrations, and applies literal global prefixes, but cannot prove the

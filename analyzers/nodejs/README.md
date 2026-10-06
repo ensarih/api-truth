@@ -52,7 +52,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.1.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.2.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -71,11 +71,42 @@ Controller handlers and the production startup entrypoint are still unverified,
 so successful extraction remains **partial**. It must not be treated as a
 complete runtime inventory or strictly publishable OpenAPI contract.
 
+### Handler source candidates
+
+The profile reads exact `x-swagger-router-controller` declarations at the
+operation or path level, with the operation declaration taking precedence.
+An explicit `operationId` must identify a unique CommonJS function export.
+The bounded source policy searches `api/controllers/<controller>.js` for an
+extensionless controller name, or an explicitly named `.js`/`.cjs` file.
+Controller traversal, alternate directories, TypeScript build projections,
+directory modules, dynamic/re-exported values, getters, duplicate or mutated
+exports, and ESM are unresolved. A `.js` candidate requires its nearest package
+scope inside the selected service tree; an unscanned ancestor cannot establish
+that scope. Source modules and package-scope files are limited to 1 MB; modules
+are limited to 50,000 visited syntax nodes. Each module and package scope is
+parsed once per analysis, including when multiple routes share a handler.
+
+Candidates retain separate Swagger declaration, function location, and package
+scope evidence. Their `handler.candidate` claims are **inferred**, with
+`handler_candidate_unverified` diagnostics. No handler dependencies or
+handler-derived parameter, response, or schema facts are attached. Missing or
+unsupported candidates preserve the document routes. Explicit custom pipes
+and collected files under `config/` leave matching unresolved until their
+runtime routing configuration can be interpreted. Environment overrides,
+framework versions, module initialization, and startup remain unverified.
+
+This source policy follows the default-directory/controller lookup inspected
+in [swagger-node-runner 0.7.3](https://github.com/apigee-127/swagger-node-runner/blob/866b75f267fa94522cc0233563763af1dd758843/fittings/swagger_router.js)
+and its [default pipeline](https://github.com/apigee-127/swagger-node-runner/blob/866b75f267fa94522cc0233563763af1dd758843/index.js).
+That reference does not establish the analyzed service's installed version or
+effective configuration.
+
 Try the synthetic fixture:
 
 ```sh
 npm run --silent extract:swagger2-middleware -- --source fixtures/nodejs/swagger2/middleware/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
 
-The focused tests are `tests/unit/swagger2-middleware-analyzer.test.ts` and
+The focused tests are `tests/unit/swagger2-handler-candidates.test.ts`,
+`tests/unit/swagger2-middleware-analyzer.test.ts`, and
 `tests/contract/swagger2-middleware-cli.test.ts`.
