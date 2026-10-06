@@ -104,3 +104,34 @@ test("uninterpreted runtime configuration cannot choose a default-directory cand
   expect(createHandlerCandidateResolver(files, root)("orders", "getOrder"))
     .toMatchObject({kind: "unresolved", code: "handler_configuration_unverified"});
 });
+
+function configuredFiles(dirs: string[]) {
+  return new Map([
+    [resolve(root, "package.json"), '{"type":"commonjs"}'],
+    [resolve(root, "config/default.json"), JSON.stringify({swagger: {
+      swaggerControllerPipe: "controllers", bagpipes: {
+        router: {name: "swagger_router", mockControllersDirs: [], controllersDirs: dirs}, controllers: ["router"],
+      },
+    }})],
+  ]);
+}
+
+test("configured directories select only the exact source declared by the selected pipeline", () => {
+  const files = configuredFiles(["custom/controllers"]);
+  files.set(resolve(root, "custom/controllers/orders.js"), "exports.getOrder = function () {};");
+  files.set(resolve(root, "api/controllers/orders.js"), "exports.getOrder = function () {};");
+  expect(createHandlerCandidateResolver(files, root)("orders", "getOrder"))
+    .toMatchObject({kind: "candidate", path: "custom/controllers/orders.js", controller_directory: "custom/controllers"});
+});
+
+test("multiple possible modules cannot assume the first require call succeeds", () => {
+  const files = configuredFiles(["first/controllers", "second/controllers"]);
+  files.set(resolve(root, "first/controllers/orders.js"), "throw new Error('private-init-marker'); exports.getOrder = function () {};");
+  files.set(resolve(root, "second/controllers/orders.js"), "exports.getOrder = function () {};");
+  expect(createHandlerCandidateResolver(files, root)("orders", "getOrder"))
+    .toMatchObject({kind: "unresolved", code: "handler_source_ambiguous"});
+  files.delete(resolve(root, "first/controllers/orders.js"));
+  files.set(resolve(root, "first/controllers/orders.json"), "{}");
+  expect(createHandlerCandidateResolver(files, root)("orders", "getOrder"))
+    .toMatchObject({kind: "unresolved", code: "handler_module_resolution_unverified"});
+});

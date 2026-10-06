@@ -9,10 +9,12 @@ import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
 import type { MiddlewareBinding } from "./middleware-binding.js";
+import type { RoutingConfiguration } from "./routing-config.js";
 import type { HandlerCandidateResolver } from "./handler-candidates.js";
 
 export type MiddlewareContext = {
-  kind: "verified"; binding: MiddlewareBinding; handlerResolver?: HandlerCandidateResolver;
+  kind: "verified"; binding: MiddlewareBinding; routingConfiguration?: RoutingConfiguration;
+  handlerResolver?: HandlerCandidateResolver;
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
@@ -61,9 +63,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-1", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-2", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-3", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
-        ? "default-controller-source-candidates-1" : "none" }));
+        ? "static-routing-source-candidates-1" : "none" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: request.analyzer, source: request.source,
@@ -93,16 +95,34 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       location: { path: binding.path, line: binding.line, pointer: binding.span },
       method: "deterministic_analysis", scope: { service_id: request.source.service_id, snapshot_id: result.snapshot_id,
         revision: request.source.immutable_revision, ...(endpointId ? { endpoint_id: endpointId } : {}) },
-      limitations: ["startup entrypoint and controller handler binding unverified"], access_label: request.source.access_label,
+      limitations: ["startup entrypoint and controller handler binding unverified",
+        "runner defaults are analyzer-policy assumptions; effective routing configuration unverified"], access_label: request.source.access_label,
     });
     return id;
   };
-  const diagnostic = (code: string, pointer: string, severity: "warning" | "error" = "warning", endpointId?: string) => {
+  const configurationEvidence = (endpointId?: string): string[] => {
+    if (middleware?.kind !== "verified") return [];
+    return [...new Set((middleware.routingConfiguration?.evidence_locations ?? []).map(location => {
+      const id = `ev-${hash(`${location.path}:${location.pointer}:${endpointId ?? ""}:routing-configuration`).slice(0, 24)}`;
+      if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
+        evidence_id: id, source: {kind: "configuration", source_id: request.source.repository_id},
+        source_version: request.source.immutable_revision, location,
+        method: "deterministic_analysis",
+        scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+          revision: request.source.immutable_revision, ...(endpointId ? {endpoint_id: endpointId} : {})},
+        limitations: ["static declaration only; environment overrides, framework version and startup unverified"],
+        access_label: request.source.access_label,
+      });
+      return id;
+    }))];
+  };
+  const diagnostic = (code: string, pointer: string, severity: "warning" | "error" = "warning",
+    endpointId?: string, extraEvidence: string[] = []) => {
     const ev = evidence(pointer, endpointId);
     const id = `diag-${hash(`${code}:${pointer}:${endpointId ?? ""}`).slice(0, 24)}`;
     if (!result.diagnostics.some(item => item.diagnostic_id === id)) result.diagnostics.push({
       diagnostic_id: id, code, severity, message: code.replaceAll("_", " "),
-      affected_endpoint_ids: endpointId ? [endpointId] : [], evidence_ids: [ev],
+      affected_endpoint_ids: endpointId ? [endpointId] : [], evidence_ids: [...new Set([ev, ...extraEvidence])],
     });
   };
   const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], pointer: string) => {
@@ -154,7 +174,21 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   else {
     diagnostic("handler_binding_unverified", "");
     diagnostic("startup_entrypoint_unverified", "");
-    middlewareEvidence();
+    const registration = middlewareEvidence();
+    const configuration = middleware.routingConfiguration;
+    const configEvidence = configurationEvidence();
+    if (configuration?.kind === "supported") {
+      const value = {origin: configuration.origin, policy: "static-routing-source-candidates-1",
+        controller_dirs: configuration.controller_dirs,
+        pipeline: configuration.pipeline, router_fitting: configuration.router_fitting};
+      result.claims.push({claim_id: `claim-${hash(`routing.configuration:${JSON.stringify(value)}`).slice(0, 24)}`,
+        subject: {service_id: request.source.service_id}, predicate: "routing.configuration.declaration",
+        value, verification: configuration.origin === "configured" ? "declared" : "inferred",
+        evidence_ids: configEvidence.length ? configEvidence : [registration]});
+      diagnostic("routing_runtime_overrides_unverified", "", "warning", undefined, configEvidence);
+    } else if (configuration?.kind === "unresolved") {
+      diagnostic(configuration.code, "", "warning", undefined, configEvidence);
+    }
   }
 
   // Swagger 2 basic and apiKey map exactly to the D03 security vocabulary.
@@ -349,13 +383,23 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       "warning", endpoint.endpoint_id);
       return;
     }
+    const interfaceDeclarations = [
+      {value: rawOperation["x-controller-interface"], pointer: `${operation.pointer}/x-controller-interface`},
+      {value: pathItem["x-controller-interface"], pointer: `/paths/${pointerPart(operation.path)}/x-controller-interface`},
+      {value: raw["x-controller-interface"], pointer: "/x-controller-interface"},
+    ];
+    const selectedInterface = interfaceDeclarations.find(item => item.value !== undefined);
+    if (selectedInterface && selectedInterface.value !== "middleware") {
+      diagnostic("handler_interface_unverified", selectedInterface.pointer, "warning", endpoint.endpoint_id);
+      return;
+    }
     if (!operation.operationId) {
       diagnostic("handler_operation_id_unresolved", `${operation.pointer}/operationId`, "warning", endpoint.endpoint_id);
       return;
     }
     const candidate = middleware.handlerResolver(controller, operation.operationId);
     if (candidate.kind === "unresolved") {
-      diagnostic(candidate.code, mappingAt, "warning", endpoint.endpoint_id);
+      diagnostic(candidate.code, mappingAt, "warning", endpoint.endpoint_id, configurationEvidence(endpoint.endpoint_id));
       return;
     }
     const id = `ev-${hash(`${candidate.path}:${candidate.span}:${endpoint.endpoint_id}:handler-candidate`).slice(0, 24)}`;
@@ -380,13 +424,16 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         access_label: request.source.access_label });
       endpoint.evidence_ids.push(scopeId);
     }
-    const evidenceIds = [evidence(mappingAt, endpoint.endpoint_id),
+    const configEvidence = configurationEvidence(endpoint.endpoint_id);
+    endpoint.evidence_ids.push(...configEvidence);
+    const evidenceIds = [...configEvidence, evidence(mappingAt, endpoint.endpoint_id),
       evidence(`${operation.pointer}/operationId`, endpoint.endpoint_id), id, ...(scopeId ? [scopeId] : [])];
     result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.candidate:${id}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate: "handler.candidate",
       value: { controller, operationId: operation.operationId, path: candidate.path, export_name: candidate.export_name,
+        controller_directory: candidate.controller_directory,
         ...(candidate.package_scope ? {package_scope: candidate.package_scope} : {}),
-        policy: "default-controller-source-candidates-1" }, verification: "inferred", evidence_ids: evidenceIds });
+        policy: "static-routing-source-candidates-1" }, verification: "inferred", evidence_ids: evidenceIds });
     result.diagnostics.push({ diagnostic_id: `diag-${hash(`${endpoint.endpoint_id}:handler_candidate_unverified:${id}`).slice(0, 24)}`,
       code: "handler_candidate_unverified", severity: "warning", message: "Handler source candidate; runtime binding unverified",
       affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: evidenceIds });

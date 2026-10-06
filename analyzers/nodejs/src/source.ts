@@ -12,13 +12,14 @@ export const inside = (root: string, path: string): boolean => {
 };
 
 export async function readServiceTree(projectRoot: string, serviceRoot: string, maxFiles: number,
-  budget: () => void): Promise<{ files: Map<string, string>; root: string }> {
+  budget: () => void): Promise<{ files: Map<string, string>; root: string; opaqueConfiguration: Map<string, string> }> {
   try {
     if (!normalizedPath(serviceRoot) || !Number.isSafeInteger(maxFiles) || maxFiles < 1) throw new Error("invalid selection");
     const project = await realpath(projectRoot);
     const root = resolve(project, serviceRoot);
     if (!inside(project, root) || await realpath(root) !== root) throw new Error("outside boundary");
     const files = new Map<string, string>();
+    const opaqueConfiguration = new Map<string, string>();
     let bytes = 0;
     const visit = async (dir: string): Promise<void> => {
       budget();
@@ -27,23 +28,32 @@ export async function readServiceTree(projectRoot: string, serviceRoot: string, 
         if (entry.isSymbolicLink()) throw new Error("symlink");
         const path = join(dir, entry.name);
         if (entry.isDirectory()) await visit(path);
-        else if (entry.isFile() && /\.(?:[cm]?[jt]s|tsx|jsx|json|ya?ml)$/.test(entry.name)) {
-          if (files.size >= maxFiles) throw new Error("file limit");
+        else if (entry.isFile() && (/\.(?:[cm]?[jt]s|tsx|jsx|json|ya?ml)$/.test(entry.name)
+          || relative(root, path).replaceAll("\\", "/").startsWith("config/"))) {
+          if (files.size + opaqueConfiguration.size >= maxFiles) throw new Error("file limit");
+          if ((await lstat(path)).size > 10_000_000 - bytes) throw new Error("byte limit");
           const buffer = await readFile(path);
           bytes += buffer.byteLength;
           if (bytes > 10_000_000) throw new Error("byte limit");
-          files.set(path, new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+          if (/\.(?:[cm]?[jt]s|tsx|jsx|json|ya?ml)$/.test(entry.name))
+            files.set(path, new TextDecoder("utf-8", { fatal: true }).decode(buffer));
+          else opaqueConfiguration.set(path, createHash("sha256").update(buffer).digest("hex"));
         }
       }
     };
     await visit(root);
-    return { files, root };
+    return { files, root, opaqueConfiguration };
   } catch { throw new Error("Source boundary or input limit rejected"); }
 }
 
-export function digestServiceTree(files: Map<string, string>, root: string): string {
-  const items = [...files].map(([path, text]) => `${relative(root, path).replaceAll("\\", "/")}\0${text}`);
-  return `sha256:${createHash("sha256").update(items.join("\0")).digest("hex")}`;
+export function digestServiceTree(files: Map<string, string>, root: string,
+  opaqueConfiguration: Map<string, string> = new Map()): string {
+  const items = [
+    ...[...files].map(([path, text]) => [relative(root, path).replaceAll("\\", "/"), "text",
+      createHash("sha256").update(text).digest("hex")]),
+    ...[...opaqueConfiguration].map(([path, digest]) => [relative(root, path).replaceAll("\\", "/"), "opaque", digest]),
+  ].sort((a, b) => a[0]!.localeCompare(b[0]!));
+  return `sha256:${createHash("sha256").update(JSON.stringify(items)).digest("hex")}`;
 }
 
 export async function readSelectedDocument(projectRoot: string, serviceRoot: string, documentPath: string, maxBytes: number) {

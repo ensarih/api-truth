@@ -5,11 +5,12 @@ import {
 } from "../../../packages/ir/src/index.js";
 import { extractSwagger2Document } from "./index.js";
 import { findSwaggerMiddlewareBinding } from "./middleware-binding.js";
+import { resolveSwaggerRoutingConfiguration } from "./routing-config.js";
 import { createHandlerCandidateResolver } from "./handler-candidates.js";
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
 /** Direct swagger-express-mw default-file registration; handler binding remains unresolved. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.2.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.3.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;
@@ -37,7 +38,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const documentPath = resolve(tree.root, defaultDocument);
     const text = tree.files.get(documentPath);
     if (text === undefined) throw new Error("Selected middleware document rejected");
-    const treeDigest = digestServiceTree(tree.files, tree.root);
+    const treeDigest = digestServiceTree(tree.files, tree.root, tree.opaqueConfiguration);
     const documentDigest = digestDocument(expectedDocument, text);
     const claimed: Array<[string, string]> = [
       [request.source.source_digest, treeDigest], [request.resolution_inputs[0].digest, treeDigest],
@@ -54,8 +55,10 @@ export function createAnalyzer(options: { projectRoot: string }) {
     };
     const binding = findSwaggerMiddlewareBinding(tree.files, tree.root);
     budget();
+    const routingConfiguration = resolveSwaggerRoutingConfiguration(tree.files, tree.root, tree.opaqueConfiguration);
     const result = extractSwagger2Document(request, expectedDocument, text,
-      binding ? { kind: "verified", binding, handlerResolver: createHandlerCandidateResolver(tree.files, tree.root) }
+      binding ? { kind: "verified", binding, routingConfiguration,
+        handlerResolver: createHandlerCandidateResolver(tree.files, tree.root, routingConfiguration) }
         : { kind: "unverified" });
     budget();
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");

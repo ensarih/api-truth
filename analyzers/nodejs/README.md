@@ -52,14 +52,14 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.2.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.3.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
 calls `SwaggerExpress.create({ appRoot: __dirname }, callback)` with a direct
 `middleware.register(app)` inside the callback. A missing, conditional,
 ambiguous, or dynamic registration emits no routes and fails the selected
-analysis. Other configuration shapes remain outside this profile.
+analysis. Other create/registration shapes remain outside this profile.
 
 For that supported registration, the Swagger document's valid literal
 `basePath` is composed with each operation path. A missing `basePath` adds no
@@ -78,7 +78,8 @@ operation or path level, with the operation declaration taking precedence.
 An explicit `operationId` must identify a unique CommonJS function export.
 The bounded source policy searches `api/controllers/<controller>.js` for an
 extensionless controller name, or an explicitly named `.js`/`.cjs` file.
-Controller traversal, alternate directories, TypeScript build projections,
+Configured contained directories are also supported as described below.
+Controller traversal, TypeScript build projections,
 directory modules, dynamic/re-exported values, getters, duplicate or mutated
 exports, and ESM are unresolved. A `.js` candidate requires its nearest package
 scope inside the selected service tree; an unscanned ancestor cannot establish
@@ -86,14 +87,44 @@ that scope. Source modules and package-scope files are limited to 1 MB; modules
 are limited to 50,000 visited syntax nodes. Each module and package scope is
 parsed once per analysis, including when multiple routes share a handler.
 
-Candidates retain separate Swagger declaration, function location, and package
-scope evidence. Their `handler.candidate` claims are **inferred**, with
+Candidates retain separate Swagger declaration, function location, package
+scope, and routing configuration evidence. Their `handler.candidate` claims are **inferred**, with
 `handler_candidate_unverified` diagnostics. No handler dependencies or
 handler-derived parameter, response, or schema facts are attached. Missing or
 unsupported candidates preserve the document routes. Explicit custom pipes
-and collected files under `config/` leave matching unresolved until their
-runtime routing configuration can be interpreted. Environment overrides,
+and non-middleware `x-controller-interface` overrides leave matching unresolved. Environment overrides,
 framework versions, module initialization, and startup remain unverified.
+
+### Static routing configuration
+
+One `config/default.json`, `default.yaml`, or `default.yml` can declare a
+`swagger.swaggerControllerPipe` and a bounded `swagger.bagpipes` pipeline ending
+in one `swagger_router` fitting. The router must explicitly list contained
+`controllersDirs` and `mockControllersDirs`, use non-mock routing, and use the
+middleware controller interface. Supported preceding fittings are
+`cors`, `swagger_params_parser`, `swagger_security`, `swagger_validator`,
+and `express_compatibility`; a static `json_error_handler` error declaration is
+also accepted. Inline fittings and named fitting objects are supported.
+Directories are limited to eight distinct contained paths and pipelines to
+32 entries. Multiple matching source modules or visible competing directory/JSON
+modules leave the candidate unresolved.
+
+Absent configuration, or a static configuration with absent/null `bagpipes`,
+retains the explicit default-directory assumption. Layered configuration,
+dynamic configuration, unsupported formats, mock routing, custom fitting
+files, dependency factories, unknown pipeline behavior, and unsupported
+directories leave handler matching unresolved. Unknown-format files under
+`config/` are counted against the file/byte limits and hashed as opaque bytes;
+their contents are never emitted. All collected text and opaque configuration
+files enter a sorted, content-hashed manifest for invalidation.
+
+`routing.configuration.declaration` records the declared pipeline and
+directories with exact configuration pointers. Defaults remain inferred.
+`routing_runtime_overrides_unverified` makes clear that these declarations do
+not prove effective configuration: environment variables, alternate config
+directories, installed framework versions, module loading and startup are
+still unverified. Candidate matching adds no runtime binding or handler-derived
+contract facts.
 
 This source policy follows the default-directory/controller lookup inspected
 in [swagger-node-runner 0.7.3](https://github.com/apigee-127/swagger-node-runner/blob/866b75f267fa94522cc0233563763af1dd758843/fittings/swagger_router.js)
@@ -107,6 +138,11 @@ Try the synthetic fixture:
 npm run --silent extract:swagger2-middleware -- --source fixtures/nodejs/swagger2/middleware/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
 
-The focused tests are `tests/unit/swagger2-handler-candidates.test.ts`,
+The configured-directory fixture is
+`fixtures/nodejs/swagger2/configured-middleware/src`; use it as the source in the
+same command.
+
+The focused tests are `tests/unit/swagger2-routing-config.test.ts`,
+`tests/unit/swagger2-handler-candidates.test.ts`,
 `tests/unit/swagger2-middleware-analyzer.test.ts`, and
 `tests/contract/swagger2-middleware-cli.test.ts`.

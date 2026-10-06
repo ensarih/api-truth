@@ -1,9 +1,10 @@
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
+import { resolveSwaggerRoutingConfiguration, type RoutingConfiguration } from "./routing-config.js";
 import { parseStrictJson } from "./strict-json.js";
 
 export type HandlerCandidate = {
-  kind: "candidate"; path: string; line: number; span: string; export_name: string; package_scope?: string;
+  kind: "candidate"; path: string; line: number; span: string; export_name: string; controller_directory: string; package_scope?: string;
 };
 type UnresolvedCandidate = { kind: "unresolved"; code: string };
 export type HandlerCandidateResolution = HandlerCandidate | UnresolvedCandidate;
@@ -15,17 +16,28 @@ const propertyName = (node: ts.PropertyName): string | undefined =>
 const functionValue = (node: ts.Node): node is ts.FunctionExpression | ts.ArrowFunction | ts.MethodDeclaration =>
   ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node);
 
-/** Source candidates under the runner's default directory; no module loading or runtime binding. */
-export function createHandlerCandidateResolver(files: Map<string, string>, root: string): HandlerCandidateResolver {
+/** Source candidates under a static declared directory profile; no module loading or runtime binding. */
+export function createHandlerCandidateResolver(files: Map<string, string>, root: string,
+  configuration: RoutingConfiguration = resolveSwaggerRoutingConfiguration(files, root)): HandlerCandidateResolver {
   const cache = new Map<string, ReturnType<typeof inspectModule>>();
   const packageScopes = new Map<string, string | UnresolvedCandidate>();
-  const runtimeConfigPresent = [...files.keys()].some(path => relative(root, path).replaceAll("\\", "/").startsWith("config/"));
   return (controller, operationId) => {
     if (!/^[A-Za-z0-9_-]+(?:\.(?:js|cjs))?$/.test(controller) || reserved.has(controller)
       || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(operationId) || reserved.has(operationId))
       return unresolved("handler_mapping_unsupported");
-    if (runtimeConfigPresent) return unresolved("handler_configuration_unverified");
-    const path = resolve(root, "api/controllers", /\.(?:js|cjs)$/.test(controller) ? controller : `${controller}.js`);
+    if (configuration.kind === "unresolved") return unresolved(configuration.code);
+    const explicitExtension = /\.(?:js|cjs)$/.test(controller);
+    const matches = configuration.controller_dirs.map(directory => ({
+      directory, path: resolve(root, directory, explicitExtension ? controller : `${controller}.js`),
+    })).filter(item => files.has(item.path));
+    if (matches.length > 1) return unresolved("handler_source_ambiguous");
+    if (!explicitExtension && configuration.controller_dirs.some(directory =>
+      [`${controller}.json`, `${controller}/package.json`, `${controller}/index.js`,
+        `${controller}/index.json`].some(name => files.has(resolve(root, directory, name)))))
+      return unresolved("handler_module_resolution_unverified");
+    const match = matches[0];
+    if (!match) return unresolved("handler_source_unresolved");
+    const {path, directory} = match;
     const text = files.get(path);
     if (text === undefined) return unresolved("handler_source_unresolved");
     let packageScope: string | undefined;
@@ -49,7 +61,7 @@ export function createHandlerCandidateResolver(files: Map<string, string>, root:
     if (!node) return unresolved("handler_export_unresolved");
     return { kind: "candidate", path: relative(root, path).replaceAll("\\", "/"),
       line: inspected.source.getLineAndCharacterOfPosition(node.getStart()).line + 1,
-      span: `span:${node.getStart()}:${node.getEnd()}`, export_name: operationId,
+      span: `span:${node.getStart()}:${node.getEnd()}`, export_name: operationId, controller_directory: directory,
       ...(packageScope ? { package_scope: packageScope } : {}) };
   };
 }

@@ -1,0 +1,13 @@
+swagger:
+  swaggerControllerPipe: controllers
+  bagpipes:
+    controllers:
+      - swagger_params_parser
+      - express_compatibility
+      - router
+    router:
+      name: swagger_router
+      mockMode: false
+      mockControllersDirs: []
+      controllersDirs: [handlers]
+      controllersInterface: middleware

@@ -222,3 +222,67 @@ test("unresolved mappings and explicit pipes preserve document routes without ca
     expect(result.diagnostics.map(item => item.code)).toContain(code);
   }
 });
+
+const routingConfiguration = (directory: string) => JSON.stringify({swagger: {
+  swaggerControllerPipe: "controllers", bagpipes: {
+    router: {name: "swagger_router", mockMode: false, mockControllersDirs: [], controllersDirs: [directory]},
+    controllers: ["express_compatibility", "router"],
+  },
+}});
+
+test("configured controller candidates retain routing declaration provenance and invalidate on config changes", async () => {
+  const yaml = document.replace("    get:", "    x-swagger-router-controller: orders\n    get:");
+  const { root, adapter } = await service({"app.js": entry, "api/swagger/swagger.yaml": yaml,
+    "package.json": '{"type":"commonjs"}', "config/default.json": routingConfiguration("custom/controllers"),
+    "custom/controllers/orders.js": "exports.getOrder = function () {};",
+    "alternate/controllers/orders.js": "exports.getOrder = function () {};"});
+  const first = await adapter.analyze(request());
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  const declaration = first.claims.find(item => item.predicate === "routing.configuration.declaration")!;
+  expect(declaration).toMatchObject({verification: "declared", value: expect.objectContaining({controller_dirs: ["custom/controllers"], pipeline: "controllers"})});
+  const candidate = first.claims.find(item => item.predicate === "handler.candidate")!;
+  expect(candidate.value).toMatchObject({path: "custom/controllers/orders.js", controller_directory: "custom/controllers"});
+  const cfgEvidence = first.evidence.filter(item => candidate.evidence_ids.includes(item.evidence_id)
+    && item.location.path === "config/default.json");
+  expect(cfgEvidence).toContainEqual(expect.objectContaining({source: {kind: "configuration", source_id: "example-repo"},
+    location: {path: "config/default.json", pointer: "/swagger/bagpipes/router/controllersDirs/0"}}));
+  expect(first.diagnostics.map(item => item.code)).toContain("routing_runtime_overrides_unverified");
+  expect(first.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  await writeFile(join(root, "service/config/default.json"), routingConfiguration("alternate/controllers"));
+  const second = await adapter.analyze(request());
+  expect(second.claims.find(item => item.predicate === "handler.candidate")!.value).toMatchObject({path: "alternate/controllers/orders.js"});
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.endpoints[0]!.responses.map(item => item.status)).toEqual([{kind: "exact", code: 200}]);
+});
+
+test("opaque configuration affects provenance without exposing bytes or erasing document endpoints", async () => {
+  const {root, adapter} = await service({"app.js": entry,
+    "api/swagger/swagger.yaml": document.replace("    get:", "    x-swagger-router-controller: orders\n    get:"),
+    "package.json": '{"type":"commonjs"}', "config/default.properties": "private-config-marker"});
+  await writeFile(join(root, "service/config/default.properties"), Buffer.from([0xff, 0x00, 0x01]));
+  const first = await adapter.analyze(request());
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  expect(first.endpoints).toHaveLength(1);
+  expect(first.diagnostics.map(item => item.code)).toContain("handler_configuration_unverified");
+  expect(first.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+  await writeFile(join(root, "service/config/default.properties"), "private-config-marker-changed");
+  const second = await adapter.analyze(request());
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(JSON.stringify(second)).not.toContain("private-config-marker");
+  const limited = request(); limited.limits.max_files = 3;
+  await expect(adapter.analyze(limited)).rejects.toThrow("Source boundary or input limit rejected");
+});
+
+test("controller interface overrides cannot silently inherit a middleware-only candidate policy", async () => {
+  const mapped = document.replace("    get:", "    x-swagger-router-controller: orders\n    get:");
+  for (const yaml of [mapped.replace("paths:", "x-controller-interface: pipe\npaths:"),
+    mapped.replace("    get:", "    x-controller-interface: auto-detect\n    get:"),
+    mapped.replace("      operationId: getOrder", "      x-controller-interface: pipe\n      operationId: getOrder")]) {
+    const {adapter} = await service({"app.js": entry, "api/swagger/swagger.yaml": yaml,
+      "package.json": '{"type":"commonjs"}', "api/controllers/orders.js": "exports.getOrder = function () {};"});
+    const result = await adapter.analyze(request());
+    expect(result.endpoints).toHaveLength(1);
+    expect(result.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+    expect(result.diagnostics.map(item => item.code)).toContain("handler_interface_unverified");
+  }
+});

@@ -3,9 +3,9 @@
 **Status:** active analyzer priority, 2026-10-06
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
 Express subset. `nodejs-swagger2-document@0.3.0` reads selected Swagger 2 JSON/YAML
-declarations. `nodejs-swagger-express-mw@0.2.0` recognizes one direct default-file
+declarations. `nodejs-swagger-express-mw@0.3.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
-default-directory CommonJS handler source candidates with separate evidence.
+default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
 and production startup remain unverified.
 `nodejs-routing-controllers@0.7.0` extracts a bounded literal decorator subset
@@ -28,7 +28,7 @@ repository.
 |---|---|---|
 | Literal Express app/router registrations | Implemented within the published D05 support matrix | Endpoint identity, mounted routers, DTO schemas, selected validators, response serialization, evidence, dependencies, diagnostics |
 | Swagger 2 JSON/YAML declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions and basePath claim, and D07 update/difference engine |
-| Swagger 2 routes loaded by `swagger-express-mw` | Initial direct default-file registration and exact CommonJS handler candidates; effective configuration and handler/startup binding remain open | Document-only profile and its bounded JSON/YAML parsers |
+| Swagger 2 routes loaded by `swagger-express-mw` | Direct default-file registration, bounded static pipeline declarations and exact CommonJS handler candidates; effective configuration and handler/startup binding remain open | Document-only profile and its bounded JSON/YAML parsers |
 | OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
 | routing-controllers literal decorators | Initial profile; direct and bounded glob registrations, literal body requiredness, inline `@QueryParams` and `@HeaderParams` fields, and opt-in wrapper declarations; startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
@@ -129,14 +129,20 @@ installation, network, database, log, or model access occurs.
 **Priority:** P0 when present in the pilot, otherwise P1
 **Adapter identity:** a distinct versioned `nodejs-swagger-express-mw` profile
 
-The `0.2.0` profile recognizes one direct default-file registration, composes
+The `0.3.0` profile recognizes one direct default-file registration, composes
 `basePath` under that policy, and records exact controller/operationId source
-candidates for bounded CommonJS exports. Candidates carry Swagger, source, and
-contained package-scope evidence, remain inferred, and add no handler-derived
-contract facts or dependencies. Collected runtime config, custom pipes,
+candidates for bounded CommonJS exports. One strict static default JSON/YAML
+configuration can select a declared controller pipeline and contained
+directories. Defaults are inferred; custom pipeline declarations carry exact
+configuration pointers. Layered/opaque configuration, mocks, fitting overrides,
+custom operation pipes, non-middleware interfaces, competing modules,
 unverified package scopes, and unsupported exports keep matching unresolved.
-It does not complete the effective-configuration, handler-binding, or
-framework-version conformance gate below.
+Opaque configuration files are counted and content-hashed for invalidation.
+Candidates carry Swagger, source, configuration and contained package-scope
+evidence, remain inferred, and add no handler-derived contract facts or
+dependencies. Environment overrides, effective configuration, framework version
+and startup are still unverified. This slice does not complete the
+handler-binding or framework-version conformance gate below.
 
 - Parse bounded Swagger 2 operations, path-level and operation-level parameter
   overrides, body parameters, `consumes`/`produces`, exact/range/default
