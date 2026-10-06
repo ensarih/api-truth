@@ -41,3 +41,24 @@ test("local Swagger 2 command rejects bad or escaping input without echoing priv
     expect(output.stderr).not.toContain("private-secret");
   }
 }, 30000);
+
+test("both Swagger profiles extract the synthetic multipart upload with query array serialization", () => {
+  const fixture = resolve("fixtures/nodejs/swagger2/form-data/src");
+  const middlewareScript = resolve("scripts/extract-swagger2-middleware.mjs");
+  for (const [selectedScript, values, path] of [
+    [script, ["--source", fixture, "--document", "api/swagger/swagger.yaml", "--service", "uploads", "--revision", "a".repeat(40)], "/uploads"],
+    [middlewareScript, ["--source", fixture, "--service", "uploads", "--revision", "a".repeat(40)], "/api/v1/uploads"],
+  ] as const) {
+    const output = spawnSync(process.execPath, [selectedScript, ...values], {encoding: "utf8", timeout: 30000});
+    expect(output.status).toBe(0);
+    const result = JSON.parse(output.stdout);
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(result.endpoints).toMatchObject([{application_path: path,
+      parameters: [{name: "tags", serialization: {style: "form", explode: true}, presence: {state: "optional"}}],
+      request_bodies: [{media_type: "multipart/form-data", serialization: {format: "multipart"},
+        presence: {state: "required"}, schema: {type: "object", required: ["file"],
+          properties: {file: {type: "string", format: "binary"}, label: {type: "string"}}}}],
+    }]);
+    expect(result.status).toBe("partial");
+  }
+}, 30000);

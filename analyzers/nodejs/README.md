@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.3.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.4.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -24,10 +24,63 @@ Middleware binding is unverified, so even otherwise valid documents receive
 incomplete coverage. Swagger 2 `apiKey` and `basic` security definitions and
 requirements retain document evidence; OAuth 2, missing definitions, and
 unrepresentable scopes leave operation security unknown with diagnostics.
-Unsupported security mapping, serialization details, form data, and unknown
+Unsupported security mapping, serialization details, form fields, and unknown
 response media remain visible through diagnostics. The separate direct
 middleware profile below covers one registration shape; broader binding and
 CI orchestration selection remain backlog items.
+
+## Parameter serialization and form declarations
+
+Both `0.4.0` profiles map flat primitive parameters using the declared
+[Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
+and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
+
+| Parameter | Supported mapping |
+|---|---|
+| Scalar query | `form`, `explode: false` |
+| Scalar path/header | `simple`, `explode: false` |
+| Query array `csv` or omitted collection format | `form`, `explode: false` |
+| Path/header array `csv` or omitted collection format | `simple`, `explode: false` |
+| Query array `ssv` / `pipes` | `spaceDelimited` / `pipeDelimited`, `explode: false` |
+| Query array `multi` | `form`, `explode: true` |
+
+Only primitive array items are supported. Tabs, nested arrays, invalid
+location/format combinations, and empty-value overrides retain a
+`swagger2-unresolved` serialization marker with a scoped diagnostic; no
+replacement delimiter is guessed. Supported mappings carry
+`parameter.serialization` declaration claims. Omitted `required` means
+optional for non-path parameters and bodies; invalid or missing requiredness
+on a path remains unknown.
+
+Scalar `formData` fields are grouped into one object schema for each declared
+`application/x-www-form-urlencoded` or `multipart/form-data` request media
+type. Operation `consumes` overrides the document value. Required form fields
+populate the schema's `required` list; any required field makes the body
+required, otherwise the body is optional. Field types, descriptions, formats and type-compatible enums are retained.
+Exact field and media declarations remain endpoint-scoped evidence. A multipart file becomes a string with
+`format: binary`; URL-encoded files remain unresolved in this profile.
+
+Form arrays, unsupported constraints/unknown fields, malformed or referenced parameter
+entries, unknown media, duplicate body/form fields within one declaration list,
+multiple bodies, and mixed body/form declarations prevent a guessed complete
+body. Legitimate operation overrides of path-level declarations still apply.
+Documented routes and selected form declaration claims remain available.
+
+This slice records `urlencoded` and `multipart` format markers in D03.
+Per-property encoding and verified inline requiredness are still missing from
+the OpenAPI export gate: the compiler diagnoses these forms as unrepresentable
+and strict export stays blocked. Extraction is still partial and does not
+establish runtime validation or middleware/handler binding.
+
+The local upload fixture works with both commands:
+
+```sh
+npm run --silent extract:swagger2 -- --source fixtures/nodejs/swagger2/form-data/src --document api/swagger/swagger.yaml --service uploads --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+npm run --silent extract:swagger2-middleware -- --source fixtures/nodejs/swagger2/form-data/src --service uploads --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+```
+
+The focused tests are `tests/unit/swagger2-serialization.test.ts` and
+`tests/contract/nodejs-swagger-cli.test.ts`.
 
 ## Try it locally
 
@@ -52,7 +105,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.3.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.4.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and

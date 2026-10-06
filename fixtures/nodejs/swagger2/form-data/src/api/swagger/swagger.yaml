@@ -1,0 +1,19 @@
+swagger: '2.0'
+info: {title: Example Uploads, version: '1'}
+basePath: /api/v1
+consumes: [multipart/form-data]
+paths:
+  /uploads:
+    x-swagger-router-controller: uploads
+    post:
+      operationId: upload
+      parameters:
+        - name: tags
+          in: query
+          type: array
+          items: {type: string}
+          collectionFormat: multi
+        - {name: file, in: formData, type: file, required: true}
+        - {name: label, in: formData, type: string}
+      responses:
+        '201': {description: created}

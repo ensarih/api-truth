@@ -8,6 +8,7 @@ import { readSelectedDocument } from "./source.js";
 import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
+import { declaredPresence, parameterSerialization, supportedFormField } from "./swagger2-serialization.js";
 import type { MiddlewareBinding } from "./middleware-binding.js";
 import type { RoutingConfiguration } from "./routing-config.js";
 import type { HandlerCandidateResolver } from "./handler-candidates.js";
@@ -18,7 +19,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.3.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.4.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -62,8 +63,8 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-1", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-3", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-2", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-4", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-1" : "none" }));
   const result: AnalyzerResult = {
@@ -234,7 +235,8 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     if (typeof input.type === "string" && ["string", "integer", "number", "boolean", "object", "array", "null"].includes(input.type))
       output.type = input.type as NonNullable<ApiSchema["type"]>;
     else if (input.type !== undefined) diagnostic("schema_type_unsupported", `${pointer}/type`);
-    if (typeof input.format === "string") output.format = input.format;
+    if (typeof input.format === "string" && input.format.length) output.format = input.format;
+    else if (input.format !== undefined) diagnostic("schema_format_unsupported", `${pointer}/format`);
     if (typeof input.title === "string") output.title = input.title;
     if (typeof input.description === "string") output.description = input.description;
     if (Array.isArray(input.required) && input.required.every(item => typeof item === "string")) output.required = input.required as string[];
@@ -295,24 +297,34 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     for (const parameter of operation.parameters) {
       if (!["path", "query", "header"].includes(parameter.in)) { diagnostic("parameter_location_unsupported", parameter.pointer, "warning", endpointId); continue; }
       const paramEv = evidence(parameter.pointer, endpointId);
-      const presence = parameter.required === true ? "required" : parameter.required === false ? "optional" : "unknown";
+      const presence = declaredPresence(parameter);
+      if (presence === "unknown") diagnostic("parameter_presence_unresolved", `${parameter.pointer}/required`, "warning", endpointId);
       const parameterSchema = parameter.schema ?? Object.fromEntries(["type", "format", "description", "items", "enum"]
         .filter(key => parameter[key] !== undefined).map(key => [key, parameter[key]]));
-      for (const key of Object.keys(parameter)) if (!["name", "in", "pointer", "required", "schema", "type", "format", "description", "items", "enum"].includes(key))
+      for (const key of Object.keys(parameter)) if (!["name", "in", "pointer", "required", "schema", "type", "format", "description", "items", "enum", "collectionFormat", "allowEmptyValue"].includes(key))
         diagnostic("parameter_keyword_unsupported", `${parameter.pointer}/${pointerPart(key)}`, "warning", endpointId);
+      const serialization = parameterSerialization(parameter);
+      if (!serialization) diagnostic("parameter_serialization_unresolved", parameter.pointer, "warning", endpointId);
+      else claim(endpoint, "parameter.serialization", serialization, parameter.pointer);
       endpoint.parameters.push({ name: parameter.name, in: parameter.in as "path" | "query" | "header",
         presence: { state: presence, evidence_ids: [paramEv] },
-        schema: convertSchema(parameterSchema, parameter.pointer), serialization: { format: "swagger2" } });
+        schema: convertSchema(parameterSchema, parameter.pointer), serialization: serialization ?? {format: "swagger2-unresolved"} });
       claim(endpoint, "parameter.presence", presence, parameter.pointer);
     }
-    for (const body of operation.requestBodies) {
+    addFormBodies(endpoint, operation);
+    if (operation.requestBodyConflict) diagnostic("request_body_declarations_conflict", `${operation.pointer}/parameters`, "warning", endpointId);
+    if (operation.requestBodyUnresolved) diagnostic("request_body_declarations_unresolved", `${operation.pointer}/parameters`, "warning", endpointId);
+    for (const body of operation.requestBodyConflict || operation.requestBodyUnresolved
+      ? [] : operation.requestBodies.filter(item => item.in === "body")) {
       if (body.in !== "body" || body.media.state !== "known" || body.media.values.length === 0) {
         diagnostic("request_body_media_or_form_unresolved", body.pointer, "warning", endpointId); continue;
       }
       const bodyEv = evidence(body.pointer, endpointId);
+      if (declaredPresence(body) === "unknown")
+        diagnostic("request_body_presence_unresolved", `${body.pointer}/required`, "warning", endpointId);
       for (const mediaType of body.media.values) endpoint.request_bodies.push({ media_type: mediaType,
         schema: convertSchema(body.schema, `${body.pointer}/schema`), serialization: { format: mediaType },
-        presence: { state: body.required === true ? "required" : body.required === false ? "optional" : "unknown", evidence_ids: [bodyEv] } });
+        presence: { state: declaredPresence(body), evidence_ids: [bodyEv] } });
     }
     for (const response of operation.responses) {
       const content = response.schema !== undefined && response.media.state === "known"
@@ -361,6 +373,52 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     for (const body of endpoint.request_bodies) addSchemaDependencies(body.schema);
     for (const response of endpoint.responses) for (const content of response.content) addSchemaDependencies(content.schema);
     result.endpoints.push(endpoint);
+  }
+
+  function addFormBodies(endpoint: Endpoint, operation: Swagger2Operation): void {
+    const forms = operation.requestBodies.filter(item => item.in === "formData");
+    if (!forms.length) return;
+    for (const field of forms) {
+      claim(endpoint, "request.form.field.declaration", {name: field.name,
+        ...(typeof field.type === "string" ? {type: field.type} : {}),
+        ...(typeof field.collectionFormat === "string" ? {collectionFormat: field.collectionFormat} : {})}, field.pointer);
+    }
+    if (operation.requestBodyConflict || operation.requestBodyUnresolved) return;
+    const pathItem = (raw.paths as Record<string, Record<string, unknown>>)[operation.path]!;
+    const rawOperation = pathItem[operation.method] as Record<string, unknown>;
+    const consumesPointer = rawOperation.consumes !== undefined ? `${operation.pointer}/consumes` : "/consumes";
+    if (operation.consumes.state !== "known" || !operation.consumes.values.length) {
+      diagnostic("form_media_unresolved", consumesPointer, "warning", endpoint.endpoint_id);
+      return;
+    }
+    const unresolved = forms.filter(field => !supportedFormField(field));
+    for (const field of unresolved) diagnostic("form_field_unresolved", field.pointer, "warning", endpoint.endpoint_id);
+    if (unresolved.length) return;
+    for (const field of forms) claim(endpoint, "request.form.field.presence",
+      {name: field.name, state: declaredPresence(field)}, field.pointer);
+    const mediaEv = evidence(consumesPointer, endpoint.endpoint_id);
+    const fieldEvidence = forms.map(field => evidence(field.pointer, endpoint.endpoint_id));
+    const properties = Object.fromEntries([...forms].sort((a, b) => a.name.localeCompare(b.name)).map(field =>
+      [field.name, field.type === "file"
+        ? {type: "string", format: "binary", ...(typeof field.description === "string" ? {description: field.description} : {})} as ApiSchema
+        : convertSchema(Object.fromEntries(["type", "format", "description", "enum"].filter(key => field[key] !== undefined)
+          .map(key => [key, field[key]])), field.pointer)]));
+    const required = forms.filter(field => field.required === true).map(field => field.name).sort();
+    for (const mediaType of operation.consumes.values) {
+      if (!["application/x-www-form-urlencoded", "multipart/form-data"].includes(mediaType)) {
+        diagnostic("form_media_unresolved", consumesPointer, "warning", endpoint.endpoint_id);
+        continue;
+      }
+      if (mediaType !== "multipart/form-data" && forms.some(field => field.type === "file")) {
+        diagnostic("form_file_media_unresolved", consumesPointer, "warning", endpoint.endpoint_id);
+        continue;
+      }
+      endpoint.request_bodies.push({media_type: mediaType,
+        schema: {type: "object", properties, ...(required.length ? {required} : {})},
+        serialization: {format: mediaType === "multipart/form-data" ? "multipart" : "urlencoded"},
+        presence: {state: required.length ? "required" : "optional", evidence_ids: [mediaEv, ...fieldEvidence]}});
+      claim(endpoint, "request.form.declaration", {media_type: mediaType, fields: forms.map(field => field.name)}, consumesPointer);
+    }
   }
 
   function addHandlerCandidate(endpoint: Endpoint, operation: Swagger2Operation): void {

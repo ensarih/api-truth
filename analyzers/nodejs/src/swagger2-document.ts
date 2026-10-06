@@ -30,6 +30,8 @@ export type Swagger2Operation = {
   evidencePointer: string;
   parameters: Swagger2Parameter[];
   requestBodies: Array<Swagger2Parameter & { media: Swagger2Media }>;
+  requestBodyConflict: boolean;
+  requestBodyUnresolved: boolean;
   responses: Swagger2Response[];
   consumes: Swagger2Media;
   produces: Swagger2Media;
@@ -149,8 +151,8 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
     if (!path.startsWith("/") || !obj(pathItem)) { add("unsupported_construct", "warning", "Path entry must have an absolute path and object value.", pathPointer); continue; }
     noteUnknown(pathItem, pathFields, pathPointer);
     if (pathItem.$ref !== undefined) add("unsupported_construct", "warning", "Path Item references are not expanded by this parser.", `${pathPointer}/$ref`);
-    const pathParameters = Array.isArray(pathItem.parameters) ? pathItem.parameters : [];
-    pathParameters.forEach((parameter, index) => { if (obj(parameter) && parameter.schema !== undefined) inspectSchema(parameter.schema, `${pathPointer}/parameters/${index}/schema`); });
+    const pathParameters = pathItem.parameters === undefined ? [] : pathItem.parameters;
+    if (Array.isArray(pathParameters)) pathParameters.forEach((parameter, index) => { if (obj(parameter) && parameter.schema !== undefined) inspectSchema(parameter.schema, `${pathPointer}/parameters/${index}/schema`); });
     for (const [method, rawOperation] of Object.entries(pathItem)) {
       if (!methods.has(method as Swagger2Method)) continue;
       const pointer = `${pathPointer}/${method}`;
@@ -164,19 +166,31 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
         else operationIds.add(rawOperation.operationId);
       }
       const merged = new Map<string, Swagger2Parameter>();
+      let duplicateBodyDeclaration = false;
+      let requestBodyUnresolved = false;
       const addParameters = (list: unknown, sourcePointer: string) => {
-        if (!Array.isArray(list)) { add("unsupported_construct", "warning", "Parameters must be an array.", sourcePointer); return; }
+        if (!Array.isArray(list)) { requestBodyUnresolved = true;
+          add("unsupported_construct", "warning", "Parameters must be an array.", sourcePointer); return; }
+        const keys = new Set<string>();
         list.forEach((raw, index) => {
           const at = `${sourcePointer}/${index}`;
           if (!obj(raw) || typeof raw.name !== "string" || typeof raw.in !== "string") {
+            requestBodyUnresolved = true;
             add("unsupported_construct", "warning", "Parameter requires string name and in fields.", at); return;
           }
           noteUnknown(raw, parameterFields, at);
           if (!new Set(["path", "query", "header", "formData", "body"]).has(raw.in)) {
+            requestBodyUnresolved = true;
             add("unsupported_construct", "warning", `Unsupported parameter location '${raw.in}'.`, `${at}/in`); return;
           }
           if (raw.in === "path" && raw.required !== true)
             add("unsupported_construct", "warning", "Swagger path parameters must be required; optional path parameter was retained with a diagnostic.", `${at}/required`);
+          const key = `${raw.name}\u0000${raw.in}`;
+          if (keys.has(key)) {
+            add("unsupported_construct", "warning", "Duplicate parameter in one declaration list.", at);
+            if (raw.in === "body" || raw.in === "formData") duplicateBodyDeclaration = true;
+          }
+          keys.add(key);
           const normalized = { ...raw, name: raw.name, in: raw.in, pointer: at } as Swagger2Parameter;
           merged.set(`${raw.name}\u0000${raw.in}`, normalized);
         });
@@ -216,6 +230,9 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
       const operation: Swagger2Operation = {
         method: method as Swagger2Method, path, ...(typeof rawOperation.operationId === "string" ? { operationId: rawOperation.operationId } : {}),
         pointer, evidencePointer: pointer, parameters: parameters.filter((item) => item.in !== "body" && item.in !== "formData"), requestBodies, responses,
+        requestBodyUnresolved,
+        requestBodyConflict: duplicateBodyDeclaration || requestBodies.filter(item => item.in === "body").length > 1
+          || requestBodies.some(item => item.in === "body") && requestBodies.some(item => item.in === "formData"),
         consumes: media(rawOperation.consumes, input.consumes, `${pointer}/consumes`),
         produces: media(rawOperation.produces, input.produces, `${pointer}/produces`),
         security: security(rawOperation.security, input.security, `${pointer}/security`),
