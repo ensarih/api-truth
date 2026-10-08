@@ -89,3 +89,29 @@ test.each([
 test("local declaration count is bounded",()=>{
   expect(inspect(`exports.getOrder = function(req,res) { ${Array.from({length:17},(_,i)=>`const v${i} = ${i};`).join(' ')} return res.status(201).json({id:1}); };`)).toEqual({kind:"unresolved"});
 });
+
+test("local shorthand and nested constant fields retain types and supporting declaration spans",()=>{
+  const text='exports.getOrder = function(req,res) {\n const controller = "private-marker";\n const count = 1;\n const body = {controller, detail:{count}, list:[controller]};\n return res.status(201).json(body);\n};';
+  const result=inspect(text);
+  expect(result).toMatchObject({kind:"declared",code:201,body:{schema:{type:"object",properties:{controller:{type:"string"},detail:{type:"object",properties:{count:{type:"integer"}}},list:{type:"array",items:{type:"string"}}}},declaration_sources:[{line:2,span:expect.any(String)},{line:3,span:expect.any(String)}]}});
+  expect(JSON.stringify(result)).not.toContain("private-marker");
+});
+test("named constant fields resolve through earlier object literals",()=>{
+  expect(inspect('exports.getOrder = function(req,res) { const id = 1; const detail = {id}; const body = {detail:detail}; return res.status(201).json(body); };'))
+    .toMatchObject({kind:"declared",body:{schema:{type:"object",properties:{detail:{type:"object",properties:{id:{type:"integer"}}}}}}});
+});
+test.each([
+ 'const body = {controller}; const controller = "late"; return res.status(201).json(body);',
+ 'const body = {body}; return res.status(201).json(body);',
+ 'const controller = req.name; const body = {controller}; return res.status(201).json(body);',
+ 'const body = {req}; return res.status(201).json(body);',
+ 'const controller = "orders"; const body = {controller}; body.controller = "changed"; return res.status(201).json(body);',
+ 'const controller = "orders"; const body = {controller,controller}; return res.status(201).json(body);'
+])("unsafe local constant references remain unresolved: %s",statements=>{
+ expect(inspect(`exports.getOrder = function(req,res) { ${statements} };`)).toEqual({kind:"unresolved"});
+});
+test("repeated constant expansion uses the cumulative literal-node budget",()=>{
+ const statements=['const base = {id:1};'];
+ for(let i=0;i<12;i++)statements.push(`const level${i} = {a:${i===0?'base':`level${i-1}`},b:${i===0?'base':`level${i-1}`}};`);
+ expect(inspect(`exports.getOrder = function(req,res) { ${statements.join(' ')} return res.status(201).json(level11); };`)).toEqual({kind:"unresolved"});
+});

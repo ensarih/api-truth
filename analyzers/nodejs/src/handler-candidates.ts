@@ -275,7 +275,7 @@ function inspectModule(path: string, text: string, localRequire: (node: ts.Expre
   } catch { return { kind: "unresolved", code: "handler_source_unresolved" }; }
 }
 
-export type HandlerResponseStatus = {kind: "declared"; code: number; line: number; span: string; body?: {schema: ApiSchema; line: number; span: string}} | {kind: "unresolved"};
+export type HandlerResponseStatus = {kind: "declared"; code: number; line: number; span: string; body?: {schema: ApiSchema; line: number; span: string; declaration_sources?: Array<{line:number;span:string}>}} | {kind: "unresolved"};
 /** Bounded source declaration only; runtime binding does not prove a response contract. */
 export function inspectBoundResponseStatus(path: string, text: string, exportName: string,
   budget: () => void = () => {}): HandlerResponseStatus {
@@ -319,7 +319,7 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
   if (!expression || !ts.isCallExpression(expression) || !ts.isPropertyAccessExpression(expression.expression)) return unknown;
   const terminal = expression.expression;
   let status: ts.Expression | undefined;
-  let body: {schema: ApiSchema; line: number; span: string} | undefined;
+  let body: Extract<HandlerResponseStatus,{kind:"declared"}>["body"];
   if (terminal.name.text === "sendStatus" && directResponse(terminal.expression) && expression.arguments.length === 1) {
     if (linearStatus || localBodies.size) return unknown;
     status = expression.arguments[0];
@@ -329,9 +329,18 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
     const expectedArguments = terminal.name.text === "end" ? 0 : 1;
     if (expression.arguments.length !== expectedArguments) return unknown;
     let nodes = 0;
+    const declarationSources = new Map<number,ts.Expression>();
     const literal = (node: ts.Node, depth = 0): ApiSchema | undefined => {
       if (++nodes % 512 === 0) budget();
       if (nodes > 10000 || depth > 64) return undefined;
+      if (ts.isIdentifier(node)) {
+        const initializer = localBodies.get(node.text);
+        // Only earlier declarations are visible. Revisit the AST so repeated
+        // references consume the same node/depth budget as literal expansion.
+        if (!initializer || initializer.getEnd() >= node.getStart()) return undefined;
+        declarationSources.set(initializer.getStart(), initializer);
+        return literal(initializer, depth + 1);
+      }
       if (ts.isStringLiteral(node)) return {type: "string"};
       if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return {type: "boolean"};
       if (node.kind === ts.SyntaxKind.NullKeyword) return {type: "null"};
@@ -354,10 +363,12 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
       if (ts.isObjectLiteralExpression(node)) {
         const properties: Record<string, ApiSchema> = {};
         for (const property of node.properties) {
-          if (!ts.isPropertyAssignment(property)) return undefined;
+          if (!ts.isPropertyAssignment(property)
+            && !(ts.isShorthandPropertyAssignment(property) && !property.objectAssignmentInitializer)) return undefined;
           const name = propertyName(property.name);
           if (name === undefined || reserved.has(name) || Object.hasOwn(properties, name)) return undefined;
-          const shape = literal(property.initializer, depth + 1);
+          const value = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+          const shape = literal(value, depth + 1);
           if (!shape) return undefined;
           properties[name] = shape;
         }
@@ -367,7 +378,8 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
     };
     // Only inert literal initializers are accepted, including unused declarations.
     // No calls, aliases, mutation or arbitrary statements can occur before the return.
-    for (const initializer of localBodies.values()) if (!literal(initializer)) return unknown;
+    for (const initializer of localBodies.values()) if (ts.isIdentifier(initializer) || !literal(initializer)) return unknown;
+    declarationSources.clear();
     for (const argument of expression.arguments) {
       const sourceBody = ts.isIdentifier(argument) ? localBodies.get(argument.text) : argument;
       if (!sourceBody) return unknown;
@@ -375,7 +387,10 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
       if (!schema) return unknown;
       if (terminal.name.text === "json") body = {schema,
         line: module.source.getLineAndCharacterOfPosition(sourceBody.getStart()).line + 1,
-        span: `span:${sourceBody.getStart()}:${sourceBody.getEnd()}`};
+        span: `span:${sourceBody.getStart()}:${sourceBody.getEnd()}`,
+        ...(declarationSources.size ? {declaration_sources:[...declarationSources.entries()].sort(([a],[b])=>a-b).map(([,initializer])=>({
+          line:module.source.getLineAndCharacterOfPosition(initializer.getStart()).line+1,
+          span:`span:${initializer.getStart()}:${initializer.getEnd()}`}))} : {})};
     }
     const chain = terminal.expression;
     if (directResponse(chain) && linearStatus) status = linearStatus;

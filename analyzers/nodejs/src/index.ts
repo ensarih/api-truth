@@ -74,7 +74,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-11", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-30", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-31", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -677,13 +677,23 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         method: "deterministic_analysis", scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
           revision: request.source.immutable_revision, endpoint_id: endpoint.endpoint_id}, access_label: request.source.access_label,
         limitations: ["literal JSON argument shape only; values omitted, requiredness and runtime serialization unverified"]});
-      const bodyIds = [...evidenceIds, bodyId];
-      endpoint.evidence_ids.push(bodyId);
+      const constantIds = (body.declaration_sources ?? []).map(source => {
+        const id = `ev-${hash(`${binding.handler_path}:${source.span}:${endpoint.endpoint_id}:response-body-constant`).slice(0,24)}`;
+        result.evidence.push({evidence_id:id,source:{kind:"source_code",source_id:request.source.repository_id},
+          source_version:request.source.immutable_revision,location:{path:binding.handler_path,line:source.line,symbol:source.span},
+          method:"deterministic_analysis",scope:{service_id:request.source.service_id,snapshot_id:result.snapshot_id,
+            revision:request.source.immutable_revision,endpoint_id:endpoint.endpoint_id},access_label:request.source.access_label,
+          limitations:["earlier local literal constant referenced by a source JSON body; values omitted and runtime serialization unverified"]});
+        return id;
+      });
+      const bodyIds = [...evidenceIds, bodyId, ...constantIds];
+      endpoint.evidence_ids.push(bodyId,...constantIds);
+      for (const id of constantIds) result.dependencies.push({from_endpoint_id:endpoint.endpoint_id,to:{kind:"evidence",id},evidence_ids:bodyIds});
       result.claims.push({claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.response.body.declaration:${bodyId}`).slice(0, 24)}`,
         subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
         predicate: "handler.response.body.declaration", verification: "inferred", evidence_ids: bodyIds,
         value: {status_code: declaration.code, schema: body.schema, path: binding.handler_path,
-          export_name: binding.export_name, policy: "literal-json-body-1"}});
+          export_name: binding.export_name, policy: "literal-json-body-2"}});
       result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: bodyId}, evidence_ids: bodyIds});
       const selectedKey = selected?.key;
       const selectedResponse = selected?.response;

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match", "runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-precedence", "runtime-binding-body-schema-missing-example"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match", "runtime-binding-body-shorthand-match", "runtime-binding-body-shorthand-type", "runtime-binding-body-shorthand-required", "runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-precedence", "runtime-binding-body-schema-missing-example"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -66,7 +66,7 @@ try {
       Fields:{type:"object",...(scenario.endsWith("required") ? {required:["name"],properties:{name:{type:"string"}}} : {})}
     };
   }
-  if (scenario.startsWith("runtime-binding-body-local-")) {
+  if (scenario.startsWith("runtime-binding-body-local-") || scenario.startsWith("runtime-binding-body-shorthand-")) {
     operation.responses = {"201":{description:"Local literal response",schema:{type:"object",
       properties:{controller:{type:scenario.endsWith("type") ? "integer" : "string"},
         ...(scenario.endsWith("required") ? {name:{type:"string"}} : {})},
@@ -87,6 +87,8 @@ try {
     'exports.getOrder = function(req, res) { return res.status(201).json({controller:"orders"}); };');
   if (scenario.startsWith("runtime-binding-body-local-")) await put("api/controllers/orders.js",
     'exports.getOrder = function(req,res) { const body = {controller:"orders"}; return res.status(201).json(body); };');
+  if (scenario.startsWith("runtime-binding-body-shorthand-")) await put("api/controllers/orders.js",
+    'exports.getOrder = function(req,res) {\n  const controller = "orders";\n  const body = {controller};\n  return res.status(201).json(body);\n};');
   if (scenario === "runtime-binding-body-linear-match") await put("api/controllers/orders.js",
     'exports.getOrder = function(req,res) { const body = {controller:"orders"}; res.status(201); return res.json(body); };');
   if (["runtime-binding-body-required-present", "runtime-binding-body-required-null"].includes(scenario))
@@ -223,6 +225,10 @@ try {
       responseSchemaPointer: analysis.evidence.find(item => item.evidence_id === analysis.claims.find(item => item.predicate === "response.schema.declaration")?.evidence_ids[0])?.location.pointer,
       responseMediaDeclaration: analysis.claims.find(item => item.predicate === "response.media.declaration"),
       responseMediaPointer: analysis.evidence.find(item => item.evidence_id === analysis.claims.find(item => item.predicate === "response.media.declaration")?.evidence_ids[0])?.location.pointer,
+      bodyConstantSources: analysis.evidence.filter(item => item.limitations?.some(value => value.startsWith("earlier local literal constant")))
+        .map(item => ({line:item.location.line, path:item.location.path,
+          linked:analysis.claims.find(claim => claim.predicate === "handler.response.body.declaration")?.evidence_ids.includes(item.evidence_id),
+          dependency:analysis.dependencies.some(edge => edge.to.kind === "evidence" && edge.to.id === item.evidence_id)})),
       bodyDeclaration: analysis.claims.find(item => item.predicate === "handler.response.body.declaration"),
       responseDependencyPaths: [...new Set(analysis.dependencies.filter(item => item.to.kind === "evidence")
         .map(item => analysis.evidence.find(evidence => evidence.evidence_id === item.to.id)?.location.pointer)

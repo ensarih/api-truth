@@ -69,6 +69,9 @@ const cases = [
   ["runtime-binding-body-local-type", 201, "orders"],
   ["runtime-binding-body-local-required", 201, "orders"],
   ["runtime-binding-body-linear-match", 201, "orders"],
+  ["runtime-binding-body-shorthand-match", 201, "orders"],
+  ["runtime-binding-body-shorthand-type", 201, "orders"],
+  ["runtime-binding-body-shorthand-required", 201, "orders"],
   ["runtime-binding-body-schema-missing", 201, "orders"],
   ["runtime-binding-body-schema-missing-default", 201, "orders"],
   ["runtime-binding-body-schema-missing-precedence", 201, "orders"],
@@ -133,16 +136,18 @@ for (const [scenario, status, marker] of cases) {
         assert.equal(result.analysis.responseMediaPointer, "/produces");
       }
       assert.equal(result.analysis.bodyDeclaration.verification, "inferred");
+      if (scenario.startsWith("runtime-binding-body-shorthand-")) assert.deepEqual(result.analysis.bodyConstantSources,
+        [{line:2, path:"api/controllers/orders.js", linked:true, dependency:true}]);
       const properties = {controller:{type:"string"}};
       if (scenario.endsWith("present")) properties.name = {type:"string"};
       if (scenario.endsWith("null")) properties.name = {type:"null"};
       assert.deepEqual(result.analysis.bodyDeclaration.value.schema, {type:"object", properties});
-      assert.equal(result.analysis.diagnostics.includes("handler_response_body_required_discrepancy"), ["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-required", "runtime-binding-body-local-required"].includes(scenario));
-      if (["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-required", "runtime-binding-body-local-required"].includes(scenario)) {
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_required_discrepancy"), ["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-required", "runtime-binding-body-local-required", "runtime-binding-body-shorthand-required"].includes(scenario));
+      if (["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-required", "runtime-binding-body-local-required", "runtime-binding-body-shorthand-required"].includes(scenario)) {
         assert.equal(result.analysis.requiredDiscrepancy.verification, "inferred");
         assert.deepEqual(result.analysis.requiredDiscrepancy.value.paths, ["/name"]);
       }
-      assert.equal(result.analysis.diagnostics.includes("handler_response_body_type_discrepancy"), (scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type", "runtime-binding-body-allof-type", "runtime-binding-body-local-type"].includes(scenario)));
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_type_discrepancy"), (scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type", "runtime-binding-body-allof-type", "runtime-binding-body-local-type", "runtime-binding-body-shorthand-type"].includes(scenario)));
       assert.equal(result.analysis.diagnostics.includes("handler_response_body_comparison_unresolved"), scenario.endsWith("cycle"));
       if (scenario.startsWith("runtime-binding-body-allof-")) {
         assert.deepEqual(result.analysis.definitionDependencyPaths, ["/definitions/Base", "/definitions/Body", "/definitions/Fields"]);
@@ -157,7 +162,7 @@ for (const [scenario, status, marker] of cases) {
       }
       if (scenario.endsWith("ref") || scenario.startsWith("runtime-binding-body-ref-"))
         assert.deepEqual(result.analysis.definitionDependencyPaths, scenario.endsWith("cycle") ? [] : ["/definitions/Body"]);
-      if ((scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type", "runtime-binding-body-allof-type", "runtime-binding-body-local-type"].includes(scenario))) assert.deepEqual(result.analysis.bodyDiscrepancy.value.paths, ["/controller"]);
+      if ((scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type", "runtime-binding-body-allof-type", "runtime-binding-body-local-type", "runtime-binding-body-shorthand-type"].includes(scenario))) assert.deepEqual(result.analysis.bodyDiscrepancy.value.paths, ["/controller"]);
     }
     if (scenario.startsWith("runtime-binding-response-")) {
       assert.equal(result.analysis.statusDeclaration.value.code, 201);

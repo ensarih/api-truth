@@ -146,7 +146,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.30.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.31.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -661,3 +661,24 @@ reusable default responses without schemas, exact-over-default precedence and
 examples without schemas. Independent review caught an overly broad initial
 predicate; its correction and example case passed follow-up review. Strict
 OpenAPI qualification and normalized response authority remain unchanged.
+
+
+### Earlier local constants in literal JSON responses (2026-10-09)
+
+Middleware `0.31.0` (analyzer package `0.34.0`) supports shorthand properties
+and nested object/array fields referencing earlier local literal constants.
+For example, `const controller = "orders"; const body = {controller};`
+retains a string field in the inferred body shape. Supporting declarations have
+exact source spans, claim evidence and endpoint dependencies; literal values
+are omitted. The standalone document profile remains `0.13.0`.
+
+Only earlier direct-block constants with inert initializers are accepted.
+Direct initializer aliases, forward/self references, calls, mutations and
+control flow remain unresolved. Every reference expansion consumes the shared
+10,000-node/64-depth budget; the 16-local limit remains. Supporting evidence
+includes only declarations reachable from the returned body. These source
+findings do not prove runtime response schemas or qualify strict OpenAPI facts.
+
+Validation: 984 offline tests and 55 pinned runtime cases, including shorthand
+match, type discrepancy, required-field discrepancy and supporting evidence
+links. Independent review found no actionable issue.
