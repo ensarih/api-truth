@@ -29,7 +29,8 @@ export async function readServiceTree(projectRoot: string, serviceRoot: string, 
         const path = join(dir, entry.name);
         if (entry.isDirectory()) await visit(path);
         else if (entry.isFile() && (/\.(?:[cm]?[jt]s|tsx|jsx|json|ya?ml)$/.test(entry.name)
-          || relative(root, path).replaceAll("\\", "/").startsWith("config/"))) {
+          || relative(root, path).replaceAll("\\", "/").startsWith("config/")
+          || ["yarn.lock", "bun.lock", "bun.lockb"].includes(relative(root, path)))) {
           if (files.size + opaqueConfiguration.size >= maxFiles) throw new Error("file limit");
           if ((await lstat(path)).size > 10_000_000 - bytes) throw new Error("byte limit");
           const buffer = await readFile(path);

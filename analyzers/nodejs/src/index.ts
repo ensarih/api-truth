@@ -11,11 +11,12 @@ import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation 
 import { declaredPresence, parameterSerialization, supportedFormField, formFieldEncoding } from "./swagger2-serialization.js";
 import type { MiddlewareBinding } from "./middleware-binding.js";
 import type { RoutingConfiguration } from "./routing-config.js";
+import type { FrameworkLockResolution } from "./framework-lock.js";
 import type { HandlerCandidateResolver } from "./handler-candidates.js";
 
 export type MiddlewareContext = {
   kind: "verified"; binding: MiddlewareBinding; routingConfiguration?: RoutingConfiguration;
-  handlerResolver?: HandlerCandidateResolver;
+  handlerResolver?: HandlerCandidateResolver; frameworkLock?: FrameworkLockResolution;
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
@@ -65,7 +66,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-3", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-5", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-6", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-1" : "none" }));
   const result: AnalyzerResult = {
@@ -101,6 +102,21 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         "runner defaults are analyzer-policy assumptions; effective routing configuration unverified"], access_label: request.source.access_label,
     });
     return id;
+  };
+  const frameworkEvidence = (endpointId?: string): string[] => {
+    if (middleware?.kind !== "verified") return [];
+    return (middleware.frameworkLock?.evidence_locations ?? []).map(location => {
+      const id = `ev-${hash(`${location.path}:${location.pointer}:${endpointId ?? ""}:framework-lock`).slice(0, 24)}`;
+      if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
+        evidence_id: id, source: {kind: "configuration", source_id: request.source.repository_id},
+        source_version: request.source.immutable_revision, location, method: "deterministic_analysis",
+        scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+          revision: request.source.immutable_revision, ...(endpointId ? {endpoint_id: endpointId} : {})},
+        limitations: ["lockfile declaration only; installed modules, runtime resolution and framework behavior unverified"],
+        access_label: request.source.access_label,
+      });
+      return id;
+    });
   };
   const configurationEvidence = (endpointId?: string): string[] => {
     if (middleware?.kind !== "verified") return [];
@@ -176,6 +192,18 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   else {
     diagnostic("handler_binding_unverified", "");
     diagnostic("startup_entrypoint_unverified", "");
+    const framework = middleware.frameworkLock;
+    const frameworkIds = frameworkEvidence();
+    if (framework?.kind === "locked") {
+      const value = {wrapper: "swagger-express-mw", wrapper_version: framework.wrapper_version,
+        runner: "swagger-node-runner", runner_version: framework.runner_version,
+        conformance_target: framework.conformance_target, policy: "npm-lock-declaration-1"};
+      result.claims.push({claim_id: `claim-${hash(`framework.lock:${JSON.stringify(value)}`).slice(0, 24)}`,
+        subject: {service_id: request.source.service_id}, predicate: "framework.lock.declaration", value,
+        verification: "declared", evidence_ids: frameworkIds});
+      diagnostic(framework.conformance_target ? "framework_runtime_unverified" : "framework_version_unsupported",
+        "", "warning", undefined, frameworkIds);
+    } else diagnostic("framework_version_unverified", "", "warning", undefined, frameworkIds);
     const registration = middlewareEvidence();
     const configuration = middleware.routingConfiguration;
     const configEvidence = configurationEvidence();
@@ -489,7 +517,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     }
     const configEvidence = configurationEvidence(endpoint.endpoint_id);
     endpoint.evidence_ids.push(...configEvidence);
-    const evidenceIds = [...configEvidence, evidence(mappingAt, endpoint.endpoint_id),
+    const frameworkIds = frameworkEvidence(endpoint.endpoint_id);
+    endpoint.evidence_ids.push(...frameworkIds);
+    const evidenceIds = [...frameworkIds, ...configEvidence, evidence(mappingAt, endpoint.endpoint_id),
       evidence(`${operation.pointer}/operationId`, endpoint.endpoint_id), id, ...(scopeId ? [scopeId] : [])];
     result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.candidate:${id}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate: "handler.candidate",

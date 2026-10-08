@@ -293,3 +293,40 @@ test("unsupported profile IR version fails before filesystem access", async () =
   await expect(adapter.analyze({ ...request(), ir_version: "1.0.0" }))
     .rejects.toThrow("Swagger profile requires IR 1.1.0");
 });
+
+test("locked framework declarations join candidates without establishing runtime binding", async () => {
+  const manifest = {type: "commonjs", dependencies: {"swagger-express-mw": "0.7.0"}};
+  const lock = {lockfileVersion: 3, packages: {"": {dependencies: manifest.dependencies},
+    "node_modules/swagger-express-mw": {version: "0.7.0", dependencies: {"swagger-node-runner": "^0.7.0"}},
+    "node_modules/swagger-node-runner": {version: "0.7.0"}}};
+  const {root, adapter} = await service({"app.js": entry,
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "package.json": JSON.stringify(manifest), "package-lock.json": JSON.stringify(lock),
+    "api/controllers/orders.js": "exports.getOrder = function(req, res) { res.status(201).json({value: true}); };"});
+  const first = await adapter.analyze(request());
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  expect(first.claims).toContainEqual(expect.objectContaining({predicate: "framework.lock.declaration", verification: "declared",
+    value: expect.objectContaining({wrapper_version: "0.7.0", runner_version: "0.7.0", conformance_target: true})}));
+  const candidate = first.claims.find(item => item.predicate === "handler.candidate")!;
+  expect(candidate.verification).toBe("inferred");
+  expect(first.evidence.filter(item => candidate.evidence_ids.includes(item.evidence_id))).toContainEqual(
+    expect.objectContaining({location: {path: "package-lock.json", pointer: "/packages/node_modules~1swagger-node-runner/version"},
+      scope: expect.objectContaining({endpoint_id: first.endpoints[0]!.endpoint_id}), limitations: expect.arrayContaining([
+        "lockfile declaration only; installed modules, runtime resolution and framework behavior unverified"])}));
+  expect(first.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  expect(first.endpoints[0]!.responses.map(item => item.status)).toEqual([{kind: "exact", code: 200}]);
+  expect(first.diagnostics.map(item => item.code)).toContain("framework_runtime_unverified");
+  lock.packages["node_modules/swagger-node-runner"].version = "0.7.1";
+  await writeFile(join(root, "service/package-lock.json"), JSON.stringify(lock));
+  const second = await adapter.analyze(request());
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.diagnostics.map(item => item.code)).toContain("framework_version_unsupported");
+  expect(second.claims.find(item => item.predicate === "handler.candidate")?.verification).toBe("inferred");
+  expect(second.status).toBe("partial");
+  await writeFile(join(root, "service/yarn.lock"), "private-lock-marker");
+  const competing = await adapter.analyze(request());
+  expect(competing.reproducibility_fingerprint).not.toBe(second.reproducibility_fingerprint);
+  expect(competing.claims.some(item => item.predicate === "framework.lock.declaration")).toBe(false);
+  expect(competing.diagnostics.map(item => item.code)).toContain("framework_version_unverified");
+  expect(JSON.stringify(competing)).not.toContain("private-lock-marker");
+});

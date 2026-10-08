@@ -7,7 +7,7 @@ declarations with flat parameter serialization and scalar/flat-array form and mu
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.5.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.6.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -133,7 +133,7 @@ installation, network, database, log, or model access occurs.
 **Priority:** P0 when present in the pilot, otherwise P1
 **Adapter identity:** a distinct versioned `nodejs-swagger-express-mw` profile
 
-The `0.5.0` profile recognizes one direct default-file registration, composes
+The middleware `0.6.0` profile recognizes one direct default-file registration, composes
 `basePath` under that policy, and records exact controller/operationId source
 candidates for bounded CommonJS exports. One strict static default JSON/YAML
 configuration can select a declared controller pipeline and contained
@@ -146,7 +146,7 @@ Candidates carry Swagger, source, configuration and contained package-scope
 evidence, remain inferred, and add no handler-derived contract facts or
 dependencies. Environment overrides, effective configuration, framework version
 and startup are still unverified. This slice does not complete the
-handler-binding or framework-version conformance gate below. Both `0.5.0` profiles
+handler-binding or framework-version conformance gate below. The document `0.5.0` and middleware `0.6.0` profiles
 also preserve flat parameter collection formats and aggregate bounded scalar
 formData/file declarations per consumes media, with exact field/media evidence.
 Tabs, nested arrays, unsupported form constraints, URL-encoded files, malformed or
@@ -174,6 +174,13 @@ to IR 1.0 until explicit profile selection is implemented.
   route identity requires every path parameter.
 - Preserve definitions as reusable D03 schema components and translate local
   references to canonical `#/schemas/...` references. Do not inline every use.
+- Implemented prerequisite: bounded npm v2/v3 wrapper/nearest runner lock
+  declarations, exact evidence pointers, source invalidation, and an explicitly
+  uncertified `0.7.0`/`0.7.0` conformance target. Missing/unsupported versions
+  remain diagnosed; no candidate promotion or installed/runtime proof occurs.
+- Remaining: conformance fixtures for runner behavior, affecting transitive
+  versions, effective configuration, startup and module initialization before
+  authoritative binding and handler-derived facts.
 - Resolve handlers only through documented middleware/version semantics. The
   first profile must require an exact controller mapping plus `operationId`.
   Bounded symbol search may produce candidate evidence and diagnostics but may

@@ -31,7 +31,8 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-Both `0.5.0` profiles map flat primitive parameters using the declared
+The document `0.5.0` and middleware `0.6.0` profiles map flat primitive
+parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
 
@@ -128,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.5.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.6.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -222,3 +223,31 @@ The focused tests are `tests/unit/swagger2-routing-config.test.ts`,
 `tests/unit/swagger2-handler-candidates.test.ts`,
 `tests/unit/swagger2-middleware-analyzer.test.ts`, and
 `tests/contract/swagger2-middleware-cli.test.ts`.
+
+
+### Locked framework declarations
+
+Middleware profile 0.6 records the declared `swagger-express-mw` and nearest
+`swagger-node-runner` versions from one root npm `package-lock.json` or
+`npm-shrinkwrap.json` (lockfile v2/v3). Root production dependencies must pin
+an exact wrapper version and agree with the lock root. Runner declarations
+support an exact version or the bounded `^0.7.0` range. The nearest nested runner
+entry takes precedence over the hoisted entry; an invalid nested entry cannot
+fall back. Aliases, links, stale roots, overrides, competing npm locks, detected
+pnpm/Yarn/Bun locks, conflicting package-manager markers, invalid/oversized JSON and unsupported declarations remain
+`framework_version_unverified` gaps. Other package managers remain unsupported.
+
+`framework.lock.declaration` retains exact package/lock JSON Pointers and
+revision-scoped evidence. Candidate handlers reference matching endpoint-scoped
+lock evidence, and lock changes invalidate the service fingerprint. The
+`conformance_target` flag identifies the initial wrapper/runner `0.7.0`/`0.7.0`
+target; other readable version pairs emit `framework_version_unsupported`.
+This is a target for future behavior tests, not a compatibility certification.
+
+Lock evidence remains limited: it does not establish installed artifacts,
+runtime module resolution, environment configuration, startup, or handler
+behavior. A target pair still emits `framework_runtime_unverified`; handler
+candidates remain inferred and gain no handler-derived facts or dependencies.
+The wrapper delegates to the runner, so wrapper version alone is insufficient:
+see the tagged [wrapper source](https://github.com/apigee-127/swagger-express/blob/v0.7.0/lib/index.js)
+and [runner manifest](https://github.com/apigee-127/swagger-node-runner/blob/v0.7.0/package.json).
