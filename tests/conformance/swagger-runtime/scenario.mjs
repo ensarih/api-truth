@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -33,13 +33,17 @@ try {
   if (scenario === "runtime-binding-response-match") operation.responses = {"201": {description: "Created"}};
   if (scenario === "runtime-binding-response-default") operation.responses = {default: {description: "Any status"}};
   if (scenario.startsWith("runtime-binding-body-")) {
-    operation.responses = {"201": {description:"Created", schema: scenario.endsWith("ref") ? {$ref:"#/definitions/Body"}
+    operation.responses = {"201": {description:"Created", schema: (scenario.endsWith("ref") || scenario.startsWith("runtime-binding-body-ref-")) ? {$ref:"#/definitions/Body"}
       : {type:"object", properties:{controller:{type:scenario.endsWith("mismatch") ? "integer" : "string"}}}}};
     if (scenario.startsWith("runtime-binding-body-required-")) {
       operation.responses["201"].schema.required = ["controller", "name"];
       operation.responses["201"].schema.properties.name = {};
     }
-    if (scenario.endsWith("ref")) doc.definitions = {Body:{type:"object", properties:{controller:{type:"string"}}}};
+    if (scenario.endsWith("ref") || scenario.startsWith("runtime-binding-body-ref-")) doc.definitions = {Body:{type:"object",
+      ...(scenario.endsWith("required") ? {required:["name"]} : {}),
+      properties:{controller:{type:scenario.endsWith("type") ? "integer" : "string"},
+        ...(scenario.endsWith("required") ? {name:{type:"string"}} : {}),
+        ...(scenario.endsWith("cycle") ? {child:{$ref:"#/definitions/Body"}} : {})}}};
   }
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));
@@ -169,6 +173,9 @@ try {
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
     analysis: {status: analysis.status,
       bodyDeclaration: analysis.claims.find(item => item.predicate === "handler.response.body.declaration"),
+      definitionDependencyPaths: [...new Set(analysis.dependencies.filter(item => item.to.kind === "evidence")
+        .map(item => analysis.evidence.find(evidence => evidence.evidence_id === item.to.id)?.location.pointer)
+        .filter(pointer => pointer?.startsWith("/definitions/")))].sort(),
       requiredDiscrepancy: analysis.claims.find(item => item.predicate === "handler.response.body.required.discrepancy"),
       bodyDiscrepancy: analysis.claims.find(item => item.predicate === "handler.response.body.type.discrepancy"),
       statusDeclaration: analysis.claims.find(item => item.predicate === "handler.response.status.declaration"),

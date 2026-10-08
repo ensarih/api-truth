@@ -7,7 +7,7 @@ declarations with flat parameter serialization and scalar/flat-array form and mu
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.22.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.23.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -493,3 +493,27 @@ and broader control flow remain pending in NB4.
 
 Validation: 890 offline tests and 35 pinned runtime cases, including missing,
 present and null-valued documented required fields.
+
+
+### Local definition references in response comparisons (2026-10-08)
+
+Middleware `0.23.0` resolves bounded response-schema references to local Swagger
+`definitions` before comparing accepted bound handlers' literal bodies. Exact
+single-key `#/definitions/<escaped-name>` references may chain and appear in
+schema properties/items. Repeated targets are supported with unique provenance.
+Referenced definition evidence and dependencies are attached to affected endpoints
+and discrepancy claims, so shared definitions participate in invalidation.
+
+Expansion is bounded to 10,000 schema nodes, depth 64 and 128 definition targets.
+Cycles, missing targets, reference siblings, reserved names, percent-encoded
+fragments, non-definition pointers and file/URL references stay unresolved.
+Metadata such as default/example values is not traversed for references.
+Composed schemas and broader reference forms remain outside this comparison
+profile. Endpoint schemas retain their original document references; source
+body/type/required-field claims remain inferred and do not establish runtime
+validation or serialization. No file or network reference is fetched.
+
+Validation: 904 offline tests and 38 pinned runtime cases. Referenced matching,
+type-conflicting, required-field-conflicting and cyclic schemas are covered.
+Broader schema composition, response-object refs and validator analysis remain
+pending in NB4.

@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.22.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.23.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -172,3 +172,15 @@ constraints are inferred and no endpoint schema is changed. Malformed required
 lists, unresolved references/compositions and comparison limits suppress partial
 findings. As with type differences, these are declaration discrepancies, not
 proof of response serialization or runtime validation.
+
+
+## Local definition references
+
+Middleware `0.23.0` resolves exact local `#/definitions/<escaped-name>` schema
+references through properties/items before type and required-field comparisons.
+It records definition provenance and endpoint dependencies while preserving the
+original documented schema and source claim authority. Expansion is bounded;
+cycles, missing definitions, siblings, unsupported pointers and external/file
+references remain unresolved. Metadata references are not interpreted as schema
+references. Compositions and response-object references remain unsupported by
+this comparison profile, and no reference is fetched.

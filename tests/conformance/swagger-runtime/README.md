@@ -135,3 +135,10 @@ Three required-field cases exercise missing, present and null-valued literal
 JSON fields under documented required lists (35 total tests). Only the missing
 field case emits an inferred required-field discrepancy at `/name`. The source
 body shape and documented contract keep their separate authority categories.
+
+
+The existing local-reference fixture now compares successfully. Three additional
+cases exercise referenced type and required-field discrepancies and a cyclic
+schema (38 total tests). Assertions verify definition evidence dependencies for
+resolved comparisons and withholding them for unresolved cycles. No referenced
+schema is promoted to a runtime contract.
