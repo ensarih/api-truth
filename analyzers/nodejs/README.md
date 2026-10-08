@@ -31,7 +31,7 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-The document `0.5.0` and middleware `0.6.0` profiles map flat primitive
+The document `0.5.0` and middleware `0.7.0` profiles map flat primitive
 parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.6.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.7.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -263,3 +263,31 @@ runs on pinned Node 22.19.0; analysis remains on Node 24.6.0. A negative test
 records the legacy stack's Node 24 failure. These behavior tests do not qualify
 installed artifacts or effective runtime configuration of a scanned service;
 handler candidates remain inferred.
+
+
+### Startup declarations and environment inputs
+
+Middleware profile `0.7.0` records `startup.entrypoint.declaration` only for an
+explicit root `package.json` with `type: commonjs`, exact `engines.node: 22.19.0`,
+and `scripts.start: node app.js` (or a root `.cjs` filename) matching the recognized
+registration file. Pre/post-start hooks, flags, shell commands, other entrypoints,
+ranges, and missing declarations remain unverified. This is a syntactic npm
+startup declaration, not proof of deployment or invocation.
+
+A bounded inventory of contained JS/TS files records potential configuration
+inputs through direct `process.env` access. It identifies reads, writes/deletes,
+computed accesses, whole-environment aliases and imports of the process module.
+Selected Node configuration/loader keys and Swagger key families are retained;
+values and arbitrary variable names are never included. Unknown Swagger keys
+use `swagger_*`; other keys and dynamic or opaque access use `unknown`. Malformed/oversized
+sources and exhausted node budgets also leave an opaque gap. The scan observes
+syntax, not execution reachability or effective environment values.
+
+`environment.access.declaration` and `startup_environment_unverified` retain
+limited exact source evidence. Any detected input blocks source handler
+candidates with `handler_environment_unverified`, while documented routes stay
+available. Startup declarations and unaffected candidates reference limited
+startup evidence. They add no authoritative handler dependencies or facts.
+An empty inventory is not proof that external loaders, imported packages,
+reflection, global aliases, environment overrides or deployment settings are
+absent; all runtime/startup/binding gates remain in place.

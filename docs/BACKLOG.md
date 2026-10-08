@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.6.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.7.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -182,3 +182,14 @@ fixture records a real legacy compatibility failure. This is a separate CI job
 and local command, `npm run test:swagger:runtime`, after the
 [documented setup](../tests/conformance/swagger-runtime/README.md).
 Authoritative scanned-service handler binding remains pending in NB4.
+
+
+### Middleware startup/environment prerequisite — 2026-10-08
+
+Profile `0.7.0` records bounded explicit npm-start and runtime-pin declarations,
+and inventories potential configuration-affecting environment access in
+contained JS/TS source. Safe key/operation/location evidence carries no values.
+Detected inputs suppress source handler candidates and preserve documented
+routes. Runtime conformance now includes a source mock-mode override (11 tests).
+Production invocation, effective external configuration and authoritative
+handler binding remain pending; an empty inventory proves none of them.

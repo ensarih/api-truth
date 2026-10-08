@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "missing-controller", "missing-export", "mock-mode", "environment-override"]);
+  "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -33,7 +33,7 @@ try {
   await put("api/controllers/orders.js", handler("orders"));
   await put("api/controllers/alternate.js", handler("alternate"));
   await put("api/mocks/orders.js", handler("mock"));
-  await put("app.js", `const express = require("express");
+  await put("app.js", `${scenario === "source-environment-override" ? 'process.env.swagger_mockMode = "true";\n' : ""}const express = require("express");
     const SwaggerExpress = require("swagger-express-mw"); const app = express();
     SwaggerExpress.create({appRoot: __dirname}, function(error, middleware) {
       if (error) throw error; middleware.register(app);
@@ -56,7 +56,7 @@ try {
 
   // Each scenario is a fresh process: config/module caches and environment cannot leak between fixtures.
   process.env.NODE_CONFIG_DIR = join(root, "config");
-  if (scenario === "environment-override") process.env.swagger_mockMode = "true";
+  if (["environment-override", "source-environment-override"].includes(scenario)) process.env.swagger_mockMode = "true";
   const require = createRequire(new URL("./package.json", import.meta.url));
   const wrapperRequire = createRequire(require.resolve("swagger-express-mw"));
   const runnerRequire = createRequire(wrapperRequire.resolve("swagger-node-runner"));

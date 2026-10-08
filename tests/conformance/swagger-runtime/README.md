@@ -48,11 +48,12 @@ or dependency patch is used to hide that failure.
 
 ## Behavior checked
 
-Ten tests cover the default controller directory and basePath; operation-level
+Eleven tests cover the default controller directory and basePath; operation-level
 override of a path controller; a configured directory; first-directory
 precedence; fallback when a first controller throws during initialization;
 missing modules and exports; explicit mock mode; an environment override to
-mock mode; and the Node 24 incompatibility.
+mock mode; a source-declared mock override that suppresses the static candidate;
+and the Node 24 incompatibility.
 
 Each behavior scenario starts a fresh child process, constructs only known
 synthetic files in a temporary directory, and binds an ephemeral port on

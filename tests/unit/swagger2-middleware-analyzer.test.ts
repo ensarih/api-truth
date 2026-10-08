@@ -330,3 +330,37 @@ test("locked framework declarations join candidates without establishing runtime
   expect(competing.diagnostics.map(item => item.code)).toContain("framework_version_unverified");
   expect(JSON.stringify(competing)).not.toContain("private-lock-marker");
 });
+
+test("bounded npm start declarations remain limited and source environment writes suppress candidates", async () => {
+  const {root, adapter} = await service({"app.js": entry,
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "package.json": JSON.stringify({type: "commonjs", scripts: {start: "node app.js"}, engines: {node: "22.19.0"}}),
+    "api/controllers/orders.js": "exports.getOrder = function() {};"});
+  const first = await adapter.analyze(request());
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  expect(first.claims).toContainEqual(expect.objectContaining({predicate: "startup.entrypoint.declaration", verification: "declared",
+    value: {entrypoint: "app.js", node_version: "22.19.0", policy: "npm-start-declaration-1"}}));
+  expect(first.claims.some(item => item.predicate === "handler.candidate")).toBe(true);
+  const candidate = first.claims.find(item => item.predicate === "handler.candidate")!;
+  expect(first.evidence.filter(item => candidate.evidence_ids.includes(item.evidence_id))).toContainEqual(
+    expect.objectContaining({location: {path: "package.json", pointer: "/scripts/start"}, limitations: expect.any(Array)}));
+  await writeFile(join(root, "service/app.js"), 'process.env.swagger_mockMode = "private-runtime-value";\n' + entry);
+  const second = await adapter.analyze(request());
+  expect(parseAnalyzerResult(second).ok).toBe(true);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+  expect(second.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  expect(second.claims).toContainEqual(expect.objectContaining({predicate: "environment.access.declaration",
+    value: expect.arrayContaining([expect.objectContaining({variable: "swagger_mockMode", operation: "write"})])}));
+  const startupClaim = second.claims.find(item => item.predicate === "startup.entrypoint.declaration")!;
+  expect(startupClaim.evidence_ids.map(id => second.evidence.find(item => item.evidence_id === id)?.location.path))
+    .toEqual(["package.json", "package.json", "package.json"]);
+  expect(second.diagnostics.map(item => item.code)).toEqual(expect.arrayContaining(["handler_environment_unverified", "startup_environment_unverified"]));
+  expect(second.endpoints).toHaveLength(1);
+  const environmentIds = new Set(second.evidence.filter(item => item.limitations.includes(
+    "syntactic startup/environment declaration only; reachability, effective values and production invocation unverified"))
+    .map(item => item.evidence_id));
+  expect(second.dependencies.some(item => item.evidence_ids.some(id => environmentIds.has(id)))).toBe(false);
+  expect(JSON.stringify(second)).not.toContain("private-runtime-value");
+  expect(second.status).toBe("partial");
+});

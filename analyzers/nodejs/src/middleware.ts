@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   parseAnalyzerRequest, parseAnalyzerResult, type AnalyzerRequest, type AnalyzerResult,
 } from "../../../packages/ir/src/index.js";
+import { resolveSwaggerStartup } from "./startup.js";
 import { extractSwagger2Document } from "./index.js";
 import { resolveSwaggerFrameworkLock } from "./framework-lock.js";
 import { findSwaggerMiddlewareBinding } from "./middleware-binding.js";
@@ -11,7 +12,7 @@ import { createHandlerCandidateResolver } from "./handler-candidates.js";
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
 /** Direct swagger-express-mw default-file registration; handler binding remains unresolved. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.6.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.7.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;
@@ -61,6 +62,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const result = extractSwagger2Document(request, expectedDocument, text,
       binding ? { kind: "verified", binding, routingConfiguration,
         frameworkLock: resolveSwaggerFrameworkLock(tree.files, tree.root, tree.opaqueConfiguration),
+        startup: resolveSwaggerStartup(tree.files, tree.root, binding, budget),
         handlerResolver: createHandlerCandidateResolver(tree.files, tree.root, routingConfiguration) }
         : { kind: "unverified" });
     budget();

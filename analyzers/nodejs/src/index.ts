@@ -9,6 +9,7 @@ import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
 import { declaredPresence, parameterSerialization, supportedFormField, formFieldEncoding } from "./swagger2-serialization.js";
+import type { StartupResolution } from "./startup.js";
 import type { MiddlewareBinding } from "./middleware-binding.js";
 import type { RoutingConfiguration } from "./routing-config.js";
 import type { FrameworkLockResolution } from "./framework-lock.js";
@@ -16,7 +17,7 @@ import type { HandlerCandidateResolver } from "./handler-candidates.js";
 
 export type MiddlewareContext = {
   kind: "verified"; binding: MiddlewareBinding; routingConfiguration?: RoutingConfiguration;
-  handlerResolver?: HandlerCandidateResolver; frameworkLock?: FrameworkLockResolution;
+  handlerResolver?: HandlerCandidateResolver; frameworkLock?: FrameworkLockResolution; startup?: StartupResolution;
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
@@ -66,7 +67,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-3", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-6", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-7", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-1" : "none" }));
   const result: AnalyzerResult = {
@@ -113,6 +114,24 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
           revision: request.source.immutable_revision, ...(endpointId ? {endpoint_id: endpointId} : {})},
         limitations: ["lockfile declaration only; installed modules, runtime resolution and framework behavior unverified"],
+        access_label: request.source.access_label,
+      });
+      return id;
+    });
+  };
+  const startupEvidence = (endpointId?: string, environmentOnly = false): string[] => {
+    if (middleware?.kind !== "verified") return [];
+    const locations = environmentOnly
+      ? (middleware.startup?.environment_inputs ?? []).map(input => input.location)
+      : middleware.startup?.evidence_locations ?? [];
+    return locations.map(location => {
+      const id = `ev-${hash(`${location.path}:${location.pointer}:${endpointId ?? ""}:startup`).slice(0, 24)}`;
+      if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
+        evidence_id: id, source: {kind: "line" in location ? "source_code" : "configuration", source_id: request.source.repository_id},
+        source_version: request.source.immutable_revision, location, method: "deterministic_analysis",
+        scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+          revision: request.source.immutable_revision, ...(endpointId ? {endpoint_id: endpointId} : {})},
+        limitations: ["syntactic startup/environment declaration only; reachability, effective values and production invocation unverified"],
         access_label: request.source.access_label,
       });
       return id;
@@ -204,6 +223,21 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       diagnostic(framework.conformance_target ? "framework_runtime_unverified" : "framework_version_unsupported",
         "", "warning", undefined, frameworkIds);
     } else diagnostic("framework_version_unverified", "", "warning", undefined, frameworkIds);
+    const startup = middleware.startup;
+    const startupIds = startupEvidence();
+    if (startup?.kind === "declared") {
+      const value = {entrypoint: startup.entrypoint, node_version: startup.node_version, policy: "npm-start-declaration-1"};
+      result.claims.push({claim_id: `claim-${hash(`startup.entrypoint:${JSON.stringify(value)}`).slice(0, 24)}`,
+        subject: {service_id: request.source.service_id}, predicate: "startup.entrypoint.declaration", value,
+        verification: "declared", evidence_ids: startupIds});
+    }
+    if (startup?.environment_inputs.length) {
+      const value = startup.environment_inputs.map(input => ({variable: input.variable, operation: input.operation, location: input.location}));
+      result.claims.push({claim_id: `claim-${hash(`startup.environment:${JSON.stringify(value)}`).slice(0, 24)}`,
+        subject: {service_id: request.source.service_id}, predicate: "environment.access.declaration", value,
+        verification: "declared", evidence_ids: startupEvidence(undefined, true)});
+      diagnostic("startup_environment_unverified", "", "warning", undefined, startupEvidence(undefined, true));
+    }
     const registration = middlewareEvidence();
     const configuration = middleware.routingConfiguration;
     const configEvidence = configurationEvidence();
@@ -488,6 +522,12 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       diagnostic("handler_operation_id_unresolved", `${operation.pointer}/operationId`, "warning", endpoint.endpoint_id);
       return;
     }
+    if (middleware.startup?.environment_inputs.length) {
+      const ids = startupEvidence(endpoint.endpoint_id, true);
+      endpoint.evidence_ids.push(...ids);
+      diagnostic("handler_environment_unverified", mappingAt, "warning", endpoint.endpoint_id, ids);
+      return;
+    }
     const candidate = middleware.handlerResolver(controller, operation.operationId);
     if (candidate.kind === "unresolved") {
       diagnostic(candidate.code, mappingAt, "warning", endpoint.endpoint_id, configurationEvidence(endpoint.endpoint_id));
@@ -519,7 +559,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     endpoint.evidence_ids.push(...configEvidence);
     const frameworkIds = frameworkEvidence(endpoint.endpoint_id);
     endpoint.evidence_ids.push(...frameworkIds);
-    const evidenceIds = [...frameworkIds, ...configEvidence, evidence(mappingAt, endpoint.endpoint_id),
+    const startupIds = startupEvidence(endpoint.endpoint_id);
+    endpoint.evidence_ids.push(...startupIds);
+    const evidenceIds = [...startupIds, ...frameworkIds, ...configEvidence, evidence(mappingAt, endpoint.endpoint_id),
       evidence(`${operation.pointer}/operationId`, endpoint.endpoint_id), id, ...(scopeId ? [scopeId] : [])];
     result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.candidate:${id}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate: "handler.candidate",
