@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.23.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.24.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -620,3 +620,26 @@ Validation: 904 offline tests and 38 pinned runtime cases. Referenced matching,
 type-conflicting, required-field-conflicting and cyclic schemas are covered.
 Broader schema composition, response-object refs and validator analysis remain
 pending in NB4.
+
+
+### Reusable response objects in handler comparisons (2026-10-09)
+
+Middleware `0.24.0` resolves exact local `#/responses/<escaped-name>` chains for
+bound-handler body comparisons, then applies the existing local-definition
+schema resolver. Exact statuses still precede `default`. Concrete responses
+require a string description and supported description/schema/headers/examples
+or extension fields; refs with siblings remain unresolved. References must use
+one contained escaped name. Cycles, missing targets, external/file references,
+percent fragments and chains beyond 64 references remain unresolved.
+
+Comparison claims retain source-body, runtime-binding, selector, response-chain,
+terminal-schema and definition evidence. Resolved response objects add endpoint
+dependencies alongside definitions. No requiredness or validation is inferred
+from the runtime binding. The general document parser and normalized endpoint
+responses are unchanged; this slice does not add response-object expansion to
+catalog contract extraction or OpenAPI publication.
+
+Validation: 916 offline tests and 41 pinned runtime cases. Reusable matching and
+type-conflicting responses and a default reusable required-field response are
+covered. Independent review found no blocker. General response extraction,
+compositions, dynamic bodies and validator analysis remain pending in NB4.

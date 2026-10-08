@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.23.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.24.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -184,3 +184,13 @@ cycles, missing definitions, siblings, unsupported pointers and external/file
 references remain unresolved. Metadata references are not interpreted as schema
 references. Compositions and response-object references remain unsupported by
 this comparison profile, and no reference is fetched.
+
+
+## Reusable response objects
+
+Middleware `0.24.0` can select a local reusable `#/responses/<escaped-name>`
+object for an exact or default status, follow bounded response aliases, and
+compare its schema using the definition resolver. Concrete response and selector
+provenance is retained alongside definition dependencies. Unsupported chains
+remain unresolved. This does not expand the general document parser's catalog
+responses and does not establish runtime serialization or validation.

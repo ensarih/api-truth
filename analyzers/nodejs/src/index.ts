@@ -5,7 +5,7 @@ import {
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
 import type {RuntimeBindingResolution, RuntimeBinding} from "./runtime-binding.js";
-import {resolveResponseSchema} from "./response-schema-resolution.js";
+import {resolveResponseSchema, resolveResponseObject} from "./response-schema-resolution.js";
 import {compareResponseBodyTypes, compareResponseBodyPresence} from "./response-body-comparison.js";
 import { declaredSchemaBounds, schemaBoundFields } from "./schema-bounds.js";
 import { declaredSchemaConstraints } from "./schema-constraints.js";
@@ -74,7 +74,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-23", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-24", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -307,7 +307,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     } else diagnostic("security_scheme_unsupported", pointer);
   }
 
-  const definitionIds = new Map(Object.keys(parsed.definitions).sort().map(name => [name, `schema-${hash(name).slice(0, 24)}`]));
+  const referenceIds = new Map(Object.keys(parsed.definitions).sort().map(name => [name, `schema-${hash(name).slice(0, 24)}`]));
   const convertSchema = (value: unknown, pointer: string, depth = 0): ApiSchema => {
     if (depth > 32 || !value || typeof value !== "object" || Array.isArray(value)) {
       diagnostic("schema_unsupported", pointer); return {};
@@ -318,7 +318,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       // This profile supports one JSON Pointer token, not nested paths or URI-fragment decoding.
       const name = token !== undefined && /^[A-Za-z0-9._~!$&'()*+,;=:@?-]+$/.test(token) && !/~(?:[^01]|$)/.test(token)
         ? token.replaceAll("~1", "/").replaceAll("~0", "~") : undefined;
-      const id = name && definitionIds.get(name);
+      const id = name && referenceIds.get(name);
       if (!id) { diagnostic("schema_ref_unsupported", `${pointer}/$ref`); return {}; }
       return { $ref: `#/schemas/${id}` };
     }
@@ -357,11 +357,11 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     return output;
   };
   for (const [name, schema] of Object.entries(parsed.definitions).sort(([a], [b]) => a.localeCompare(b))) {
-    const id = definitionIds.get(name)!;
+    const id = referenceIds.get(name)!;
     const pointer = `/definitions/${pointerPart(name)}`;
     result.schemas[id] = { schema_id: id, schema: convertSchema(schema, pointer), evidence_ids: [evidence(pointer)] };
   }
-  const definitionNames = new Map([...definitionIds].map(([name, id]) => [id, name]));
+  const definitionNames = new Map([...referenceIds].map(([name, id]) => [id, name]));
   for (const operation of parsed.operations) addOperation(operation);
   if (parsed.status === "partial" || result.diagnostics.length) {
     result.status = "partial";
@@ -613,42 +613,49 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: bodyId}, evidence_ids: bodyIds});
       const selectedKey = responses && Object.hasOwn(responses, String(declaration.code)) ? String(declaration.code) : "default";
       const selectedResponse = responses?.[selectedKey];
-      const selectedSchema = selectedResponse && typeof selectedResponse === "object" && !Array.isArray(selectedResponse)
-        && !Object.hasOwn(selectedResponse, "$ref") ? (selectedResponse as Record<string, unknown>).schema : undefined;
+      const responseResolution = resolveResponseObject(selectedResponse, raw.responses);
+      const selectedSchema = responseResolution.kind === "resolved" ? responseResolution.response.schema : undefined;
       const resolvedSchema = resolveResponseSchema(selectedSchema, raw.definitions);
       const comparisonSchema = resolvedSchema.kind === "resolved" ? resolvedSchema.schema : undefined;
-      const definitionIds = resolvedSchema.kind === "resolved" ? resolvedSchema.pointers.map(pointer => evidence(pointer, endpoint.endpoint_id)) : [];
-      for (const id of definitionIds) {
+      const referencePointers = [...new Set([
+        ...(responseResolution.kind === "resolved" ? responseResolution.pointers : []),
+        ...(resolvedSchema.kind === "resolved" ? resolvedSchema.pointers : [])])];
+      const referenceIds = referencePointers.map(pointer => evidence(pointer, endpoint.endpoint_id));
+      if (responseResolution.kind === "resolved" && responseResolution.pointers.length)
+        referenceIds.push(evidence(`${operation.pointer}/responses/${selectedKey}`, endpoint.endpoint_id));
+      for (const id of referenceIds) {
         if (!endpoint.evidence_ids.includes(id)) endpoint.evidence_ids.push(id);
         result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind:"evidence", id}, evidence_ids:[bodyId,id]});
       }
       const comparison = compareResponseBodyTypes(body.schema, comparisonSchema);
-      const documentPointer = responses && Object.hasOwn(responses, selectedKey)
-        ? `${operation.pointer}/responses/${selectedKey}${selectedSchema !== undefined ? "/schema" : ""}` : `${operation.pointer}/responses`;
+      const documentPointer = responseResolution.kind === "resolved" && responseResolution.terminalPointer
+        ? `${responseResolution.terminalPointer}${selectedSchema !== undefined ? "/schema" : ""}`
+        : responses && Object.hasOwn(responses, selectedKey)
+          ? `${operation.pointer}/responses/${selectedKey}${selectedSchema !== undefined ? "/schema" : ""}` : `${operation.pointer}/responses`;
       const schemaEvidence = evidence(documentPointer, endpoint.endpoint_id);
       if (comparison.kind === "compared" && comparison.mismatches.length) result.claims.push({
         claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-type-discrepancy:${bodyId}`).slice(0, 24)}`,
         subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
-        predicate: "handler.response.body.type.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...definitionIds])],
-        value: {paths: comparison.mismatches, policy: "literal-json-body-types-2"}});
+        predicate: "handler.response.body.type.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
+        value: {paths: comparison.mismatches, policy: "literal-json-body-types-3"}});
       if (comparison.kind === "compared") {
         const presence = compareResponseBodyPresence(body.schema, comparisonSchema);
         if (presence.kind === "compared" && presence.missing.length) result.claims.push({
           claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-required-discrepancy:${bodyId}`).slice(0, 24)}`,
           subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
-          predicate: "handler.response.body.required.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...definitionIds])],
-          value: {paths: presence.missing, policy: "literal-json-body-required-2"}});
+          predicate: "handler.response.body.required.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
+          value: {paths: presence.missing, policy: "literal-json-body-required-3"}});
         if (presence.kind === "unresolved" || presence.missing.length) result.diagnostics.push({
           diagnostic_id: `diag-${hash(`${endpoint.endpoint_id}:body-required:${bodyId}:${presence.kind}`).slice(0, 24)}`,
           code: presence.kind === "unresolved" ? "handler_response_body_presence_unresolved" : "handler_response_body_required_discrepancy",
-          severity: "warning", affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...definitionIds])],
+          severity: "warning", affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
           message: presence.kind === "unresolved" ? "Documented required fields could not be compared under the bounded literal-body policy."
             : "The literal JSON argument omits documented required fields; runtime serialization remains unverified."});
       }
       if (comparison.kind === "unresolved" || comparison.mismatches.length) result.diagnostics.push({
         diagnostic_id: `diag-${hash(`${endpoint.endpoint_id}:response-body:${bodyId}:${comparison.kind}`).slice(0, 24)}`,
         code: comparison.kind === "unresolved" ? "handler_response_body_comparison_unresolved" : "handler_response_body_type_discrepancy",
-        severity: "warning", affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...definitionIds])],
+        severity: "warning", affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
         message: comparison.kind === "unresolved" ? "Literal JSON source shape could not be compared under the bounded schema policy."
           : "Literal JSON source types differ from explicit documented response types; runtime serialization remains unverified."});
     }

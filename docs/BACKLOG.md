@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.23.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.24.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -466,3 +466,26 @@ Validation: 904 offline tests and 38 pinned runtime cases. Referenced matching,
 type-conflicting, required-field-conflicting and cyclic schemas are covered.
 Broader schema composition, response-object refs and validator analysis remain
 pending in NB4.
+
+
+### Reusable response objects in handler comparisons (2026-10-09)
+
+Middleware `0.24.0` resolves exact local `#/responses/<escaped-name>` chains for
+bound-handler body comparisons, then applies the existing local-definition
+schema resolver. Exact statuses still precede `default`. Concrete responses
+require a string description and supported description/schema/headers/examples
+or extension fields; refs with siblings remain unresolved. References must use
+one contained escaped name. Cycles, missing targets, external/file references,
+percent fragments and chains beyond 64 references remain unresolved.
+
+Comparison claims retain source-body, runtime-binding, selector, response-chain,
+terminal-schema and definition evidence. Resolved response objects add endpoint
+dependencies alongside definitions. No requiredness or validation is inferred
+from the runtime binding. The general document parser and normalized endpoint
+responses are unchanged; this slice does not add response-object expansion to
+catalog contract extraction or OpenAPI publication.
+
+Validation: 916 offline tests and 41 pinned runtime cases. Reusable matching and
+type-conflicting responses and a default reusable required-field response are
+covered. Independent review found no blocker. General response extraction,
+compositions, dynamic bodies and validator analysis remain pending in NB4.

@@ -142,3 +142,9 @@ cases exercise referenced type and required-field discrepancies and a cyclic
 schema (38 total tests). Assertions verify definition evidence dependencies for
 resolved comparisons and withholding them for unresolved cycles. No referenced
 schema is promoted to a runtime contract.
+
+
+Three reusable-response cases exercise matching schemas, type differences and
+missing required fields through a default response alias (41 total tests).
+Assertions retain both response-chain and definition dependencies. Catalog
+endpoint response extraction remains the existing document profile's behavior.
