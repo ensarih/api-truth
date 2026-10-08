@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.19.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.20.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -368,3 +368,28 @@ NB4 still includes broader framework profiles, production startup/environment
 proof and handler-derived contract extraction.
 
 See [capture and trust contract](SWAGGER_RUNTIME_BINDING.md) for setup, limits and validation.
+
+
+### Bound handler response-status discrepancies (2026-10-08)
+
+Middleware `0.20.0` inspects a bounded CommonJS handler only after a matching
+trusted runtime binding. A single returned `res.sendStatus(201)` or
+`res.status(201).json/send(literal)`/`end()` expression produces an inferred
+`handler.response.status.declaration`, with exact source span and dependencies.
+Decimal statuses 100–599 are supported; the response receiver must be the
+handler's second simple parameter. Literal JSON bodies are inspected only to
+exclude side effects; no body schema is inferred. Other statements, aliases,
+branches, dynamic statuses/payloads and unsupported modules remain unresolved.
+
+A status missing from the document's response keys produces an endpoint-scoped
+`handler_response_status_discrepancy` warning linking both sources. An exact
+matching key or `default` prevents that warning. The warning is a discrepancy
+between declarations, not proof of undocumented runtime behavior. Handler
+binding does not certify Express method integrity or that a response completed.
+Documented endpoint responses and OpenAPI eligibility remain unchanged. Stale
+or untrusted receipts cannot produce these handler declarations. Broader flow,
+validator and response-schema extraction remain in NB4.
+
+Validation: 863 offline tests and 29 pinned runtime cases, including actual
+matching, mismatching and default-response dispatch. Independent review found
+no blocker in authority, matching, evidence or bounded-source handling.

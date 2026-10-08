@@ -47,6 +47,9 @@ const cases = [
   ["runtime-binding-mock", 200, "mock"],
   ["runtime-binding-stale", 200, "orders"],
   ["runtime-binding-precedence", 200, "first"],
+  ["runtime-binding-response-mismatch", 201, "orders"],
+  ["runtime-binding-response-match", 201, "orders"],
+  ["runtime-binding-response-default", 201, "orders"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -89,8 +92,15 @@ for (const [scenario, status, marker] of cases) {
       assert.ok(result.analysis.diagnostics.includes("handler_environment_unverified"));
     }
     if (scenario === "runtime-binding-stale") assert.ok(result.analysis.diagnostics.includes("runtime_binding_receipt_unverified"));
+    if (scenario.startsWith("runtime-binding-response-")) {
+      assert.equal(result.analysis.statusDeclaration.value.code, 201);
+      assert.equal(result.analysis.statusDeclaration.verification, "inferred");
+      assert.equal(result.analysis.diagnostics.includes("handler_response_status_discrepancy"), scenario.endsWith("mismatch"));
+      assert.deepEqual(result.analysis.documentedStatuses, scenario.endsWith("default") ? [{kind:"default"}]
+        : [{kind:"exact", code: scenario.endsWith("match") && !scenario.endsWith("mismatch") ? 201 : 200}]);
+    }
     assert.equal(result.analysis.status, "partial");
-    if (["runtime-binding", "runtime-binding-precedence"].includes(scenario)) {
+    if (["runtime-binding", "runtime-binding-precedence"].includes(scenario) || scenario.startsWith("runtime-binding-response-")) {
       assert.equal(result.analysis.bindingClaim, true);
       assert.equal(result.analysis.binding.verification, "observed");
       assert.equal(result.analysis.binding.value.path, scenario === "runtime-binding-precedence" ? "first/controllers/orders.js" : "api/controllers/orders.js");

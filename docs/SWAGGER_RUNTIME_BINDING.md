@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.19.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.20.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -127,3 +127,20 @@ constraints, deterministic fingerprints and handler/receipt dependencies.
 Fresh-process runtime cases cover actual dispatch, missing exports, mocks,
 stale source and first-directory precedence. The fixture driver invokes the
 framework directly; it does not certify a production application's entrypoint.
+
+
+## Optional source response-status inspection
+
+After accepting a binding, middleware `0.20.0` checks a small CommonJS subset for
+a literal returned response status. It records an inferred
+`handler.response.status.declaration` and warns if that status is absent from
+the document's response keys and no `default` response exists. This inspection
+adds exact handler-source evidence and dependencies. It never changes the
+endpoint's response contract or establishes actual HTTP response behavior.
+
+Only one returned sendStatus/status-chain expression with literal payloads is
+supported. Conditional branches, aliases, dynamic arguments, other statements,
+external helpers and unsupported export forms report
+`handler_response_status_unresolved`. Static candidates without accepted runtime
+observations do not enter this inspection. The collector still captures binding
+only; it does not capture response statuses or response data.

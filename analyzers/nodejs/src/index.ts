@@ -4,7 +4,7 @@ import {
   deriveEndpointIdentity, parseAnalyzerRequest, parseAnalyzerResult,
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
-import type {RuntimeBindingResolution} from "./runtime-binding.js";
+import type {RuntimeBindingResolution, RuntimeBinding} from "./runtime-binding.js";
 import { declaredSchemaBounds, schemaBoundFields } from "./schema-bounds.js";
 import { declaredSchemaConstraints } from "./schema-constraints.js";
 import { readSelectedDocument } from "./source.js";
@@ -16,10 +16,11 @@ import type { StartupResolution } from "./startup.js";
 import type { MiddlewareBinding } from "./middleware-binding.js";
 import type { RoutingConfiguration } from "./routing-config.js";
 import type { FrameworkLockResolution } from "./framework-lock.js";
-import type { HandlerCandidateResolver } from "./handler-candidates.js";
+import type { HandlerCandidateResolver, HandlerResponseStatus } from "./handler-candidates.js";
 
 export type MiddlewareContext = {
   runtimeBinding?: RuntimeBindingResolution;
+  responseStatusResolver?: (binding: RuntimeBinding) => HandlerResponseStatus;
   kind: "verified"; binding: MiddlewareBinding; routingConfiguration?: RoutingConfiguration;
   handlerResolver?: HandlerCandidateResolver; frameworkLock?: FrameworkLockResolution; startup?: StartupResolution;
 } | { kind: "unverified" };
@@ -71,7 +72,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-19", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-20", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -565,7 +566,40 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         signer_digest: receipt.signer_digest, policy: "signed-runtime-binding-1"}});
     result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: handlerId}, evidence_ids: [evId, handlerId]});
     result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: evId}, evidence_ids: [evId]});
+    addHandlerResponseStatus(endpoint, operation, binding, ids);
     return true;
+  }
+
+  function addHandlerResponseStatus(endpoint: Endpoint, operation: Swagger2Operation, binding: RuntimeBinding, bindingIds: string[]): void {
+    if (middleware?.kind !== "verified" || !middleware.responseStatusResolver) return;
+    const declaration = middleware.responseStatusResolver(binding);
+    if (declaration.kind !== "declared") {
+      diagnostic("handler_response_status_unresolved", operation.pointer, "warning", endpoint.endpoint_id);
+      return;
+    }
+    const sourceId = `ev-${hash(`${binding.handler_path}:${declaration.span}:${endpoint.endpoint_id}:response-status`).slice(0, 24)}`;
+    result.evidence.push({evidence_id: sourceId, source: {kind: "source_code", source_id: request.source.repository_id},
+      source_version: request.source.immutable_revision, location: {path: binding.handler_path, line: declaration.line, symbol: declaration.span},
+      method: "deterministic_analysis", scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+        revision: request.source.immutable_revision, endpoint_id: endpoint.endpoint_id}, access_label: request.source.access_label,
+      limitations: ["literal handler status declaration only; actual response behavior and Express method integrity unverified"]});
+    const evidenceIds = [...bindingIds, sourceId];
+    endpoint.evidence_ids.push(sourceId);
+    result.claims.push({claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.response.status.declaration:${sourceId}`).slice(0, 24)}`,
+      subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
+      predicate: "handler.response.status.declaration", verification: "inferred", evidence_ids: evidenceIds,
+      value: {code: declaration.code, path: binding.handler_path, export_name: binding.export_name, policy: "literal-response-status-1"}});
+    result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: sourceId}, evidence_ids: evidenceIds});
+    const pathItem = (raw.paths as Record<string, Record<string, unknown>>)[operation.path]!;
+    const operationDefinition = pathItem[operation.method] as Record<string, unknown>;
+    const responses = operationDefinition.responses as Record<string, unknown> | undefined;
+    if (responses && !Object.hasOwn(responses, String(declaration.code)) && !Object.hasOwn(responses, "default")) {
+      const documentEvidence = evidence(`${operation.pointer}/responses`, endpoint.endpoint_id);
+      const diagnosticId = `diag-${hash(`${endpoint.endpoint_id}:handler_response_status_discrepancy:${sourceId}`).slice(0, 24)}`;
+      result.diagnostics.push({diagnostic_id: diagnosticId, code: "handler_response_status_discrepancy", severity: "warning",
+        message: "The bound handler declares a literal status absent from documented responses; runtime response behavior remains unverified.",
+        affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: [...evidenceIds, documentEvidence]});
+    }
   }
 
   function addHandlerCandidate(endpoint: Endpoint, operation: Swagger2Operation): void {

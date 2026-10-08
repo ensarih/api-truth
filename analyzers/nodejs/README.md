@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.19.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.20.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -522,3 +522,28 @@ NB4 still includes broader framework profiles, production startup/environment
 proof and handler-derived contract extraction.
 
 See [capture and trust contract](../../docs/SWAGGER_RUNTIME_BINDING.md) for setup, limits and validation.
+
+
+### Bound handler response-status discrepancies (2026-10-08)
+
+Middleware `0.20.0` inspects a bounded CommonJS handler only after a matching
+trusted runtime binding. A single returned `res.sendStatus(201)` or
+`res.status(201).json/send(literal)`/`end()` expression produces an inferred
+`handler.response.status.declaration`, with exact source span and dependencies.
+Decimal statuses 100–599 are supported; the response receiver must be the
+handler's second simple parameter. Literal JSON bodies are inspected only to
+exclude side effects; no body schema is inferred. Other statements, aliases,
+branches, dynamic statuses/payloads and unsupported modules remain unresolved.
+
+A status missing from the document's response keys produces an endpoint-scoped
+`handler_response_status_discrepancy` warning linking both sources. An exact
+matching key or `default` prevents that warning. The warning is a discrepancy
+between declarations, not proof of undocumented runtime behavior. Handler
+binding does not certify Express method integrity or that a response completed.
+Documented endpoint responses and OpenAPI eligibility remain unchanged. Stale
+or untrusted receipts cannot produce these handler declarations. Broader flow,
+validator and response-schema extraction remain in NB4.
+
+Validation: 863 offline tests and 29 pinned runtime cases, including actual
+matching, mismatching and default-response dispatch. Independent review found
+no blocker in authority, matching, evidence or bounded-source handling.

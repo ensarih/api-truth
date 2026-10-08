@@ -273,3 +273,60 @@ function inspectModule(path: string, text: string, localRequire: (node: ts.Expre
     return { kind: "module", source, exports };
   } catch { return { kind: "unresolved", code: "handler_source_unresolved" }; }
 }
+
+export type HandlerResponseStatus = {kind: "declared"; code: number; line: number; span: string} | {kind: "unresolved"};
+/** Bounded source declaration only; runtime binding does not prove a response contract. */
+export function inspectBoundResponseStatus(path: string, text: string, exportName: string,
+  budget: () => void = () => {}): HandlerResponseStatus {
+  const unknown: HandlerResponseStatus = {kind: "unresolved"};
+  const module = inspectModule(path, text, () => false, budget);
+  if (module.kind === "unresolved") return unknown;
+  const handler = module.exports.get(exportName);
+  if (!handler || !(ts.isFunctionDeclaration(handler) || functionValue(handler)) || !handler.body
+    || handler.parameters.length < 2 || handler.parameters.length > 3) return unknown;
+  const names = handler.parameters.map(parameter => ts.isIdentifier(parameter.name) && !parameter.initializer
+    && !parameter.dotDotDotToken ? parameter.name.text : undefined);
+  if (names.some(name => name === undefined) || new Set(names).size !== names.length) return unknown;
+  const responseName = names[1]!;
+  let expression: ts.Expression | undefined;
+  if (ts.isBlock(handler.body)) {
+    if (handler.body.statements.length !== 1) return unknown;
+    const statement = handler.body.statements[0]!;
+    if (!ts.isReturnStatement(statement)) return unknown;
+    expression = statement.expression;
+  } else expression = handler.body;
+  if (!expression || !ts.isCallExpression(expression) || !ts.isPropertyAccessExpression(expression.expression)) return unknown;
+  const terminal = expression.expression;
+  const directResponse = (node: ts.Expression) => ts.isIdentifier(node) && node.text === responseName;
+  let status: ts.Expression | undefined;
+  if (terminal.name.text === "sendStatus" && directResponse(terminal.expression) && expression.arguments.length === 1)
+    status = expression.arguments[0];
+  else {
+    if (!["json", "send", "end"].includes(terminal.name.text)) return unknown;
+    const expectedArguments = terminal.name.text === "end" ? 0 : 1;
+    if (expression.arguments.length !== expectedArguments) return unknown;
+    let nodes = 0;
+    const literal = (node: ts.Node, depth = 0): boolean => {
+      if (++nodes % 512 === 0) budget();
+      if (nodes > 10000 || depth > 64) return false;
+      if (ts.isStringLiteral(node) || ts.isNumericLiteral(node)
+        || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)) return true;
+      if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(node.operand)) return true;
+      if (ts.isArrayLiteralExpression(node)) return node.elements.every(item => literal(item, depth + 1));
+      if (ts.isObjectLiteralExpression(node)) return node.properties.every(property => ts.isPropertyAssignment(property)
+        && propertyName(property.name) !== undefined && !reserved.has(propertyName(property.name)!)
+        && literal(property.initializer, depth + 1));
+      return false;
+    };
+    if (!expression.arguments.every(argument => literal(argument))) return unknown;
+    const chain = terminal.expression;
+    if (!ts.isCallExpression(chain) || !ts.isPropertyAccessExpression(chain.expression)
+      || chain.expression.name.text !== "status" || !directResponse(chain.expression.expression)
+      || chain.arguments.length !== 1) return unknown;
+    status = chain.arguments[0];
+  }
+  if (!status || !ts.isNumericLiteral(status) || !/^[1-5][0-9]{2}$/.test(status.getText(module.source))) return unknown;
+  return {kind: "declared", code: Number(status.text),
+    line: module.source.getLineAndCharacterOfPosition(status.getStart()).line + 1,
+    span: `span:${status.getStart()}:${status.getEnd()}`};
+}

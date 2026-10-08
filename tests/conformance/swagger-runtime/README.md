@@ -115,3 +115,11 @@ runs separately from the instrumented service; the private key is outside the
 service tree. These synthetic receipts attest the fixture's tree and session,
 not production startup or deployment. See the
 [capture trust contract](../../../docs/SWAGGER_RUNTIME_BINDING.md).
+
+
+Three additional signed-capture cases exercise handlers returning literal 201
+with a documented 200, documented 201 and documented default (29 total tests).
+The analyzer records an inferred source status declaration and reports only the
+200/201 discrepancy, while preserving the original documented response list.
+Observed runtime fixture responses validate this bounded syntax; they do not
+promote the source declaration into a runtime response contract for other services.

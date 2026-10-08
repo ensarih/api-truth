@@ -9,11 +9,11 @@ import { extractSwagger2Document } from "./index.js";
 import { resolveSwaggerFrameworkLock } from "./framework-lock.js";
 import { findSwaggerMiddlewareBinding } from "./middleware-binding.js";
 import { resolveSwaggerRoutingConfiguration } from "./routing-config.js";
-import { createHandlerCandidateResolver } from "./handler-candidates.js";
+import { createHandlerCandidateResolver, inspectBoundResponseStatus } from "./handler-candidates.js";
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
 /** Direct swagger-express-mw default-file registration; optional signed observations establish session-scoped handler binding. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.19.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.20.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;
@@ -81,6 +81,8 @@ export function createAnalyzer(options: { projectRoot: string; trustedRuntimePub
         ...(runtimeInput && receiptText ? {runtimeBinding: verifyRuntimeBindings({text: receiptText,
           publicKey: options.trustedRuntimePublicKey!, path: runtimeBindingFilename, source: request.source,
           files: tree.files, root: tree.root})} : {}),
+        responseStatusResolver: binding => inspectBoundResponseStatus(binding.handler_path,
+          tree.files.get(resolve(tree.root, binding.handler_path))!, binding.export_name, budget),
         handlerResolver: createHandlerCandidateResolver(tree.files, tree.root, routingConfiguration, budget) }
         : { kind: "unverified" });
     budget();
