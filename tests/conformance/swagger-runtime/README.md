@@ -146,5 +146,7 @@ schema is promoted to a runtime contract.
 
 Three reusable-response cases exercise matching schemas, type differences and
 missing required fields through a default response alias (41 total tests).
-Assertions retain both response-chain and definition dependencies. Catalog
-endpoint response extraction remains the existing document profile's behavior.
+Assertions retain both response-chain and definition dependencies. The same fixtures also verify reusable catalog content and scalar header
+declarations. Response-object dependency assertions select object pointers
+separately from terminal field evidence. Header claims remain declared; the
+fixture does not establish runtime header emission.

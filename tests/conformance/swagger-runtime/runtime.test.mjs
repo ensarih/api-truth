@@ -118,6 +118,9 @@ for (const [scenario, status, marker] of cases) {
       assert.equal(result.analysis.diagnostics.includes("handler_response_body_type_discrepancy"), (scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type"].includes(scenario)));
       assert.equal(result.analysis.diagnostics.includes("handler_response_body_comparison_unresolved"), scenario.endsWith("cycle"));
       if (scenario.startsWith("runtime-binding-body-object-")) {
+        assert.equal(result.analysis.catalogResponseContentCount, 1);
+        assert.deepEqual(result.analysis.catalogResponseHeaders, [{name:"X-Count", schema:{type:"integer"}}]);
+        assert.equal(result.analysis.catalogHeaderClaim.verification, "declared");
         assert.deepEqual(result.analysis.responseDependencyPaths, ["/responses/Alias", "/responses/Shared"]);
         assert.deepEqual(result.analysis.definitionDependencyPaths, ["/definitions/Body"]);
       }

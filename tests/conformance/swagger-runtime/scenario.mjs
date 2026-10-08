@@ -46,7 +46,7 @@ try {
         ...(scenario.endsWith("cycle") ? {child:{$ref:"#/definitions/Body"}} : {})}}};
   }
   if (scenario.startsWith("runtime-binding-body-object-")) {
-    const shared = {description:"Shared response", schema:{$ref:"#/definitions/Body"}};
+    const shared = {description:"Shared response", schema:{$ref:"#/definitions/Body"}, headers:{"X-Count":{type:"integer"}}};
     doc.responses = {Alias:{$ref:"#/responses/Shared"},Shared:shared};
     operation.responses = {[scenario.endsWith("required") ? "default" : "201"]:{$ref:"#/responses/Alias"}};
     doc.definitions = {Body:{type:"object",properties:{controller:{type:scenario.endsWith("type") ? "integer" : "string"},
@@ -182,13 +182,16 @@ try {
       bodyDeclaration: analysis.claims.find(item => item.predicate === "handler.response.body.declaration"),
       responseDependencyPaths: [...new Set(analysis.dependencies.filter(item => item.to.kind === "evidence")
         .map(item => analysis.evidence.find(evidence => evidence.evidence_id === item.to.id)?.location.pointer)
-        .filter(pointer => pointer?.startsWith("/responses/")))].sort(),
+        .filter(pointer => typeof pointer === "string" && /^\/responses\/[^/]+$/.test(pointer)))].sort(),
       definitionDependencyPaths: [...new Set(analysis.dependencies.filter(item => item.to.kind === "evidence")
         .map(item => analysis.evidence.find(evidence => evidence.evidence_id === item.to.id)?.location.pointer)
         .filter(pointer => pointer?.startsWith("/definitions/")))].sort(),
       requiredDiscrepancy: analysis.claims.find(item => item.predicate === "handler.response.body.required.discrepancy"),
       bodyDiscrepancy: analysis.claims.find(item => item.predicate === "handler.response.body.type.discrepancy"),
       statusDeclaration: analysis.claims.find(item => item.predicate === "handler.response.status.declaration"),
+      catalogResponseContentCount: analysis.endpoints[0]?.responses[0]?.content.length,
+      catalogResponseHeaders: analysis.endpoints[0]?.responses[0]?.headers,
+      catalogHeaderClaim: analysis.claims.find(item => item.predicate === "response.header.schema"),
       documentedStatuses: analysis.endpoints[0]?.responses.map(item => item.status),
       candidatePath: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.path,
       initializationSources: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.initialization_sources?.map(item => item.path),

@@ -125,12 +125,12 @@ it does not substitute for a protected enterprise pilot.
 | P5-DOCS | 5 | Permission-scoped read-only Confluence links and discrepancies. | Findings retain both sources, versions, scopes, and review state; revocation invalidates dependent views. |
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
-`nodejs-swagger2-document@0.9.0` reads a selected JSON or YAML document and emits
+`nodejs-swagger2-document@0.10.0` reads a selected JSON or YAML document and emits
 declared route facts, flat parameter serialization, and scalar/flat-array form and multipart-file
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.24.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.25.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -489,3 +489,32 @@ Validation: 916 offline tests and 41 pinned runtime cases. Reusable matching and
 type-conflicting responses and a default reusable required-field response are
 covered. Independent review found no blocker. General response extraction,
 compositions, dynamic bodies and validator analysis remain pending in NB4.
+
+
+### Reusable responses in catalog extraction (2026-10-09)
+
+Document profile `0.10.0` and middleware `0.25.0` expand bounded local reusable
+response aliases into normalized endpoint responses. Schemas retain definition
+references; media types come from the selecting operation's `produces` or the
+root declaration. Missing media types remain unknown. Descriptions are preserved
+as status-scoped `response.description` declaration claims.
+
+Scalar string, integer, number and boolean response headers are extracted with
+status-scoped `response.header.schema` declaration claims. Selector evidence stays
+at the operation; schema, description and header evidence points to the terminal
+reusable response. Alias chains and header declarations retain endpoint evidence
+dependencies. This applies to inline response headers and descriptions too.
+
+The existing 64-reference local resolver rejects cycles, missing targets, sibling
+fields and unsupported references without fetching anything. Unresolved responses
+retain their status selector while withholding their fields. Header extraction is
+limited to 128 declarations per response. Invalid names, case-insensitive name
+conflicts, Content-Type, arrays and unsupported header schemas are diagnosed and
+withheld. Array serialization remains pending. These are document declarations;
+runtime binding does not prove their validation or promote their authority.
+
+Validation: 921 offline tests and 41 pinned runtime cases. Reusable runtime
+fixtures verify catalog schemas, declared scalar headers and response/definition
+dependencies alongside existing handler comparisons. Independent review found no
+blocker. Broader compositions, dynamic bodies and validator analysis remain
+pending in NB4.

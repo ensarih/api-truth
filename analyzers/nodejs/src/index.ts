@@ -28,7 +28,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.9.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.10.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -73,8 +73,8 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-24", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-8", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-25", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -434,12 +434,46 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         presence: { state: declaredPresence(body), evidence_ids: [bodyEv] } });
     }
     for (const response of operation.responses) {
+      const declarationPointer = response.declarationPointer ?? response.pointer;
+      const responseIds = [...new Set([response.pointer, ...(response.referencePointers ?? [])])]
+        .map(pointer => evidence(pointer, endpointId));
+      for (const id of responseIds) {
+        if (!endpoint.evidence_ids.includes(id)) endpoint.evidence_ids.push(id);
+        if (!result.dependencies.some(item => item.from_endpoint_id === endpointId && item.to.kind === "evidence" && item.to.id === id))
+          result.dependencies.push({from_endpoint_id:endpointId,to:{kind:"evidence",id},evidence_ids:responseIds});
+      }
+      const headers: NonNullable<Endpoint["responses"][number]["headers"]> = [];
+      const rawHeaderEntries = Object.entries(response.headers ?? {});
+      if (rawHeaderEntries.length > 128) diagnostic("response_header_limit_exceeded", `${declarationPointer}/headers`, "warning", endpointId);
+      const headerEntries = rawHeaderEntries.length > 128 ? [] : rawHeaderEntries.sort(([a],[b]) => a.localeCompare(b));
+      const counts = new Map<string,number>();
+      for (const [name] of headerEntries) counts.set(name.toLowerCase(),(counts.get(name.toLowerCase()) ?? 0)+1);
+      const duplicated = new Set([...counts].filter(([,count]) => count > 1).map(([name]) => name));
+      for (const [name, header] of headerEntries) {
+        const pointer = `${declarationPointer}/headers/${pointerPart(name)}`;
+        if (!/^[!#$%&'*+.^_`|~A-Za-z0-9-]+$/.test(name) || duplicated.has(name.toLowerCase()) || name.toLowerCase() === "content-type") {
+          diagnostic("response_header_name_unsupported", pointer, "warning", endpointId); continue;
+        }
+        if (!header || typeof header !== "object" || Array.isArray(header)
+          || !["string","integer","number","boolean"].includes(String((header as Record<string,unknown>).type))
+          || Object.keys(header).some(key => !["type","format","description","enum","pattern",...schemaBoundFields].includes(key))) {
+          diagnostic("response_header_schema_unsupported", pointer, "warning", endpointId); continue;
+        }
+        const schema = convertSchema(header, pointer);
+        headers.push({name,schema});
+        claim(endpoint,"response.header.schema",{name,schema,status:response.selector},pointer);
+        const id = evidence(pointer,endpointId);
+        if (!endpoint.evidence_ids.includes(id)) endpoint.evidence_ids.push(id);
+        if (!result.dependencies.some(item => item.from_endpoint_id === endpointId && item.to.kind === "evidence" && item.to.id === id))
+          result.dependencies.push({from_endpoint_id:endpointId,to:{kind:"evidence",id},evidence_ids:[...new Set([id,...responseIds])]});
+      }
       const content = response.schema !== undefined && response.media.state === "known"
         ? response.media.values.map(mediaType => ({ media_type: mediaType,
-          schema: convertSchema(response.schema, `${response.pointer}/schema`), serialization: { format: mediaType } })) : [];
+          schema: convertSchema(response.schema, `${declarationPointer}/schema`), serialization: { format: mediaType } })) : [];
       if (response.schema !== undefined && response.media.state === "unknown")
         diagnostic("response_media_unknown", response.pointer, "warning", endpointId);
-      endpoint.responses.push({ status: response.selector, content });
+      endpoint.responses.push({ status: response.selector, content, ...(headers.length ? {headers} : {}) });
+      if (response.description !== undefined) claim(endpoint,"response.description",{status:response.selector,description:response.description},`${declarationPointer}/description`);
       claim(endpoint, "response.status", response.selector, response.pointer);
     }
     if (!endpoint.responses.length) endpoint.responses.push({ status: { kind: "unknown", reason: "document response unresolved" }, content: [] });

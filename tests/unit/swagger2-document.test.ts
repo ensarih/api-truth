@@ -108,3 +108,25 @@ test("points malformed operation security at the overriding declaration", () => 
     code: "unsupported_construct", pointer: "/paths/~1orders~1{id}/get/security",
   }));
 });
+
+test("reusable response extraction preserves selector, terminal declaration and chain pointers",()=>{
+  const input=structuredClone(base) as any;
+  input.produces=["application/json"];
+  input.responses={Alias:{$ref:"#/responses/Shared"},Shared:{description:"shared",schema:{$ref:"#/definitions/Order"},headers:{"X-Count":{type:"integer"}}}};
+  input.paths["/orders/{id}"].get.responses={"200":{$ref:"#/responses/Alias"}};
+  const result=parseSwagger2Document(input);
+  expect(result.status).toBe("success");
+  expect(result.operations[0]!.responses[0]).toMatchObject({selector:{kind:"exact",code:200},description:"shared",
+    schema:{$ref:"#/definitions/Order"},headers:{"X-Count":{type:"integer"}},
+    pointer:"/paths/~1orders~1{id}/get/responses/200",declarationPointer:"/responses/Shared",
+    referencePointers:["/responses/Alias","/responses/Shared"],media:{state:"known",values:["application/json"]}});
+});
+test("cyclic reusable responses keep their selector with unresolved fields",()=>{
+  const input=structuredClone(base) as any;
+  input.responses={Shared:{$ref:"#/responses/Shared"}};
+  input.paths["/orders/{id}"].get.responses={default:{$ref:"#/responses/Shared"}};
+  const result=parseSwagger2Document(input);
+  expect(result.operations[0]!.responses[0]).toMatchObject({selector:{kind:"default"},media:{state:"unknown"}});
+  expect(result.operations[0]!.responses[0]).not.toHaveProperty("schema");
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({code:"unsupported_construct",pointer:"/paths/~1orders~1{id}/get/responses/default"}));
+});

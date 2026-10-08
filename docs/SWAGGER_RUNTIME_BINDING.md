@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.24.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.25.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -194,3 +194,15 @@ compare its schema using the definition resolver. Concrete response and selector
 provenance is retained alongside definition dependencies. Unsupported chains
 remain unresolved. This does not expand the general document parser's catalog
 responses and does not establish runtime serialization or validation.
+
+
+## Catalog extraction of reusable responses
+
+Middleware `0.25.0` and document profile `0.10.0` also expand resolved local
+response aliases into endpoint content and scalar header declarations. Selector
+and terminal field provenance remain separate; descriptions are status-scoped
+claims. Unknown media types remain unknown. Cycles and other unsupported chains
+keep the selector but withhold response details. Header extraction has a
+128-declaration cap and rejects arrays, unsupported schemas, invalid or
+case-conflicting names and Content-Type. These document facts do not prove that
+the captured handler emits the declared headers or validates its response.

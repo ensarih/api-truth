@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.9.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.10.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.24.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.25.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -643,3 +643,32 @@ Validation: 916 offline tests and 41 pinned runtime cases. Reusable matching and
 type-conflicting responses and a default reusable required-field response are
 covered. Independent review found no blocker. General response extraction,
 compositions, dynamic bodies and validator analysis remain pending in NB4.
+
+
+### Reusable responses in catalog extraction (2026-10-09)
+
+Document profile `0.10.0` and middleware `0.25.0` expand bounded local reusable
+response aliases into normalized endpoint responses. Schemas retain definition
+references; media types come from the selecting operation's `produces` or the
+root declaration. Missing media types remain unknown. Descriptions are preserved
+as status-scoped `response.description` declaration claims.
+
+Scalar string, integer, number and boolean response headers are extracted with
+status-scoped `response.header.schema` declaration claims. Selector evidence stays
+at the operation; schema, description and header evidence points to the terminal
+reusable response. Alias chains and header declarations retain endpoint evidence
+dependencies. This applies to inline response headers and descriptions too.
+
+The existing 64-reference local resolver rejects cycles, missing targets, sibling
+fields and unsupported references without fetching anything. Unresolved responses
+retain their status selector while withholding their fields. Header extraction is
+limited to 128 declarations per response. Invalid names, case-insensitive name
+conflicts, Content-Type, arrays and unsupported header schemas are diagnosed and
+withheld. Array serialization remains pending. These are document declarations;
+runtime binding does not prove their validation or promote their authority.
+
+Validation: 921 offline tests and 41 pinned runtime cases. Reusable runtime
+fixtures verify catalog schemas, declared scalar headers and response/definition
+dependencies alongside existing handler comparisons. Independent review found no
+blocker. Broader compositions, dynamic bodies and validator analysis remain
+pending in NB4.

@@ -1,3 +1,4 @@
+import {resolveResponseObject} from "./response-schema-resolution.js";
 /** Bounded, pure parser for a Swagger 2.0 JSON document. It never reads files or resolves remote references. */
 
 export type Swagger2Method = "get" | "put" | "post" | "delete" | "options" | "head" | "patch";
@@ -21,6 +22,8 @@ export type Swagger2Response = {
   headers?: Record<string, unknown>;
   media: Swagger2Media;
   pointer: string;
+  declarationPointer?: string;
+  referencePointers?: string[];
 };
 export type Swagger2Operation = {
   method: Swagger2Method;
@@ -217,18 +220,34 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
       else for (const [status, rawResponse] of Object.entries(rawOperation.responses)) {
         const at = `${pointer}/responses/${pointerPart(status)}`;
         if (!obj(rawResponse)) { add("unsupported_construct", "warning", "Response must be an object.", at); continue; }
-        noteUnknown(rawResponse, responseFields, at);
-        if (rawResponse.schema !== undefined) inspectSchema(rawResponse.schema, `${at}/schema`);
-        if (rawResponse.examples !== undefined) add("unsupported_construct", "warning", "Response examples are retained by the source but are not interpreted.", `${at}/examples`);
+        let response = rawResponse;
+        let declarationPointer = at;
+        let referencePointers: string[] = [];
+        if (Object.hasOwn(rawResponse, "$ref")) {
+          const resolved = resolveResponseObject(rawResponse, input.responses);
+          if (resolved.kind === "resolved") {
+            response = resolved.response;
+            declarationPointer = resolved.terminalPointer ?? at;
+            referencePointers = resolved.pointers;
+          } else {
+            add("unsupported_construct", "warning", "Reusable response reference could not be resolved under the bounded profile.", at);
+            response = {};
+          }
+        }
+        noteUnknown(response, responseFields, declarationPointer);
+        if (response.schema !== undefined) inspectSchema(response.schema, `${declarationPointer}/schema`);
+        if (obj(response.headers)) for (const [name, header] of Object.entries(response.headers))
+          inspectSchema(header, `${declarationPointer}/headers/${pointerPart(name)}`);
+        if (response.examples !== undefined) add("unsupported_construct", "warning", "Response examples are retained by the source but are not interpreted.", `${declarationPointer}/examples`);
         let selector: Swagger2Response["selector"];
         if (status === "default") selector = { kind: "default" };
         else if (/^[1-5]XX$/.test(status)) selector = { kind: "range", range: status };
         else if (/^[1-5][0-9]{2}$/.test(status)) selector = { kind: "exact", code: Number(status) };
         else { add("unsupported_construct", "warning", `Unsupported response selector '${status}'.`, at); continue; }
-        responses.push({ selector, ...(typeof rawResponse.description === "string" ? { description: rawResponse.description } : {}),
-          ...(rawResponse.schema !== undefined ? { schema: rawResponse.schema } : {}),
-          ...(obj(rawResponse.headers) ? { headers: rawResponse.headers } : {}),
-          media: rawResponse.schema === undefined ? { state: "unknown" } : media(rawOperation.produces, input.produces, `${pointer}/produces`), pointer: at });
+        responses.push({ selector, ...(typeof response.description === "string" ? { description: response.description } : {}),
+          ...(response.schema !== undefined ? { schema: response.schema } : {}),
+          ...(obj(response.headers) ? { headers: response.headers } : {}),
+          media: response.schema === undefined ? { state: "unknown" } : media(rawOperation.produces, input.produces, `${pointer}/produces`), pointer: at, ...(referencePointers.length ? {declarationPointer, referencePointers} : {}) });
       }
       if (!responses.length) add("unsupported_construct", "warning", "Operation has no supported response selectors.", `${pointer}/responses`);
       const operation: Swagger2Operation = {

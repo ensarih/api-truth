@@ -512,3 +512,42 @@ test("schema properties named enum and default still follow real schema referenc
   expect(Object.values(result.schemas).find(item => item.schema.type === "object")!.schema.properties?.enum?.$ref)
     .toMatch(/^#\/schemas\//);
 });
+
+test("reusable response schemas and scalar headers have terminal-source claims and endpoint dependencies",async()=>{
+  const input=structuredClone(document) as any;
+  input.responses={Alias:{$ref:"#/responses/Shared"},Shared:{description:"shared",schema:{$ref:"#/definitions/Order"},headers:{"X-Count":{type:"integer",minimum:0},"X-Names":{type:"array",items:{type:"string"}}}}};
+  input.paths["/orders/{id}"].get.responses={"200":{$ref:"#/responses/Alias"}};
+  const {adapter}=await service(input);
+  const result=await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints[0]!.responses[0]!.content[0]!.schema).toHaveProperty("$ref");
+  expect(result.endpoints[0]!.responses[0]!.headers).toEqual([{name:"X-Count",schema:{type:"integer",minimum:0}}]);
+  expect(result.claims).toContainEqual(expect.objectContaining({predicate:"response.description",verification:"declared",value:expect.objectContaining({description:"shared"})}));
+  const header=result.claims.find(item=>item.predicate==="response.header.schema")!;
+  expect(header).toMatchObject({verification:"declared",value:{name:"X-Count",schema:{type:"integer",minimum:0}}});
+  expect(result.evidence.filter(item=>header.evidence_ids.includes(item.evidence_id))).toContainEqual(expect.objectContaining({location:expect.objectContaining({pointer:"/responses/Shared/headers/X-Count"})}));
+  for(const pointer of ["/responses/Alias","/responses/Shared"]){
+    const evidence=result.evidence.find(item=>item.scope.endpoint_id===result.endpoints[0]!.endpoint_id&&item.location.pointer===pointer)!;
+    expect(result.dependencies).toContainEqual(expect.objectContaining({from_endpoint_id:result.endpoints[0]!.endpoint_id,to:{kind:"evidence",id:evidence.evidence_id}}));
+  }
+  expect(result.diagnostics.map(item=>item.code)).toContain("response_header_schema_unsupported");
+});
+
+test("shared response reuse has unique claims and case-conflicting headers stay unresolved",async()=>{
+  const input=structuredClone(document) as any;
+  input.responses={Shared:{description:"shared",schema:{type:"string"},headers:{"X-Count":{type:"integer"},"x-count":{type:"integer"},"Content-Type":{type:"string"},"X-Ok":{type:"boolean"}}}};
+  input.paths["/orders/{id}"].get.responses={"200":{$ref:"#/responses/Shared"},default:{$ref:"#/responses/Shared"}};
+  const {adapter}=await service(input);const result=await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(new Set(result.claims.map(item=>item.claim_id)).size).toBe(result.claims.length);
+  expect(result.endpoints[0]!.responses.map(item=>item.headers)).toEqual([[{name:"X-Ok",schema:{type:"boolean"}}],[{name:"X-Ok",schema:{type:"boolean"}}]]);
+  expect(result.diagnostics.map(item=>item.code)).toContain("response_header_name_unsupported");
+});
+test("response header count is bounded while schema and selector remain available",async()=>{
+  const input=structuredClone(document) as any;
+  input.paths["/orders/{id}"].get.responses["200"].headers=Object.fromEntries(Array.from({length:129},(_,i)=>[`X-${i}`,{type:"string"}]));
+  const {adapter}=await service(input);const result=await adapter.analyze(request());
+  expect(result.endpoints[0]!.responses[0]!.content).toHaveLength(1);
+  expect(result.endpoints[0]!.responses[0]).not.toHaveProperty("headers");
+  expect(result.diagnostics.map(item=>item.code)).toContain("response_header_limit_exceeded");
+});

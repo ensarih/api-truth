@@ -2,12 +2,12 @@
 
 **Status:** active analyzer priority, 2026-10-08
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
-Express subset. `nodejs-swagger2-document@0.9.0` reads selected Swagger 2 JSON/YAML
+Express subset. `nodejs-swagger2-document@0.10.0` reads selected Swagger 2 JSON/YAML
 declarations with flat parameter serialization and scalar/flat-array form and multipart-file
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.24.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.25.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -540,3 +540,32 @@ Validation: 916 offline tests and 41 pinned runtime cases. Reusable matching and
 type-conflicting responses and a default reusable required-field response are
 covered. Independent review found no blocker. General response extraction,
 compositions, dynamic bodies and validator analysis remain pending in NB4.
+
+
+### Reusable responses in catalog extraction (2026-10-09)
+
+Document profile `0.10.0` and middleware `0.25.0` expand bounded local reusable
+response aliases into normalized endpoint responses. Schemas retain definition
+references; media types come from the selecting operation's `produces` or the
+root declaration. Missing media types remain unknown. Descriptions are preserved
+as status-scoped `response.description` declaration claims.
+
+Scalar string, integer, number and boolean response headers are extracted with
+status-scoped `response.header.schema` declaration claims. Selector evidence stays
+at the operation; schema, description and header evidence points to the terminal
+reusable response. Alias chains and header declarations retain endpoint evidence
+dependencies. This applies to inline response headers and descriptions too.
+
+The existing 64-reference local resolver rejects cycles, missing targets, sibling
+fields and unsupported references without fetching anything. Unresolved responses
+retain their status selector while withholding their fields. Header extraction is
+limited to 128 declarations per response. Invalid names, case-insensitive name
+conflicts, Content-Type, arrays and unsupported header schemas are diagnosed and
+withheld. Array serialization remains pending. These are document declarations;
+runtime binding does not prove their validation or promote their authority.
+
+Validation: 921 offline tests and 41 pinned runtime cases. Reusable runtime
+fixtures verify catalog schemas, declared scalar headers and response/definition
+dependencies alongside existing handler comparisons. Independent review found no
+blocker. Broader compositions, dynamic bodies and validator analysis remain
+pending in NB4.
