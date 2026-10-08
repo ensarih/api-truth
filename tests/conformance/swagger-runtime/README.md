@@ -129,3 +129,9 @@ Three more signed-capture cases exercise literal JSON response-body type matchin
 a property-type discrepancy and a referenced document schema (32 total tests).
 They assert inferred type-only body claims, exact discrepancy paths and unresolved
 reference comparison. Documented endpoint schemas remain the API document's facts.
+
+
+Three required-field cases exercise missing, present and null-valued literal
+JSON fields under documented required lists (35 total tests). Only the missing
+field case emits an inferred required-field discrepancy at `/name`. The source
+body shape and documented contract keep their separate authority categories.

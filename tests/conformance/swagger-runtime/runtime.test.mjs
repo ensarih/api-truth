@@ -53,6 +53,9 @@ const cases = [
   ["runtime-binding-body-match", 201, "orders"],
   ["runtime-binding-body-mismatch", 201, "orders"],
   ["runtime-binding-body-ref", 201, "orders"],
+  ["runtime-binding-body-required-missing", 201, "orders"],
+  ["runtime-binding-body-required-present", 201, "orders"],
+  ["runtime-binding-body-required-null", 201, "orders"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -97,7 +100,15 @@ for (const [scenario, status, marker] of cases) {
     if (scenario === "runtime-binding-stale") assert.ok(result.analysis.diagnostics.includes("runtime_binding_receipt_unverified"));
     if (scenario.startsWith("runtime-binding-body-")) {
       assert.equal(result.analysis.bodyDeclaration.verification, "inferred");
-      assert.deepEqual(result.analysis.bodyDeclaration.value.schema, {type:"object", properties:{controller:{type:"string"}}});
+      const properties = {controller:{type:"string"}};
+      if (scenario.endsWith("present")) properties.name = {type:"string"};
+      if (scenario.endsWith("null")) properties.name = {type:"null"};
+      assert.deepEqual(result.analysis.bodyDeclaration.value.schema, {type:"object", properties});
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_required_discrepancy"), scenario === "runtime-binding-body-required-missing");
+      if (scenario === "runtime-binding-body-required-missing") {
+        assert.equal(result.analysis.requiredDiscrepancy.verification, "inferred");
+        assert.deepEqual(result.analysis.requiredDiscrepancy.value.paths, ["/name"]);
+      }
       assert.equal(result.analysis.diagnostics.includes("handler_response_body_type_discrepancy"), scenario.endsWith("mismatch"));
       assert.equal(result.analysis.diagnostics.includes("handler_response_body_comparison_unresolved"), scenario.endsWith("ref"));
       if (scenario.endsWith("mismatch")) assert.deepEqual(result.analysis.bodyDiscrepancy.value.paths, ["/controller"]);

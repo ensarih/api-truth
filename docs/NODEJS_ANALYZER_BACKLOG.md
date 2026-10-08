@@ -7,7 +7,7 @@ declarations with flat parameter serialization and scalar/flat-array form and mu
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.21.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.22.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -470,3 +470,26 @@ Validation: 878 offline tests plus 32 pinned runtime cases. Actual matching,
 mismatching and referenced-schema fixture responses exercise the new path.
 Independent review found no blocker. Dynamic DTOs, validator analysis and broader
 response flows remain pending in NB4.
+
+
+### Documented required response-field discrepancies (2026-10-08)
+
+Middleware `0.22.0` compares documented required fields with accepted bound
+handlers' literal JSON body shapes. It emits inferred
+`handler.response.body.required.discrepancy` claims naming missing paths and
+endpoint-scoped `handler_response_body_required_discrepancy` warnings. Source
+literal presence does not establish contract requiredness; documented required
+lists and endpoint schemas remain unchanged. A null-valued key counts as present.
+Nested objects and known array item variants are supported; empty arrays do not
+invent missing items. Type discrepancies remain a separate comparison.
+
+Exact-status responses take precedence over default responses. Malformed or
+duplicate required lists, references/compositions, unsupported schemas and
+comparison limits remain unresolved, with no partial absence findings. Presence
+comparison is bounded to 10,000 visited entries, depth 64 and 32 missing paths.
+Source body values are still omitted. These warnings compare declarations, not
+actual serialized responses or validation guarantees. Dynamic DTOs, validators
+and broader control flow remain pending in NB4.
+
+Validation: 890 offline tests and 35 pinned runtime cases, including missing,
+present and null-valued documented required fields.
