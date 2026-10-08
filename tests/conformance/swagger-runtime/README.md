@@ -123,3 +123,9 @@ The analyzer records an inferred source status declaration and reports only the
 200/201 discrepancy, while preserving the original documented response list.
 Observed runtime fixture responses validate this bounded syntax; they do not
 promote the source declaration into a runtime response contract for other services.
+
+
+Three more signed-capture cases exercise literal JSON response-body type matching,
+a property-type discrepancy and a referenced document schema (32 total tests).
+They assert inferred type-only body claims, exact discrepancy paths and unresolved
+reference comparison. Documented endpoint schemas remain the API document's facts.

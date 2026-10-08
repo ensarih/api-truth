@@ -1,3 +1,4 @@
+import type {ApiSchema} from "../../../packages/ir/src/index.js";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { resolveSwaggerRoutingConfiguration, type RoutingConfiguration } from "./routing-config.js";
@@ -274,7 +275,7 @@ function inspectModule(path: string, text: string, localRequire: (node: ts.Expre
   } catch { return { kind: "unresolved", code: "handler_source_unresolved" }; }
 }
 
-export type HandlerResponseStatus = {kind: "declared"; code: number; line: number; span: string} | {kind: "unresolved"};
+export type HandlerResponseStatus = {kind: "declared"; code: number; line: number; span: string; body?: {schema: ApiSchema; line: number; span: string}} | {kind: "unresolved"};
 /** Bounded source declaration only; runtime binding does not prove a response contract. */
 export function inspectBoundResponseStatus(path: string, text: string, exportName: string,
   budget: () => void = () => {}): HandlerResponseStatus {
@@ -299,6 +300,7 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
   const terminal = expression.expression;
   const directResponse = (node: ts.Expression) => ts.isIdentifier(node) && node.text === responseName;
   let status: ts.Expression | undefined;
+  let body: {schema: ApiSchema; line: number; span: string} | undefined;
   if (terminal.name.text === "sendStatus" && directResponse(terminal.expression) && expression.arguments.length === 1)
     status = expression.arguments[0];
   else {
@@ -306,19 +308,49 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
     const expectedArguments = terminal.name.text === "end" ? 0 : 1;
     if (expression.arguments.length !== expectedArguments) return unknown;
     let nodes = 0;
-    const literal = (node: ts.Node, depth = 0): boolean => {
+    const literal = (node: ts.Node, depth = 0): ApiSchema | undefined => {
       if (++nodes % 512 === 0) budget();
-      if (nodes > 10000 || depth > 64) return false;
-      if (ts.isStringLiteral(node) || ts.isNumericLiteral(node)
-        || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)) return true;
-      if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(node.operand)) return true;
-      if (ts.isArrayLiteralExpression(node)) return node.elements.every(item => literal(item, depth + 1));
-      if (ts.isObjectLiteralExpression(node)) return node.properties.every(property => ts.isPropertyAssignment(property)
-        && propertyName(property.name) !== undefined && !reserved.has(propertyName(property.name)!)
-        && literal(property.initializer, depth + 1));
-      return false;
+      if (nodes > 10000 || depth > 64) return undefined;
+      if (ts.isStringLiteral(node)) return {type: "string"};
+      if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return {type: "boolean"};
+      if (node.kind === ts.SyntaxKind.NullKeyword) return {type: "null"};
+      if (ts.isNumericLiteral(node) || ts.isPrefixUnaryExpression(node)
+        && node.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(node.operand)) {
+        const number = Number(ts.isNumericLiteral(node) ? node.text : node.operand.getText(module.source));
+        return Number.isFinite(number) ? {type: Number.isInteger(number) ? "integer" : "number"} : undefined;
+      }
+      if (ts.isArrayLiteralExpression(node)) {
+        const shapes = new Map<string, ApiSchema>();
+        for (const item of node.elements) {
+          const shape = literal(item, depth + 1);
+          if (!shape) return undefined;
+          shapes.set(JSON.stringify(shape), shape);
+          if (shapes.size > 32) return undefined;
+        }
+        const values = [...shapes.values()];
+        return {type: "array", ...(values.length ? {items: values.length === 1 ? values[0]! : {anyOf: values}} : {})};
+      }
+      if (ts.isObjectLiteralExpression(node)) {
+        const properties: Record<string, ApiSchema> = {};
+        for (const property of node.properties) {
+          if (!ts.isPropertyAssignment(property)) return undefined;
+          const name = propertyName(property.name);
+          if (name === undefined || reserved.has(name) || Object.hasOwn(properties, name)) return undefined;
+          const shape = literal(property.initializer, depth + 1);
+          if (!shape) return undefined;
+          properties[name] = shape;
+        }
+        return {type: "object", properties};
+      }
+      return undefined;
     };
-    if (!expression.arguments.every(argument => literal(argument))) return unknown;
+    for (const argument of expression.arguments) {
+      const schema = literal(argument);
+      if (!schema) return unknown;
+      if (terminal.name.text === "json") body = {schema,
+        line: module.source.getLineAndCharacterOfPosition(argument.getStart()).line + 1,
+        span: `span:${argument.getStart()}:${argument.getEnd()}`};
+    }
     const chain = terminal.expression;
     if (!ts.isCallExpression(chain) || !ts.isPropertyAccessExpression(chain.expression)
       || chain.expression.name.text !== "status" || !directResponse(chain.expression.expression)
@@ -328,5 +360,5 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
   if (!status || !ts.isNumericLiteral(status) || !/^[1-5][0-9]{2}$/.test(status.getText(module.source))) return unknown;
   return {kind: "declared", code: Number(status.text),
     line: module.source.getLineAndCharacterOfPosition(status.getStart()).line + 1,
-    span: `span:${status.getStart()}:${status.getEnd()}`};
+    span: `span:${status.getStart()}:${status.getEnd()}`, ...(body ? {body} : {})};
 }

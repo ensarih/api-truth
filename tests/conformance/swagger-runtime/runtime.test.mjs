@@ -50,6 +50,9 @@ const cases = [
   ["runtime-binding-response-mismatch", 201, "orders"],
   ["runtime-binding-response-match", 201, "orders"],
   ["runtime-binding-response-default", 201, "orders"],
+  ["runtime-binding-body-match", 201, "orders"],
+  ["runtime-binding-body-mismatch", 201, "orders"],
+  ["runtime-binding-body-ref", 201, "orders"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -92,6 +95,13 @@ for (const [scenario, status, marker] of cases) {
       assert.ok(result.analysis.diagnostics.includes("handler_environment_unverified"));
     }
     if (scenario === "runtime-binding-stale") assert.ok(result.analysis.diagnostics.includes("runtime_binding_receipt_unverified"));
+    if (scenario.startsWith("runtime-binding-body-")) {
+      assert.equal(result.analysis.bodyDeclaration.verification, "inferred");
+      assert.deepEqual(result.analysis.bodyDeclaration.value.schema, {type:"object", properties:{controller:{type:"string"}}});
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_type_discrepancy"), scenario.endsWith("mismatch"));
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_comparison_unresolved"), scenario.endsWith("ref"));
+      if (scenario.endsWith("mismatch")) assert.deepEqual(result.analysis.bodyDiscrepancy.value.paths, ["/controller"]);
+    }
     if (scenario.startsWith("runtime-binding-response-")) {
       assert.equal(result.analysis.statusDeclaration.value.code, 201);
       assert.equal(result.analysis.statusDeclaration.verification, "inferred");
@@ -100,7 +110,7 @@ for (const [scenario, status, marker] of cases) {
         : [{kind:"exact", code: scenario.endsWith("match") && !scenario.endsWith("mismatch") ? 201 : 200}]);
     }
     assert.equal(result.analysis.status, "partial");
-    if (["runtime-binding", "runtime-binding-precedence"].includes(scenario) || scenario.startsWith("runtime-binding-response-")) {
+    if (["runtime-binding", "runtime-binding-precedence"].includes(scenario) || scenario.startsWith("runtime-binding-response-") || scenario.startsWith("runtime-binding-body-")) {
       assert.equal(result.analysis.bindingClaim, true);
       assert.equal(result.analysis.binding.verification, "observed");
       assert.equal(result.analysis.binding.value.path, scenario === "runtime-binding-precedence" ? "first/controllers/orders.js" : "api/controllers/orders.js");

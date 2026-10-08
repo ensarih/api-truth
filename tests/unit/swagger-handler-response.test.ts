@@ -28,3 +28,28 @@ test.each([
 ])("keeps unsupported response flows unresolved: %s", text => {
   expect(inspect(text)).toEqual({kind: "unresolved"});
 });
+
+
+test("JSON literal bodies yield types without leaking values or inventing field constraints", () => {
+  const result = inspect('exports.getOrder = function(req, res) { return res.status(201).json({name:"private-value-marker", count:1, fraction:1.5, active:true, detail:{value:null}, list:[1,2], empty:[]}); };');
+  expect(result).toMatchObject({kind: "declared", body: {schema: {type:"object", properties: {
+    name:{type:"string"}, count:{type:"integer"}, fraction:{type:"number"}, active:{type:"boolean"},
+    detail:{type:"object", properties:{value:{type:"null"}}}, list:{type:"array",items:{type:"integer"}}, empty:{type:"array"}
+  }}}});
+  expect(JSON.stringify(result)).not.toContain("private-value-marker");
+  expect(JSON.stringify(result)).not.toContain('"required"');
+  expect(JSON.stringify(result)).not.toContain('"const"');
+});
+
+test("send and sendStatus do not invent a JSON body schema", () => {
+  for (const expression of ['res.status(201).send({ok:true})', 'res.sendStatus(201)']) {
+    const result = inspect(`exports.getOrder = function(req, res) { return ${expression}; };`);
+    expect(result).toMatchObject({kind:"declared", code:201});
+    expect(result).not.toHaveProperty("body");
+  }
+});
+
+test.each(['{key:1,key:2}', '{__proto__:null}', '[,1]', '{value:Infinity}', '{value:1e400}', '{get value(){return 1;}}'])
+("unsupported JSON literal bodies remain unresolved: %s", body => {
+  expect(inspect(`exports.getOrder = function(req,res) { return res.status(201).json(${body}); };`)).toEqual({kind:"unresolved"});
+});

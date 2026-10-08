@@ -637,6 +637,12 @@ test("signed session bindings retain evidence dependencies, invalidate on edits 
   const receiptEvidence = first.evidence.find(item => item.source.kind === "runtime_capture")!;
   for (const evidence of [handlerEvidence, receiptEvidence]) expect(first.dependencies).toContainEqual(expect.objectContaining({
     from_endpoint_id: first.endpoints[0]!.endpoint_id, to: {kind: "evidence", id: evidence.evidence_id}}));
+  const bodyDeclaration = first.claims.find(item => item.predicate === "handler.response.body.declaration")!;
+  expect(bodyDeclaration).toMatchObject({verification:"inferred", value:{schema:{type:"object", properties:{ok:{type:"boolean"}}}}});
+  expect(first.diagnostics.map(item => item.code)).toContain("handler_response_body_comparison_unresolved");
+  const bodySource = first.evidence.find(item => bodyDeclaration.evidence_ids.includes(item.evidence_id)
+    && item.limitations.some(limit => limit.startsWith("literal JSON argument")))!;
+  expect(first.dependencies).toContainEqual(expect.objectContaining({to:{kind:"evidence", id:bodySource.evidence_id}}));
   const declaration = first.claims.find(item => item.predicate === "handler.response.status.declaration")!;
   expect(declaration).toMatchObject({verification: "inferred", value: {code: 201}});
   const discrepancy = first.diagnostics.find(item => item.code === "handler_response_status_discrepancy")!;
@@ -648,12 +654,12 @@ test("signed session bindings retain evidence dependencies, invalidate on edits 
   expect((await trusted.analyze(input)).reproducibility_fingerprint).toBe(first.reproducibility_fingerprint);
   const wrongKey = generateKeyPairSync("ed25519").publicKey.export({type: "spki", format: "pem"}).toString();
   const untrusted = await createAnalyzer({projectRoot: root, trustedRuntimePublicKey: wrongKey}).analyze(input);
-  expect(untrusted.claims.some(item => ["handler.binding", "handler.response.status.declaration"].includes(item.predicate))).toBe(false);
+  expect(untrusted.claims.some(item => ["handler.binding", "handler.response.status.declaration", "handler.response.body.declaration"].includes(item.predicate))).toBe(false);
   expect(untrusted.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
   await writeFile(join(root, "service/api/controllers/orders.js"), handler + "\n// changed");
   const stale = await trusted.analyze(input);
   expect(stale.endpoints).toHaveLength(1);
-  expect(stale.claims.some(item => ["handler.binding", "handler.response.status.declaration"].includes(item.predicate))).toBe(false);
+  expect(stale.claims.some(item => ["handler.binding", "handler.response.status.declaration", "handler.response.body.declaration"].includes(item.predicate))).toBe(false);
   expect(stale.diagnostics.map(item => item.code)).toContain("runtime_binding_receipt_unverified");
   input.resolution_inputs[2]!.digest = sha256("wrong");
   await expect(trusted.analyze(input)).rejects.toThrow("Runtime receipt digest mismatch");

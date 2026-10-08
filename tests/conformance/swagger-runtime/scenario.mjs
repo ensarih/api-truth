@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -32,9 +32,14 @@ try {
   if (["missing-export", "runtime-binding-missing"].includes(scenario)) operation.operationId = "missingExport";
   if (scenario === "runtime-binding-response-match") operation.responses = {"201": {description: "Created"}};
   if (scenario === "runtime-binding-response-default") operation.responses = {default: {description: "Any status"}};
+  if (scenario.startsWith("runtime-binding-body-")) {
+    operation.responses = {"201": {description:"Created", schema: scenario.endsWith("ref") ? {$ref:"#/definitions/Body"}
+      : {type:"object", properties:{controller:{type:scenario.endsWith("mismatch") ? "integer" : "string"}}}}};
+    if (scenario.endsWith("ref")) doc.definitions = {Body:{type:"object", properties:{controller:{type:"string"}}}};
+  }
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));
-  if (scenario.startsWith("runtime-binding-response-")) await put("api/controllers/orders.js",
+  if (scenario.startsWith("runtime-binding-response-") || scenario.startsWith("runtime-binding-body-")) await put("api/controllers/orders.js",
     'exports.getOrder = function(req, res) { return res.status(201).json({controller:"orders"}); };');
   if (scenario === "single-initialization-failure") await put("api/controllers/orders.js",
     'throw new Error("synthetic initialization failure");\n' + handler("orders"));
@@ -157,6 +162,8 @@ try {
   const analysis = JSON.parse(stdout);
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
     analysis: {status: analysis.status,
+      bodyDeclaration: analysis.claims.find(item => item.predicate === "handler.response.body.declaration"),
+      bodyDiscrepancy: analysis.claims.find(item => item.predicate === "handler.response.body.type.discrepancy"),
       statusDeclaration: analysis.claims.find(item => item.predicate === "handler.response.status.declaration"),
       documentedStatuses: analysis.endpoints[0]?.responses.map(item => item.status),
       candidatePath: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.path,

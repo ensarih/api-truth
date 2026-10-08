@@ -5,6 +5,7 @@ import {
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
 import type {RuntimeBindingResolution, RuntimeBinding} from "./runtime-binding.js";
+import {compareResponseBodyTypes} from "./response-body-comparison.js";
 import { declaredSchemaBounds, schemaBoundFields } from "./schema-bounds.js";
 import { declaredSchemaConstraints } from "./schema-constraints.js";
 import { readSelectedDocument } from "./source.js";
@@ -72,7 +73,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-20", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-21", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -593,6 +594,42 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     const pathItem = (raw.paths as Record<string, Record<string, unknown>>)[operation.path]!;
     const operationDefinition = pathItem[operation.method] as Record<string, unknown>;
     const responses = operationDefinition.responses as Record<string, unknown> | undefined;
+    if (declaration.body) {
+      const body = declaration.body;
+      const bodyId = `ev-${hash(`${binding.handler_path}:${body.span}:${endpoint.endpoint_id}:response-body`).slice(0, 24)}`;
+      result.evidence.push({evidence_id: bodyId, source: {kind: "source_code", source_id: request.source.repository_id},
+        source_version: request.source.immutable_revision, location: {path: binding.handler_path, line: body.line, symbol: body.span},
+        method: "deterministic_analysis", scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+          revision: request.source.immutable_revision, endpoint_id: endpoint.endpoint_id}, access_label: request.source.access_label,
+        limitations: ["literal JSON argument shape only; values omitted, requiredness and runtime serialization unverified"]});
+      const bodyIds = [...evidenceIds, bodyId];
+      endpoint.evidence_ids.push(bodyId);
+      result.claims.push({claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.response.body.declaration:${bodyId}`).slice(0, 24)}`,
+        subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
+        predicate: "handler.response.body.declaration", verification: "inferred", evidence_ids: bodyIds,
+        value: {status_code: declaration.code, schema: body.schema, path: binding.handler_path,
+          export_name: binding.export_name, policy: "literal-json-body-1"}});
+      result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: bodyId}, evidence_ids: bodyIds});
+      const selectedKey = responses && Object.hasOwn(responses, String(declaration.code)) ? String(declaration.code) : "default";
+      const selectedResponse = responses?.[selectedKey];
+      const selectedSchema = selectedResponse && typeof selectedResponse === "object" && !Array.isArray(selectedResponse)
+        && !Object.hasOwn(selectedResponse, "$ref") ? (selectedResponse as Record<string, unknown>).schema : undefined;
+      const comparison = compareResponseBodyTypes(body.schema, selectedSchema);
+      const documentPointer = responses && Object.hasOwn(responses, selectedKey)
+        ? `${operation.pointer}/responses/${selectedKey}${selectedSchema !== undefined ? "/schema" : ""}` : `${operation.pointer}/responses`;
+      const schemaEvidence = evidence(documentPointer, endpoint.endpoint_id);
+      if (comparison.kind === "compared" && comparison.mismatches.length) result.claims.push({
+        claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-type-discrepancy:${bodyId}`).slice(0, 24)}`,
+        subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
+        predicate: "handler.response.body.type.discrepancy", verification: "inferred", evidence_ids: [...bodyIds, schemaEvidence],
+        value: {paths: comparison.mismatches, policy: "literal-json-body-types-1"}});
+      if (comparison.kind === "unresolved" || comparison.mismatches.length) result.diagnostics.push({
+        diagnostic_id: `diag-${hash(`${endpoint.endpoint_id}:response-body:${bodyId}:${comparison.kind}`).slice(0, 24)}`,
+        code: comparison.kind === "unresolved" ? "handler_response_body_comparison_unresolved" : "handler_response_body_type_discrepancy",
+        severity: "warning", affected_endpoint_ids: [endpoint.endpoint_id], evidence_ids: [...bodyIds, schemaEvidence],
+        message: comparison.kind === "unresolved" ? "Literal JSON source shape could not be compared under the bounded schema policy."
+          : "Literal JSON source types differ from explicit documented response types; runtime serialization remains unverified."});
+    }
     if (responses && !Object.hasOwn(responses, String(declaration.code)) && !Object.hasOwn(responses, "default")) {
       const documentEvidence = evidence(`${operation.pointer}/responses`, endpoint.endpoint_id);
       const diagnosticId = `diag-${hash(`${endpoint.endpoint_id}:handler_response_status_discrepancy:${sourceId}`).slice(0, 24)}`;

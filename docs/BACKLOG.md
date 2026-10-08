@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.20.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.21.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -393,3 +393,29 @@ validator and response-schema extraction remain in NB4.
 Validation: 863 offline tests and 29 pinned runtime cases, including actual
 matching, mismatching and default-response dispatch. Independent review found
 no blocker in authority, matching, evidence or bounded-source handling.
+
+
+### Bound literal JSON response bodies (2026-10-08)
+
+Middleware `0.21.0` extracts a type-only shape from the existing bounded,
+single-return `res.status(...).json(literal)` profile after accepting a signed
+handler binding. It emits an inferred `handler.response.body.declaration` with
+exact body-span evidence and a source dependency. Literal values, requiredness,
+const/enum, media guarantees and additional-property constraints are omitted.
+Empty arrays have unknown items; mixed arrays retain at most 32 type variants.
+Depth and node budgets are bounded. Nonfinite numbers, duplicate/reserved keys,
+getters, holes, spreads, computed fields and dynamic payloads stay unresolved.
+`send`, `sendStatus` and `end` do not create JSON body declarations.
+
+The exact status response, or `default`, is compared for explicit type differences
+at matching fields and array items. Integer shapes satisfy declared number types.
+The comparison ignores requiredness, extra fields and value constraints; refs,
+compositions and unsupported schemas remain unresolved. Differences create
+`handler.response.body.type.discrepancy` claims naming paths and an endpoint-scoped
+warning. No matching-schema assertion or runtime response contract is made.
+Documented endpoint schemas and OpenAPI eligibility remain unchanged.
+
+Validation: 878 offline tests plus 32 pinned runtime cases. Actual matching,
+mismatching and referenced-schema fixture responses exercise the new path.
+Independent review found no blocker. Dynamic DTOs, validator analysis and broader
+response flows remain pending in NB4.

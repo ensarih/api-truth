@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.20.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.21.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -144,3 +144,19 @@ external helpers and unsupported export forms report
 `handler_response_status_unresolved`. Static candidates without accepted runtime
 observations do not enter this inspection. The collector still captures binding
 only; it does not capture response statuses or response data.
+
+
+## Literal JSON response bodies
+
+Middleware `0.21.0` additionally records the type-only shape of a returned literal
+JSON argument as inferred source evidence. It omits values and field constraints.
+The collector still captures only dispatch, not response bytes or body schemas.
+Only the bounded direct `.json(literal)` form is supported; dynamic values and
+unsupported literal constructs stay unresolved.
+
+A separate bounded comparison checks explicit types in the selected exact-status
+or default response schema. It records clear differences at matching field paths,
+without asserting general compatibility. References/compositions remain unresolved;
+requiredness, value constraints and extra fields are not compared. Observed
+binding does not prove Express response-method integrity, serialization or an
+actual body being sent. These declarations never replace the documented schema.
