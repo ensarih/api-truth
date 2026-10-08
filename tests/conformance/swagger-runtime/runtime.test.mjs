@@ -145,6 +145,15 @@ for (const [scenario, status, marker] of cases) {
       assert.deepEqual(result.analysis.documentedStatuses, scenario.endsWith("default") ? [{kind:"default"}]
         : [{kind:"exact", code: scenario.endsWith("match") && !scenario.endsWith("mismatch") ? 201 : 200}]);
     }
+    if (["runtime-binding", "runtime-binding-response-match"].includes(scenario)) {
+      assert.equal(result.analysis.securityState, "anonymous");
+      assert.equal(result.analysis.securityDeclaration.verification, "declared");
+      assert.deepEqual(result.analysis.securityDeclaration.value, []);
+      assert.deepEqual(result.analysis.securityDeclarationPointers, [scenario === "runtime-binding" ? "/security" : "/paths/~1orders~1{id}/get/security"]);
+    } else {
+      assert.equal(result.analysis.securityState, "unknown");
+      assert.equal(result.analysis.securityDeclaration, undefined);
+    }
     assert.equal(result.analysis.status, "partial");
     if (["runtime-binding", "runtime-binding-precedence"].includes(scenario) || scenario.startsWith("runtime-binding-response-") || scenario.startsWith("runtime-binding-body-")) {
       assert.equal(result.analysis.bindingClaim, true);

@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.27.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.28.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -229,3 +229,13 @@ Aliases, mutation, calls, parameter shadowing, multiple statuses and control flo
 stay unresolved. All literal parsing shares the existing depth and node limits.
 This extends the initial single-return subset without changing binding trust or
 promoting source response declarations to runtime or normative contract facts.
+
+
+## Security declaration authority
+
+Middleware `0.28.0` records explicit root/operation anonymous declarations and
+referenced scheme provenance as declared source facts with endpoint dependencies.
+Unknown or unsupported declarations remain unknown. Even when a signed capture
+proves handler binding, it does not prove that authentication is enforced or that
+an anonymous operation is actually public. Security evidence and strict OpenAPI
+qualification are unchanged.

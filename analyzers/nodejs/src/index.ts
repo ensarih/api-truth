@@ -28,7 +28,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.10.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.11.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -73,8 +73,8 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-8", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-27", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-9", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-28", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -172,11 +172,11 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       affected_endpoint_ids: endpointId ? [endpointId] : [], evidence_ids: [...new Set([ev, ...extraEvidence])],
     });
   };
-  const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], pointer: string) => {
+  const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], pointer: string, extraEvidence: string[] = []) => {
     const ev = evidence(pointer, endpoint.endpoint_id);
     result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:${predicate}:${pointer}:${JSON.stringify(value)}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate, value,
-      verification: "declared", evidence_ids: [ev] });
+      verification: "declared", evidence_ids: [...new Set([ev, ...extraEvidence])] });
   };
   if (middleware?.kind === "unverified") {
     diagnostic("middleware_registration_unverified", "", "error");
@@ -287,6 +287,10 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   result.security_schemes = {};
   for (const [name, value] of Object.entries(securityDefinitions).sort(([a], [b]) => a.localeCompare(b))) {
     const pointer = `/securityDefinitions/${pointerPart(name)}`;
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+      diagnostic("security_scheme_name_unsupported", pointer);
+      continue;
+    }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       diagnostic("security_scheme_unsupported", pointer);
       continue;
@@ -479,7 +483,22 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     if (!endpoint.responses.length) endpoint.responses.push({ status: { kind: "unknown", reason: "document response unresolved" }, content: [] });
     const securityPointer = (raw.paths as Record<string, Record<string, Record<string, unknown>>>)[operation.path]?.[operation.method]?.security !== undefined
       ? `${operation.pointer}/security` : "/security";
+    const securityDeclarationIds: string[] = [];
+    if (operation.security.state !== "unknown") {
+      securityDeclarationIds.push(evidence(securityPointer, endpointId));
+      if (operation.security.state === "declared") {
+        const names = [...new Set(operation.security.alternatives.flatMap(item => Object.keys(item)))].sort();
+        for (const name of names) if (Object.hasOwn(securityDefinitions, name))
+          securityDeclarationIds.push(evidence(`/securityDefinitions/${pointerPart(name)}`, endpointId));
+      }
+      for (const id of securityDeclarationIds) {
+        if (!endpoint.evidence_ids.includes(id)) endpoint.evidence_ids.push(id);
+        if (!result.dependencies.some(item => item.from_endpoint_id === endpointId && item.to.kind === "evidence" && item.to.id === id))
+          result.dependencies.push({from_endpoint_id:endpointId,to:{kind:"evidence",id},evidence_ids:securityDeclarationIds});
+      }
+    }
     if (operation.security.state === "anonymous") {
+      claim(endpoint, "security.declaration", [], securityPointer);
       const secEv = evidence(securityPointer, endpointId);
       endpoint.security = { state: "anonymous", alternatives: [], evidence_ids: [secEv] };
     } else if (operation.security.state === "declared") {
@@ -492,7 +511,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         endpoint.security = { state: "declared", alternatives: alternatives.map(requirements => ({ requirements })),
           evidence_ids: [evidence(securityPointer, endpointId)] };
       } else diagnostic("security_mapping_unresolved", securityPointer, "warning", endpointId);
-      claim(endpoint, "security.declaration", operation.security.alternatives, securityPointer);
+      claim(endpoint, "security.declaration", operation.security.alternatives, securityPointer, securityDeclarationIds);
     }
     const seenSchemas = new Set<string>();
     const addSchemaDependencies = (schema: ApiSchema) => {

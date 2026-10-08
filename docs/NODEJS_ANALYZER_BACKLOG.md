@@ -2,12 +2,12 @@
 
 **Status:** active analyzer priority, 2026-10-09
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
-Express subset. `nodejs-swagger2-document@0.10.0` reads selected Swagger 2 JSON/YAML
+Express subset. `nodejs-swagger2-document@0.11.0` reads selected Swagger 2 JSON/YAML
 declarations with flat parameter serialization and scalar/flat-array form and multipart-file
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.27.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.28.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -614,3 +614,31 @@ exercised through controlled HTTP dispatch. Independent review found no blocker.
 Findings remain inferred source declarations under an observed handler binding;
 documented responses and strict OpenAPI authority remain unchanged. Broader
 control flow and validator analysis remain pending in NB4.
+
+
+### Security declaration provenance and invalidation (2026-10-09)
+
+Document profile `0.11.0` and middleware `0.28.0` preserve an explicit empty
+`security` array as an endpoint-scoped, declared `security.declaration` claim.
+Root declarations and operation overrides retain their exact selected pointers.
+Absent or malformed security remains unknown; an empty alternative object is
+not silently converted to anonymous access.
+
+Selected declarations and actually referenced, existing scheme definitions add
+endpoint evidence dependencies. Scheme provenance is retained even when the IR
+cannot represent that scheme; unused definitions do not become dependencies.
+Names that are invalid OpenAPI/IR component keys are diagnosed and omitted from
+normalized schemes instead of failing the whole analysis. Their raw requirement
+claims and escaped source pointers remain available; affected endpoint security
+stays unknown. Missing schemes and unsupported OAuth declarations remain unknown.
+
+These are document declarations, not proof of runtime authentication or anonymous
+access. Signed handler capture does not promote security claims. Strict OpenAPI
+evidence requirements are unchanged.
+
+Validation: 957 offline tests and 48 pinned runtime cases. Root anonymous and
+operation override fixtures keep security claims declared even with accepted
+handler binding. Unit cases cover used/unused definition provenance, unsupported
+schemes, escaped invalid names, missing/malformed declarations and empty
+alternatives. Independent review found no blocker. Runtime security enforcement
+and normative qualification remain pending in NB4.

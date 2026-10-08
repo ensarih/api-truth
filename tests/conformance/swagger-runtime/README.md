@@ -164,3 +164,10 @@ a type discrepancy, a missing documented field, and a separate status statement
 (48 total tests). The analyzer still emits inferred body/status declarations;
 actual dispatch verifies the fixture behavior without promoting the response
 contract or persisting body values.
+
+
+The existing binding and matching-status cases also assert explicit root anonymous
+security and an operation anonymous override of inherited basic security. Both
+remain declared despite an observed handler binding; other fixtures retain unknown
+security. Total runtime cases remain 48. This is not an authentication-enforcement
+test or proof of production access policy.

@@ -27,6 +27,12 @@ try {
         parameters: [{name: "id", in: "path", required: true, type: "string"}],
         responses: {"200": {description: "Synthetic marker"}}}}}};
   const operation = doc.paths["/orders/{id}"].get;
+  if (scenario === "runtime-binding") doc.security = [];
+  if (scenario === "runtime-binding-response-match") {
+    doc.securityDefinitions = {basic:{type:"basic"}};
+    doc.security = [{basic:[]}];
+    operation.security = [];
+  }
   if (scenario === "operation-override") operation["x-swagger-router-controller"] = "alternate";
   if (scenario === "missing-controller") operation["x-swagger-router-controller"] = "missing";
   if (["missing-export", "runtime-binding-missing"].includes(scenario)) operation.operationId = "missingExport";
@@ -197,6 +203,10 @@ try {
   const analysis = JSON.parse(stdout);
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
     analysis: {status: analysis.status,
+      securityState: analysis.endpoints[0]?.security.state,
+      securityDeclaration: analysis.claims.find(item => item.predicate === "security.declaration"),
+      securityDeclarationPointers: analysis.claims.find(item => item.predicate === "security.declaration")?.evidence_ids
+        .map(id => analysis.evidence.find(item => item.evidence_id === id)?.location.pointer),
       bodyDeclaration: analysis.claims.find(item => item.predicate === "handler.response.body.declaration"),
       responseDependencyPaths: [...new Set(analysis.dependencies.filter(item => item.to.kind === "evidence")
         .map(item => analysis.evidence.find(evidence => evidence.evidence_id === item.to.id)?.location.pointer)

@@ -551,3 +551,56 @@ test("response header count is bounded while schema and selector remain availabl
   expect(result.endpoints[0]!.responses[0]).not.toHaveProperty("headers");
   expect(result.diagnostics.map(item=>item.code)).toContain("response_header_limit_exceeded");
 });
+
+test.each(["root","operation"])("anonymous security retains a declared claim and exact %s provenance",async origin=>{
+  const doc=structuredClone(document) as any;
+  if(origin==="root")doc.security=[];
+  else {doc.security=[{token:[]}];doc.securityDefinitions={token:{type:"apiKey",in:"header",name:"X-Token"}};doc.paths["/orders/{id}"].get.security=[];}
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  const endpoint=result.endpoints[0]!;
+  const declaration=result.claims.find(item=>item.predicate==="security.declaration")!;
+  expect(declaration).toMatchObject({verification:"declared",value:[],subject:{endpoint_id:endpoint.endpoint_id}});
+  const ev=result.evidence.find(item=>item.evidence_id===declaration.evidence_ids[0])!;
+  expect(ev.location.pointer).toBe(origin==="root"?"/security":"/paths/~1orders~1{id}/get/security");
+  expect(ev.method).toBe("type_declaration");expect(ev.limitations.length).toBeGreaterThan(0);
+  expect(result.dependencies).toContainEqual(expect.objectContaining({from_endpoint_id:endpoint.endpoint_id,to:{kind:"evidence",id:ev.evidence_id}}));
+  expect(result.dependencies.filter(item=>item.to.kind==="evidence"&&result.evidence.find(ev=>ev.evidence_id===item.to.id)?.location.pointer?.startsWith("/securityDefinitions/"))).toEqual([]);
+});
+test("unrepresentable scheme names retain escaped declaration provenance without failing analysis",async()=>{
+  const doc=structuredClone(document) as any;
+  doc.securityDefinitions={"token/a~b":{type:"apiKey",in:"header",name:"X-Token"},unused:{type:"basic"}};
+  doc.security=[{"token/a~b":[]}];
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  const declaration=result.claims.find(item=>item.predicate==="security.declaration")!;
+  const pointers=declaration.evidence_ids.map(id=>result.evidence.find(ev=>ev.evidence_id===id)!.location.pointer);
+  expect(pointers).toEqual(["/security","/securityDefinitions/token~1a~0b"]);
+  expect(result.endpoints[0]!.security.state).toBe("unknown");
+  expect(result.diagnostics.map(item=>item.code)).toContain("security_scheme_name_unsupported");
+  for(const id of declaration.evidence_ids)expect(result.dependencies).toContainEqual(expect.objectContaining({from_endpoint_id:result.endpoints[0]!.endpoint_id,to:{kind:"evidence",id}}));
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+test("unsupported referenced schemes keep declared evidence without becoming anonymous",async()=>{
+  const doc=structuredClone(document) as any;doc.securityDefinitions={oauth:{type:"oauth2",flow:"implicit",scopes:{}}};doc.security=[{oauth:["read"]}];
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  expect(result.endpoints[0]!.security.state).toBe("unknown");
+  const declaration=result.claims.find(item=>item.predicate==="security.declaration")!;
+  expect(declaration.evidence_ids.map(id=>result.evidence.find(ev=>ev.evidence_id===id)!.location.pointer)).toEqual(["/security","/securityDefinitions/oauth"]);
+  expect(declaration.verification).toBe("declared");
+});
+test.each([undefined,"invalid",[{}]])("unknown or unrepresentable security never becomes an anonymous declaration: %j",async security=>{
+  const doc=structuredClone(document) as any;if(security!==undefined)doc.security=security;
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  expect(result.endpoints[0]!.security.state).toBe("unknown");
+  expect(result.claims.filter(item=>item.predicate==="security.declaration"&&Array.isArray(item.value)&&item.value.length===0)).toEqual([]);
+});
+
+
+test("supported security claims depend only on used scheme declarations",async()=>{
+  const doc=structuredClone(document) as any;doc.securityDefinitions={token:{type:"apiKey",name:"X-Token",in:"header"},unused:{type:"basic"}};doc.security=[{token:[]}];
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  const declaration=result.claims.find(item=>item.predicate==="security.declaration")!;
+  expect(declaration.verification).toBe("declared");
+  expect(declaration.evidence_ids.map(id=>result.evidence.find(ev=>ev.evidence_id===id)!.location.pointer)).toEqual(["/security","/securityDefinitions/token"]);
+  expect(result.endpoints[0]!.security.state).toBe("declared");
+  for(const id of declaration.evidence_ids)expect(result.dependencies).toContainEqual(expect.objectContaining({from_endpoint_id:result.endpoints[0]!.endpoint_id,to:{kind:"evidence",id}}));
+});

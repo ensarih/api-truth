@@ -141,12 +141,12 @@ it does not substitute for a protected enterprise pilot.
 | P5-DOCS | 5 | Permission-scoped read-only Confluence links and discrepancies. | Findings retain both sources, versions, scopes, and review state; revocation invalidates dependent views. |
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
-`nodejs-swagger2-document@0.10.0` reads a selected JSON or YAML document and emits
+`nodejs-swagger2-document@0.11.0` reads a selected JSON or YAML document and emits
 declared route facts, flat parameter serialization, and scalar/flat-array form and multipart-file
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.27.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.28.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -579,3 +579,31 @@ exercised through controlled HTTP dispatch. Independent review found no blocker.
 Findings remain inferred source declarations under an observed handler binding;
 documented responses and strict OpenAPI authority remain unchanged. Broader
 control flow and validator analysis remain pending in NB4.
+
+
+### Security declaration provenance and invalidation (2026-10-09)
+
+Document profile `0.11.0` and middleware `0.28.0` preserve an explicit empty
+`security` array as an endpoint-scoped, declared `security.declaration` claim.
+Root declarations and operation overrides retain their exact selected pointers.
+Absent or malformed security remains unknown; an empty alternative object is
+not silently converted to anonymous access.
+
+Selected declarations and actually referenced, existing scheme definitions add
+endpoint evidence dependencies. Scheme provenance is retained even when the IR
+cannot represent that scheme; unused definitions do not become dependencies.
+Names that are invalid OpenAPI/IR component keys are diagnosed and omitted from
+normalized schemes instead of failing the whole analysis. Their raw requirement
+claims and escaped source pointers remain available; affected endpoint security
+stays unknown. Missing schemes and unsupported OAuth declarations remain unknown.
+
+These are document declarations, not proof of runtime authentication or anonymous
+access. Signed handler capture does not promote security claims. Strict OpenAPI
+evidence requirements are unchanged.
+
+Validation: 957 offline tests and 48 pinned runtime cases. Root anonymous and
+operation override fixtures keep security claims declared even with accepted
+handler binding. Unit cases cover used/unused definition provenance, unsupported
+schemes, escaped invalid names, missing/malformed declarations and empty
+alternatives. Independent review found no blocker. Runtime security enforcement
+and normative qualification remain pending in NB4.
