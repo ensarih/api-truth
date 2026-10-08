@@ -136,6 +136,7 @@ test("inline examples are checked against nearby schemas", () => {
 
 test("qualified form encoding output passes official document and local reference validation", async () => {
   const snapshot = JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json", import.meta.url), "utf8"));
+  const template = structuredClone(snapshot);
   snapshot.endpoints = [snapshot.endpoints[0]];
   snapshot.schemas = {}; snapshot.claims = []; snapshot.editorial_reviews = [];
   snapshot.export_eligibility = []; snapshot.dependencies = [];
@@ -151,11 +152,20 @@ test("qualified form encoding output passes official document and local referenc
   endpoint.responses[0].content[0].schema = {type: "string"};
   for (const [media, format] of [["multipart/form-data", "multipart"], ["application/x-www-form-urlencoded", "urlencoded"]]) {
     endpoint.request_bodies = [{media_type: media, serialization: {format},
-      schema: {type: "object", properties: {tags: {type: "array", items: {type: "string"}}}},
+      schema: {type: "object", properties: {tags: {type: "array", items: {type: "string"}}, token: {type: "string", format: "uuid"}}},
       presence: {state: "optional", evidence_ids: ["ev-form"]},
-      encoding: {tags: {style: "form", explode: true, evidence_ids: ["ev-form"]}}}];
+      encoding: {tags: {style: "form", explode: true, evidence_ids: ["ev-form"]},
+        token: {style: "form", explode: false, evidence_ids: ["ev-form"]}}}];
+    snapshot.claims = [{...template.claims[0], claim_id: "claim-token-format", predicate: "field_format", value: "uuid",
+      subject: {service_id: "orders", endpoint_id: endpoint.endpoint_id,
+        schema_pointer: "/endpoints/0/request_bodies/0/schema/properties/token"}, evidence_ids: ["ev-form"]}];
+    snapshot.export_eligibility = [{...template.export_eligibility[0], claim_id: "claim-token-format",
+      scope: {service_id: "orders", snapshot_id: snapshot.snapshot_id, endpoint_ids: [endpoint.endpoint_id]},
+      basis: {kind: "deterministic_analysis", evidence_ids: ["ev-form"]}}];
     const compiled = compileOpenApiSnapshot(snapshot, "strict");
     expect(compiled.ok, JSON.stringify(compiled.diagnostics)).toBe(true);
+    expect((compiled.document as any).paths["/api/orders/{orderId}"].get.requestBody.content[media!]
+      .schema.properties.token.format).toBe("uuid");
     expect(validateDocument(compiled.document), JSON.stringify(validateDocument.errors)).toBe(true);
     expect(validateOpenApiDocument(compiled.document)).toEqual({ok: true, diagnostics: []});
   }

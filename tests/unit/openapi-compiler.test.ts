@@ -678,3 +678,106 @@ test("direct form eligibility does not widen nested inline requiredness", async 
     .schema.properties.group.required).toBeUndefined();
   expect(result.diagnostics.map(item => item.code)).toContain("UNVERIFIED_SCHEMA_CONSTRAINT");
 });
+
+
+const qualifyFormFormat = async (snapshot: Record<string, any>, field: string, value: string, bodyIndex = 0) => {
+  await qualifyFormRequired(snapshot, field, bodyIndex);
+  const claim = snapshot.claims.at(-1);
+  claim.predicate = "field_format";
+  claim.value = value;
+};
+
+test.each(["binary", "date-time"])("qualified direct string form format %s survives strict export", async format => {
+  const snapshot = await formSnapshot();
+  snapshot.endpoints[0].request_bodies[0].schema.properties.file.format = format;
+  await qualifyFormFormat(snapshot, "file", format);
+  expect(parseContractSnapshot(snapshot).ok).toBe(true);
+  const result = compileOpenApiSnapshot(snapshot, "strict");
+  expect(result.ok).toBe(true);
+  expect((result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["multipart/form-data"]
+    .schema.properties.file.format).toBe(format);
+});
+
+
+test.each(["wrong-value", "wrong-predicate", "wrong-pointer", "conditional", "missing-eligibility", "limited-evidence"])(
+  "direct form format stays unverified with %s", async failure => {
+    const snapshot = await formSnapshot();
+    const body = snapshot.endpoints[0].request_bodies[0];
+    body.schema.properties.file.format = "binary";
+    await qualifyFormFormat(snapshot, "file", "binary");
+    if (failure === "wrong-value") snapshot.claims[0].value = "byte";
+    if (failure === "wrong-predicate") snapshot.claims[0].predicate = "field_presence";
+    if (failure === "wrong-pointer") snapshot.claims[0].subject.schema_pointer =
+      "/endpoints/ep-get/request_bodies/multipart~1form-data/schema/properties/file";
+    if (failure === "conditional") snapshot.claims[0].condition = (await fixture()).claims[1].condition;
+    if (failure === "missing-eligibility") snapshot.export_eligibility = [];
+    if (failure === "limited-evidence") snapshot.evidence.find((item: any) => item.evidence_id === "ev-proof")
+      .limitations = ["validation_scope_unverified"];
+    expect(parseContractSnapshot(snapshot).ok).toBe(true);
+    const draft = compileOpenApiSnapshot(snapshot, "draft");
+    expect(draft.diagnostics.map(item => item.code)).toContain("UNVERIFIED_SCHEMA_CONSTRAINT");
+    if (failure !== "limited-evidence") expect((draft.document as any).paths["/api/orders/{orderId}"].get
+      .requestBody.content["multipart/form-data"].schema.properties.file.format).toBeUndefined();
+    expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+  });
+
+test("format eligibility stays bound to its original form media and preserves numeric formats", async () => {
+  const snapshot = await formSnapshot();
+  const first = snapshot.endpoints[0].request_bodies[0];
+  delete first.schema.properties.file;
+  delete first.encoding.file;
+  first.schema.properties.count = { type: "integer", format: "int64" };
+  first.encoding.count = { style: "form", explode: false, evidence_ids: ["ev-proof"] };
+  const second = structuredClone(first);
+  second.media_type = "application/x-www-form-urlencoded";
+  second.serialization.format = "urlencoded";
+  snapshot.endpoints[0].request_bodies.push(second);
+  await qualifyFormFormat(snapshot, "count", "int64", 1);
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  const content = (result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content;
+  expect(content["multipart/form-data"].schema.properties.count.format).toBeUndefined();
+  expect(content["application/x-www-form-urlencoded"].schema.properties.count.format).toBe("int64");
+});
+
+test("form format eligibility does not widen array-item, nested, component or JSON gates", async () => {
+  for (const location of ["array-item", "nested", "component", "json"]) {
+    const snapshot = await formSnapshot();
+    const body = snapshot.endpoints[0].request_bodies[0];
+    let pointer = "/endpoints/0/request_bodies/0/schema/properties/file";
+    if (location === "array-item") {
+      body.schema.properties.tags.items.format = "date-time";
+      pointer = "/endpoints/0/request_bodies/0/schema/properties/tags/items";
+    } else if (location === "nested") {
+      body.schema.properties.group = { type: "object", properties: { name: { type: "string", format: "date-time" } } };
+      body.encoding.group = { content_type: "application/json", evidence_ids: ["ev-proof"] };
+      pointer = "/endpoints/0/request_bodies/0/schema/properties/group/properties/name";
+    } else if (location === "component") {
+      snapshot.schemas.FormFile = { schema_id: "FormFile", schema: { type: "string", format: "date-time" }, evidence_ids: ["ev-proof"] };
+      body.schema.properties.file = { $ref: "#/schemas/FormFile" };
+      pointer = "/schemas/FormFile/schema";
+    } else {
+      body.media_type = "application/json";
+      body.serialization.format = "json";
+      delete body.encoding;
+      body.schema.properties.file.format = "date-time";
+    }
+    await qualifyFormFormat(snapshot, "file", "date-time");
+    snapshot.claims[0].subject.schema_pointer = pointer;
+    expect(parseContractSnapshot(snapshot).ok).toBe(true);
+    const result = compileOpenApiSnapshot(snapshot, "draft");
+    expect(result.diagnostics.map(item => item.code)).toContain("UNVERIFIED_SCHEMA_CONSTRAINT");
+    expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+  }
+});
+
+test("eligible format does not establish unrelated form constraints", async () => {
+  const snapshot = await formSnapshot();
+  const body = snapshot.endpoints[0].request_bodies[0];
+  body.schema.properties.file = { type: "string", format: "binary", minLength: 1 };
+  await qualifyFormFormat(snapshot, "file", "binary");
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["multipart/form-data"]
+    .schema.properties.file).toEqual({ type: "string", format: "binary" });
+  expect(result.diagnostics.map(item => item.code)).toContain("UNVERIFIED_SCHEMA_CONSTRAINT");
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+});

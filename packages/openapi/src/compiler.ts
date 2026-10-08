@@ -94,18 +94,20 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
       }
     }
   }
-  const eligibleRequired = (endpointIds: readonly string[], fullPointer: string): boolean => {
+  const directFormField = /^\/endpoints\/\d+\/request_bodies\/\d+\/schema\/properties\/[^/]+$/;
+  const eligibleField = (endpointIds: readonly string[], fullPointer: string,
+    predicate: string, value: string, allowComponent = false): boolean => {
     if (endpointIds.length !== 1) return false;
     const endpointId = endpointIds[0]!;
     // Inline form claims use actual snapshot array positions, never diagnostic paths.
-    if (!fullPointer.startsWith("/schemas/")
-      && !/^\/endpoints\/\d+\/request_bodies\/\d+\/schema\/properties\/[^/]+$/.test(fullPointer)) return false;
+    if (!(allowComponent && fullPointer.startsWith("/schemas/"))
+      && !directFormField.test(fullPointer)) return false;
     return snapshot.export_eligibility.some((eligibility) => {
       if (eligibility.status !== "eligible" || !eligibility.scope.endpoint_ids.includes(endpointId)) return false;
       const claim = snapshot.claims.find((item) => item.claim_id === eligibility.claim_id);
       return claim !== undefined && claim.condition === undefined && claim.subject.endpoint_id === endpointId
-        && claim.subject.schema_pointer === fullPointer && claim.predicate === "field_presence"
-        && claim.value === "required" && hasQualifyingEvidence(eligibility.basis.evidence_ids, endpointId, true);
+        && claim.subject.schema_pointer === fullPointer && claim.predicate === predicate
+        && claim.value === value && hasQualifyingEvidence(eligibility.basis.evidence_ids, endpointId, true);
     });
   };
   const exportSchema = (schema: ApiSchema, path: string, endpointIds: readonly string[], factPath = path): Record<string, unknown> => {
@@ -114,9 +116,15 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
       const childPath = `${path}/${pointer(key)}`;
       if (key === "$ref") { out.$ref = `#/components/schemas/${pointer(String(value).slice(10))}`; continue; }
       if (key === "required" && Array.isArray(value)) {
-        const accepted = (value as string[]).filter((name) => eligibleRequired(endpointIds, `${factPath}/properties/${pointer(name)}`));
+        const accepted = (value as string[]).filter((name) => eligibleField(endpointIds, `${factPath}/properties/${pointer(name)}`, "field_presence", "required", true));
         if (accepted.length > 0) out.required = [...accepted].sort(ascii);
         if (accepted.length !== value.length) add("UNVERIFIED_SCHEMA_CONSTRAINT", childPath, endpointIds);
+        continue;
+      }
+      if (key === "format" && typeof value === "string"
+        && (schema.type === "string" || schema.type === "integer" || schema.type === "number")
+        && eligibleField(endpointIds, factPath, "field_format", value)) {
+        out.format = value;
         continue;
       }
       if (constraintKeys.has(key)) { add("UNVERIFIED_SCHEMA_CONSTRAINT", childPath, endpointIds); continue; }

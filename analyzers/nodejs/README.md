@@ -86,8 +86,11 @@ encoding when exact endpoint evidence qualifies. Declaration-only, limited,
 service-wide, or unrelated encoding evidence produces
 `UNVERIFIED_FORM_ENCODING` and omits the draft operation. Inline form
 requiredness can export only with an unconditional eligible claim at the exact
-snapshot field pointer and qualifying endpoint evidence. Format constraints
-retain their separate evidence gates. These Swagger
+snapshot field pointer and qualifying endpoint evidence. Direct scalar form
+formats can export with a separate eligible `field_format`
+claim whose value matches the schema format at that exact pointer. Source
+declarations and encoding proof alone do not establish format eligibility.
+These Swagger
 extractions remain partial declarations; this slice does not make them strictly
 publishable or establish runtime validation, handler binding, or file MIME
 acceptance.

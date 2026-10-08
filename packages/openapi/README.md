@@ -96,5 +96,23 @@ Diagnostic paths use endpoint IDs and media types for readability; they are
 not accepted as field locations. Missing eligibility, conditional claims,
 limited evidence and mismatched locations remain `UNVERIFIED_SCHEMA_CONSTRAINT`
 gaps. Declaration-only Swagger facts do not acquire eligibility automatically.
-Format and other constraints retain their existing separate gates; this slice
-covers form-field requiredness only.
+Format uses the separate exact-value eligibility gate below; other constraints
+retain their existing gates. Nested form requiredness remains unqualified.
+
+
+## Direct form-field formats
+
+An unconditional eligible `field_format` claim can retain a direct form-field
+`format` when its value exactly matches the schema's format string. The field
+must have a scalar `string`, `integer`, or `number` type, and the claim must use
+the exact snapshot property pointer with qualifying evidence for that endpoint.
+The same location and evidence rules as form requiredness apply.
+
+This preserves independently established format facts such as binary uploads,
+date-time strings, or numeric formats. Encoding evidence and Swagger declarations
+alone do not establish format eligibility. A claim for one request media cannot
+qualify another. Nested properties, array items, components, non-form bodies,
+conditional or mismatched claims, and limited evidence remain export gaps.
+Qualifying a format does not qualify enums, length limits, bounds, patterns,
+or requiredness. The exporter preserves the proven format annotation; it does
+not claim that a runtime validator enforces it.
