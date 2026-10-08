@@ -565,3 +565,22 @@ test("npm environment selects a declared mock layer without claiming deployment 
   expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
   expect(second.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
 });
+
+test("environment controller directories select candidates and edits invalidate the selected scope", async () => {
+  const {root, adapter} = await service({"app.js": entry,
+    "package.json": JSON.stringify({type: "commonjs", scripts: {start: "NODE_ENV=production node app.js"}, engines: {node: "22.19.0"}}),
+    "config/default.json": routingConfiguration("first/controllers"),
+    "config/production.json": JSON.stringify({swagger: {bagpipes: {router: {controllersDirs: ["production/controllers"]}}}}),
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "first/controllers/orders.js": 'exports.getOrder = function() {};',
+    "production/controllers/orders.js": 'exports.getOrder = function() {};'});
+  const first = await adapter.analyze(request());
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  expect(first.claims.find(item => item.predicate === "handler.candidate")?.value).toMatchObject({path: "production/controllers/orders.js"});
+  expect(first.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  await writeFile(join(root, "service/config/production.json"), JSON.stringify({swagger: {bagpipes: {router: {controllersDirs: ["first/controllers"]}}}}));
+  const second = await adapter.analyze(request());
+  expect(second.claims.find(item => item.predicate === "handler.candidate")?.value).toMatchObject({path: "first/controllers/orders.js"});
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.endpoints[0]!.endpoint_id).toBe(first.endpoints[0]!.endpoint_id);
+});

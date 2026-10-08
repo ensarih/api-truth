@@ -39,6 +39,7 @@ const cases = [
   ["create-mock-override", 200, "orders"],
   ["npm-environment-routing", 200, "orders"],
   ["npm-environment-mock", 200, "mock"],
+  ["npm-environment-directories", 200, "production"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -57,6 +58,7 @@ for (const [scenario, status, marker] of cases) {
     }
     if (scenario === "operation-override") assert.equal(result.analysis.candidatePath, "api/controllers/alternate.js");
     if (scenario === "configured-directory") assert.equal(result.analysis.candidatePath, "custom/controllers/orders.js");
+    if (scenario === "npm-environment-directories") assert.equal(result.analysis.candidatePath, "production/controllers/orders.js");
     if (scenario === "local-import") {
       assert.equal(result.analysis.candidatePath, "api/controllers/orders.js");
       assert.deepEqual(result.analysis.initializationSources, ["api/helpers/reader.cjs"]);

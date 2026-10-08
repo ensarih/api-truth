@@ -69,7 +69,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-16", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-17", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {

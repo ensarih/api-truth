@@ -168,3 +168,25 @@ test("duplicate, foreign and opaque environment files remain unresolved", () => 
   expect(resolveSwaggerRoutingConfiguration(files({swagger: {mockMode: false}}), root, opaque, undefined, selection).kind)
     .toBe("unresolved");
 });
+
+test("environment controller directory arrays replace defaults with exact layer evidence", () => {
+  const tree = files(configuration(["first/controllers", "second/controllers"]));
+  tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {bagpipes: {router: {controllersDirs: ["production/controllers"]}}}}));
+  const result = resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined,
+    {name: "production", location: {path: "package.json", pointer: "/scripts/start"}});
+  expect(result).toMatchObject({kind: "supported", controller_dirs: ["production/controllers"]});
+  expect(result.evidence_locations).toContainEqual({path: "config/production.json", pointer: "/swagger/bagpipes/router/controllersDirs/0"});
+  expect(result.evidence_locations).not.toContainEqual({path: "config/default.json", pointer: "/swagger/bagpipes/router/controllersDirs/0"});
+  expect(result.evidence_locations).toContainEqual({path: "config/default.json", pointer: "/swagger/bagpipes/router/name"});
+});
+
+test.each(["missing", "router"])("unsupported environment router overlays stay unresolved: %s", name => {
+  for (const override of [{controllersDirs: ["../outside"]}, {controllersDirs: []}, {controllersDirs: "controllers"},
+    {controllersDirs: ["production/controllers"], name: "custom_router"}, {mockControllersDirs: []}]) {
+    const tree = files(configuration());
+    tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {bagpipes: {[name]: override}}}));
+    const result = resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined,
+      {name: "production", location: {path: "package.json", pointer: "/scripts/start"}});
+    expect(result.kind).toBe("unresolved");
+  }
+});

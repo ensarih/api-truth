@@ -99,3 +99,6 @@ These fixture results do not certify arbitrary application environments.
 Two production-environment scenarios verify file selection for mockMode false
 and true (18 total tests). They set the declared environment in a fresh isolated
 process; npm startup execution and deployment environment are not certified.
+
+A production directory-override scenario verifies that the environment
+controllersDirs array replaces the default array (19 total tests).

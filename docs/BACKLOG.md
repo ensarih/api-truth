@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.16.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.17.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -315,3 +315,20 @@ not proof of startup execution, deployment availability, effective environment
 or handler binding. Source environment hazards still suppress candidates.
 Two fresh-process framework cases verify selected production-file mock behavior;
 they do not execute or certify the service's npm start command.
+
+
+### Environment controller-directory declarations (2026-10-08)
+
+Middleware `0.17.0` expands the selected environment layer to support
+`swagger.bagpipes.<router>.controllersDirs`. The router must already exist in
+the default file as a named `swagger_router`; the override may change only its
+contained directory array. The environment array replaces the default array,
+matching the pinned config library. Global boolean mockMode may also be declared
+in the same layer. Pipeline changes, new routers, inline routers, other router
+fields, empty/escaping/duplicate directories and dynamic files remain unresolved.
+
+Directory-element evidence points to the environment file; unchanged router
+name and pipeline evidence points to the default file. Layer edits invalidate
+extraction while endpoint identity stays stable. An isolated runtime case proves
+directory-array replacement and the selected controller candidate. Host overrides,
+startup execution and authoritative handler binding remain unverified.

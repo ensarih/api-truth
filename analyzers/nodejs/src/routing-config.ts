@@ -62,6 +62,7 @@ export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, r
     if (object(value.swagger)) swagger = value.swagger;
   }
   const layer = layers[0];
+  const overriddenPointers = new Set<string>();
   if (layer) {
     const text = files.get(layer.absolute)!;
     if (Buffer.byteLength(text) > 1_000_000) return fail("configuration_limit_exceeded");
@@ -69,10 +70,27 @@ export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, r
     try { value = layer.path.endsWith(".json") ? parseStrictJson(text) : parseStrictYaml(text); }
     catch { return fail("invalid_configuration"); }
     if (!object(value) || Object.keys(value).length !== 1 || !object(value.swagger)
-      || Object.keys(value.swagger).length !== 1 || typeof value.swagger.mockMode !== "boolean")
+      || Object.keys(value.swagger).length === 0
+      || Object.keys(value.swagger).some(key => !["mockMode", "bagpipes"].includes(key)))
       return fail("environment_layer_unsupported");
-    swagger = {...swagger, mockMode: value.swagger.mockMode};
-    locations.push({path: layer.path, pointer: "/swagger/mockMode"});
+    const override = value.swagger;
+    if (override.mockMode !== undefined) {
+      if (typeof override.mockMode !== "boolean") return fail("environment_layer_unsupported");
+      swagger = {...swagger, mockMode: override.mockMode};
+      locations.push({path: layer.path, pointer: "/swagger/mockMode"});
+    }
+    if (override.bagpipes !== undefined) {
+      if (!object(override.bagpipes) || Object.keys(override.bagpipes).length !== 1 || !object(swagger.bagpipes))
+        return fail("environment_layer_unsupported");
+      const [name, routerOverride] = Object.entries(override.bagpipes)[0]!;
+      const router = swagger.bagpipes[name];
+      if (reserved.has(name) || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(name)
+        || name.endsWith("\n") || name.endsWith("\r") || !object(router) || router.name !== "swagger_router" || !object(routerOverride)
+        || Object.keys(routerOverride).length !== 1 || !directories(routerOverride.controllersDirs))
+        return fail("environment_layer_unsupported");
+      swagger = {...swagger, bagpipes: {...swagger.bagpipes, [name]: {...router, controllersDirs: routerOverride.controllersDirs}}};
+      overriddenPointers.add(`/swagger/bagpipes/${pointerPart(name)}/controllersDirs`);
+    }
   }
   const allowed = new Set(["bagpipes", "swaggerControllerPipe", "defaultPipe", "fittingsDirs", "mockMode",
     "mapErrorsToJson", "startWithErrors", "startWithWarnings", "enforceUniqueOperationId"]);
@@ -101,7 +119,11 @@ export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, r
     return fail("controller_pipeline_unverified");
   const pipe = bagpipes[pipeline];
   if (!Array.isArray(pipe) || !pipe.length || pipe.length > 32) return fail("controller_pipeline_unverified");
-  const add = (pointer: string) => { if (selected) locations.push({path: selected.path, pointer}); };
+  const add = (pointer: string) => {
+    const fromLayer = [...overriddenPointers].some(prefix => pointer === prefix || pointer.startsWith(`${prefix}/`));
+    const source = fromLayer ? layer : selected;
+    if (source) locations.push({path: source.path, pointer});
+  };
   add("/swagger/swaggerControllerPipe");
   const pipePointer = `/swagger/bagpipes/${pointerPart(pipeline)}`;
   let router: { value: Record<string, unknown>; name: string; pointer: string } | undefined;

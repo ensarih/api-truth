@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.16.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.17.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -469,3 +469,20 @@ not proof of startup execution, deployment availability, effective environment
 or handler binding. Source environment hazards still suppress candidates.
 Two fresh-process framework cases verify selected production-file mock behavior;
 they do not execute or certify the service's npm start command.
+
+
+### Environment controller-directory declarations (2026-10-08)
+
+Middleware `0.17.0` expands the selected environment layer to support
+`swagger.bagpipes.<router>.controllersDirs`. The router must already exist in
+the default file as a named `swagger_router`; the override may change only its
+contained directory array. The environment array replaces the default array,
+matching the pinned config library. Global boolean mockMode may also be declared
+in the same layer. Pipeline changes, new routers, inline routers, other router
+fields, empty/escaping/duplicate directories and dynamic files remain unresolved.
+
+Directory-element evidence points to the environment file; unchanged router
+name and pipeline evidence points to the default file. Layer edits invalidate
+extraction while endpoint identity stays stable. An isolated runtime case proves
+directory-array replacement and the selected controller candidate. Host overrides,
+startup execution and authoritative handler binding remain unverified.

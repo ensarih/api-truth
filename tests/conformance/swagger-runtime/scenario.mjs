@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -48,7 +48,7 @@ try {
     SwaggerExpress.create({appRoot: __dirname${sourceOptions}}, function(error, middleware) {
       if (error) throw error; middleware.register(app);
     });`);
-  const npmEnvironment = ["npm-environment-routing", "npm-environment-mock"].includes(scenario);
+  const npmEnvironment = ["npm-environment-routing", "npm-environment-mock", "npm-environment-directories"].includes(scenario);
   await put("package.json", JSON.stringify({type: "commonjs",
     ...(npmEnvironment ? {scripts: {start: "NODE_ENV=production node app.js"}, engines: {node: "22.19.0"}} : {}), dependencies: {"swagger-express-mw": "0.7.0"}}));
   await put("package-lock.json", await readFile(new URL("./package-lock.json", import.meta.url), "utf8"));
@@ -71,6 +71,15 @@ try {
   if (npmEnvironment) {
     await put("config/default.json", JSON.stringify({swagger: {mockMode: true}}));
     await put("config/production.json", JSON.stringify({swagger: {mockMode: scenario === "npm-environment-mock"}}));
+    if (scenario === "npm-environment-directories") {
+      await put("config/default.json", JSON.stringify({swagger: {swaggerControllerPipe: "controllers", bagpipes: {
+        router: {name: "swagger_router", controllersDirs: ["first/controllers", "second/controllers"], mockControllersDirs: [], mockMode: false},
+        controllers: ["swagger_params_parser", "express_compatibility", "router"]}}}));
+      await put("config/production.json", JSON.stringify({swagger: {bagpipes: {router: {controllersDirs: ["production/controllers"]}}}}));
+      await put("first/controllers/orders.js", handler("first"));
+      await put("second/controllers/orders.js", handler("second"));
+      await put("production/controllers/orders.js", handler("production"));
+    }
     process.env.NODE_ENV = "production";
   }
 
