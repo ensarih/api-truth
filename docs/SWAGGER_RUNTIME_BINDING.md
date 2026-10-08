@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.26.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.27.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -217,3 +217,15 @@ Compositions have 1–32 branches and share the bounded reference resolver's dep
 node and definition limits. Unsupported alternatives, cycles and malformed or
 oversized compositions withhold partial findings. This is an inferred comparison
 of declarations, not validation of captured response bodies.
+
+
+## Local literals and separate status statements
+
+Middleware `0.27.0` also accepts a final returned response call preceded only by
+up to 16 single-name, inert literal `const` declarations and one direct literal
+status assignment. `json(body)` can use such a local constant; body evidence
+points to its initializer, while status evidence points to the status argument.
+Aliases, mutation, calls, parameter shadowing, multiple statuses and control flow
+stay unresolved. All literal parsing shares the existing depth and node limits.
+This extends the initial single-return subset without changing binding trust or
+promoting source response declarations to runtime or normative contract facts.

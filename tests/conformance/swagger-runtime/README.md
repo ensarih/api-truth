@@ -157,3 +157,10 @@ missing required field through the default response (44 total tests). Each uses
 local `allOf` definition references and verifies all three definition dependency
 pointers. Comparisons remain source declarations under an observed handler
 binding; no response schema is promoted to a runtime contract.
+
+
+Four linear-response cases exercise a local literal body with matching types,
+a type discrepancy, a missing documented field, and a separate status statement
+(48 total tests). The analyzer still emits inferred body/status declarations;
+actual dispatch verifies the fixture behavior without promoting the response
+contract or persisting body values.

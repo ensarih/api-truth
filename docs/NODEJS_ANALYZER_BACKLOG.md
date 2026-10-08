@@ -7,7 +7,7 @@ declarations with flat parameter serialization and scalar/flat-array form and mu
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.26.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.27.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -590,3 +590,27 @@ Validation: 929 offline tests and 44 pinned runtime cases. Composed matching,
 type-conflicting and default required-field responses retain all definition
 dependencies. Independent review found no blocker. Broader alternatives, dynamic
 bodies and validator analysis remain pending in NB4.
+
+
+### Linear handler response declarations (2026-10-09)
+
+Middleware `0.27.0` extends the bound-handler source subset with straight-line
+local literal `const` declarations and one direct `res.status(201)` statement
+before the final returned `json`, `send` or `end` call. A literal body can be
+passed through its local constant identifier; JSON shapes retain the initializer's
+exact source span and line. Names cannot shadow parameters or reserved names.
+No body values, requiredness or runtime serialization guarantees are recorded.
+
+Blocks contain at most 16 single-name constants, one separate status and a final
+return (18 statements). All initializers, including unused ones, must satisfy the
+existing inert JSON literal parser and its shared 10,000-node/64-depth bounds.
+Aliases, mutation, calls, multiple statuses, dynamic values, conditional flow and
+unsupported statements remain unresolved. A separate status cannot be combined
+with a chained status. The original direct `sendStatus` subset is unchanged.
+
+Validation: 949 offline tests and 48 pinned runtime cases. Local-body matching,
+type and missing-field discrepancies and a separately assigned status are
+exercised through controlled HTTP dispatch. Independent review found no blocker.
+Findings remain inferred source declarations under an observed handler binding;
+documented responses and strict OpenAPI authority remain unchanged. Broader
+control flow and validator analysis remain pending in NB4.

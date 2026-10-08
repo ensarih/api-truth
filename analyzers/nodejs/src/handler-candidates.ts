@@ -289,20 +289,41 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
     && !parameter.dotDotDotToken ? parameter.name.text : undefined);
   if (names.some(name => name === undefined) || new Set(names).size !== names.length) return unknown;
   const responseName = names[1]!;
+  const directResponse = (node: ts.Expression) => ts.isIdentifier(node) && node.text === responseName;
+  const localBodies = new Map<string, ts.Expression>();
+  let linearStatus: ts.Expression | undefined;
   let expression: ts.Expression | undefined;
   if (ts.isBlock(handler.body)) {
-    if (handler.body.statements.length !== 1) return unknown;
-    const statement = handler.body.statements[0]!;
+    const statements = handler.body.statements;
+    if (!statements.length || statements.length > 18) return unknown;
+    for (const statement of statements.slice(0, -1)) {
+      if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
+        && statement.declarationList.declarations.length === 1) {
+        const declaration = statement.declarationList.declarations[0]!;
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer
+          || names.includes(declaration.name.text) || reserved.has(declaration.name.text)
+          || localBodies.has(declaration.name.text) || localBodies.size >= 16) return unknown;
+        localBodies.set(declaration.name.text, declaration.initializer);
+      } else if (ts.isExpressionStatement(statement) && ts.isCallExpression(statement.expression)) {
+        const call = statement.expression;
+        if (linearStatus || !ts.isPropertyAccessExpression(call.expression)
+          || call.expression.name.text !== "status" || !directResponse(call.expression.expression)
+          || call.arguments.length !== 1) return unknown;
+        linearStatus = call.arguments[0];
+      } else return unknown;
+    }
+    const statement = statements[statements.length - 1]!;
     if (!ts.isReturnStatement(statement)) return unknown;
     expression = statement.expression;
   } else expression = handler.body;
   if (!expression || !ts.isCallExpression(expression) || !ts.isPropertyAccessExpression(expression.expression)) return unknown;
   const terminal = expression.expression;
-  const directResponse = (node: ts.Expression) => ts.isIdentifier(node) && node.text === responseName;
   let status: ts.Expression | undefined;
   let body: {schema: ApiSchema; line: number; span: string} | undefined;
-  if (terminal.name.text === "sendStatus" && directResponse(terminal.expression) && expression.arguments.length === 1)
+  if (terminal.name.text === "sendStatus" && directResponse(terminal.expression) && expression.arguments.length === 1) {
+    if (linearStatus || localBodies.size) return unknown;
     status = expression.arguments[0];
+  }
   else {
     if (!["json", "send", "end"].includes(terminal.name.text)) return unknown;
     const expectedArguments = terminal.name.text === "end" ? 0 : 1;
@@ -344,18 +365,26 @@ export function inspectBoundResponseStatus(path: string, text: string, exportNam
       }
       return undefined;
     };
+    // Only inert literal initializers are accepted, including unused declarations.
+    // No calls, aliases, mutation or arbitrary statements can occur before the return.
+    for (const initializer of localBodies.values()) if (!literal(initializer)) return unknown;
     for (const argument of expression.arguments) {
-      const schema = literal(argument);
+      const sourceBody = ts.isIdentifier(argument) ? localBodies.get(argument.text) : argument;
+      if (!sourceBody) return unknown;
+      const schema = literal(sourceBody);
       if (!schema) return unknown;
       if (terminal.name.text === "json") body = {schema,
-        line: module.source.getLineAndCharacterOfPosition(argument.getStart()).line + 1,
-        span: `span:${argument.getStart()}:${argument.getEnd()}`};
+        line: module.source.getLineAndCharacterOfPosition(sourceBody.getStart()).line + 1,
+        span: `span:${sourceBody.getStart()}:${sourceBody.getEnd()}`};
     }
     const chain = terminal.expression;
-    if (!ts.isCallExpression(chain) || !ts.isPropertyAccessExpression(chain.expression)
-      || chain.expression.name.text !== "status" || !directResponse(chain.expression.expression)
-      || chain.arguments.length !== 1) return unknown;
-    status = chain.arguments[0];
+    if (directResponse(chain) && linearStatus) status = linearStatus;
+    else {
+      if (linearStatus || !ts.isCallExpression(chain) || !ts.isPropertyAccessExpression(chain.expression)
+        || chain.expression.name.text !== "status" || !directResponse(chain.expression.expression)
+        || chain.arguments.length !== 1) return unknown;
+      status = chain.arguments[0];
+    }
   }
   if (!status || !ts.isNumericLiteral(status) || !/^[1-5][0-9]{2}$/.test(status.getText(module.source))) return unknown;
   return {kind: "declared", code: Number(status.text),

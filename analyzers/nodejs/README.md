@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.26.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.27.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -693,3 +693,27 @@ Validation: 929 offline tests and 44 pinned runtime cases. Composed matching,
 type-conflicting and default required-field responses retain all definition
 dependencies. Independent review found no blocker. Broader alternatives, dynamic
 bodies and validator analysis remain pending in NB4.
+
+
+### Linear handler response declarations (2026-10-09)
+
+Middleware `0.27.0` extends the bound-handler source subset with straight-line
+local literal `const` declarations and one direct `res.status(201)` statement
+before the final returned `json`, `send` or `end` call. A literal body can be
+passed through its local constant identifier; JSON shapes retain the initializer's
+exact source span and line. Names cannot shadow parameters or reserved names.
+No body values, requiredness or runtime serialization guarantees are recorded.
+
+Blocks contain at most 16 single-name constants, one separate status and a final
+return (18 statements). All initializers, including unused ones, must satisfy the
+existing inert JSON literal parser and its shared 10,000-node/64-depth bounds.
+Aliases, mutation, calls, multiple statuses, dynamic values, conditional flow and
+unsupported statements remain unresolved. A separate status cannot be combined
+with a chained status. The original direct `sendStatus` subset is unchanged.
+
+Validation: 949 offline tests and 48 pinned runtime cases. Local-body matching,
+type and missing-field discrepancies and a separately assigned status are
+exercised through controlled HTTP dispatch. Independent review found no blocker.
+Findings remain inferred source declarations under an observed handler binding;
+documented responses and strict OpenAPI authority remain unchanged. Broader
+control flow and validator analysis remain pending in NB4.
