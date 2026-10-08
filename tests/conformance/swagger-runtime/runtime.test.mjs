@@ -69,6 +69,10 @@ const cases = [
   ["runtime-binding-body-local-type", 201, "orders"],
   ["runtime-binding-body-local-required", 201, "orders"],
   ["runtime-binding-body-linear-match", 201, "orders"],
+  ["runtime-binding-body-schema-missing", 201, "orders"],
+  ["runtime-binding-body-schema-missing-default", 201, "orders"],
+  ["runtime-binding-body-schema-missing-precedence", 201, "orders"],
+  ["runtime-binding-body-schema-missing-example", 201, "orders"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -112,10 +116,22 @@ for (const [scenario, status, marker] of cases) {
     }
     if (scenario === "runtime-binding-stale") assert.ok(result.analysis.diagnostics.includes("runtime_binding_receipt_unverified"));
     if (scenario.startsWith("runtime-binding-body-")) {
-      assert.equal(result.analysis.responseSchemaDeclaration.verification, "declared");
-      assert.equal(result.analysis.responseMediaDeclaration.verification, "declared");
-      assert.deepEqual(result.analysis.responseMediaDeclaration.value.media_types, ["application/json"]);
-      assert.equal(result.analysis.responseMediaPointer, "/produces");
+      const schemaMissing = ["runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-example"].includes(scenario);
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_schema_missing"), schemaMissing);
+      if (schemaMissing) {
+        assert.equal(result.analysis.responseSchemaDeclaration, undefined);
+        assert.equal(result.analysis.responseMediaDeclaration, undefined);
+        assert.equal(result.analysis.schemaMissingBody.verification, "inferred");
+        assert.equal(result.analysis.schemaMissingBody.value.examples_present, scenario.endsWith("example"));
+        assert.equal(result.analysis.schemaMissingBody.value.response_key, scenario.endsWith("default") ? "default" : "201");
+        assert.ok(result.analysis.schemaMissingBodyPointers.includes(scenario.endsWith("default") ? "/responses/Shared" : "/paths/~1orders~1{id}/get/responses/201"));
+        assert.equal(result.analysis.diagnostics.includes("handler_response_body_presence_unresolved"), false);
+      } else {
+        assert.equal(result.analysis.responseSchemaDeclaration.verification, "declared");
+        assert.equal(result.analysis.responseMediaDeclaration.verification, "declared");
+        assert.deepEqual(result.analysis.responseMediaDeclaration.value.media_types, ["application/json"]);
+        assert.equal(result.analysis.responseMediaPointer, "/produces");
+      }
       assert.equal(result.analysis.bodyDeclaration.verification, "inferred");
       const properties = {controller:{type:"string"}};
       if (scenario.endsWith("present")) properties.name = {type:"string"};

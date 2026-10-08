@@ -130,3 +130,11 @@ test("cyclic reusable responses keep their selector with unresolved fields",()=>
   expect(result.operations[0]!.responses[0]).not.toHaveProperty("schema");
   expect(result.diagnostics).toContainEqual(expect.objectContaining({code:"unsupported_construct",pointer:"/paths/~1orders~1{id}/get/responses/default"}));
 });
+
+test.each(["1XX","2XX","5XX"])("Swagger 2 range selector %s is diagnosed without becoming a response",selector=>{
+  const doc=structuredClone(base) as any;doc.paths["/orders/{id}"].get.responses[selector]={description:"Invalid Swagger 2 range"};
+  const result=parseSwagger2Document(doc);
+  expect(result.operations[0]!.responses.map(item=>item.selector)).toEqual([{kind:"exact",code:200}]);
+  expect(result.status).toBe("partial");
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({code:"unsupported_construct",pointer:`/paths/~1orders~1{id}/get/responses/${selector}`}));
+});

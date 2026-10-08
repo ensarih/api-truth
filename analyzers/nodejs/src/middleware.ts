@@ -13,7 +13,7 @@ import { createHandlerCandidateResolver, inspectBoundResponseStatus } from "./ha
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
 /** Direct swagger-express-mw default-file registration; optional signed observations establish session-scoped handler binding. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.29.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.30.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;

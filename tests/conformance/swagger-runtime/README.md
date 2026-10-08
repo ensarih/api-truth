@@ -177,3 +177,10 @@ The existing body cases verify that document response-schema/media claims remain
 declared alongside inferred handler bodies and observed binding. Reusable cases
 assert terminal schema pointers; media evidence points to root `produces`.
 Total runtime cases remain 48.
+
+
+Four response-schema cases add an inline missing schema, a reusable default with
+no schema, a concrete exact schema overriding a default without schema, and an
+example-only response (52 total tests). Missing-schema findings remain inferred,
+carry response provenance and an examples-present flag, and do not interpret
+example data or promote a runtime contract.

@@ -27,3 +27,14 @@ test("response chain depth is bounded",()=>{
   for(let i=0;i<66;i++)responses[`R${i}`]=i===65?{description:"OK"}:{$ref:`#/responses/R${i+1}`};
   expect(resolve({$ref:"#/responses/R0"},responses).kind).toBe("unresolved");
 });
+
+test("concrete response without schema is resolved separately from an invalid object",()=>{
+  expect(resolve({description:"No content"},{})).toEqual({kind:"resolved",response:{description:"No content"},pointers:[]});
+  expect(resolve({headers:{}},{}).kind).toBe("unresolved");
+});
+
+
+test("examples without a schema remain explicit response metadata",()=>{
+  const response={description:"Example only",examples:{"application/json":{id:1}}};
+  expect(resolve(response,{})).toEqual({kind:"resolved",response,pointers:[]});
+});

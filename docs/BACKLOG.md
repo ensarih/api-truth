@@ -141,12 +141,12 @@ it does not substitute for a protected enterprise pilot.
 | P5-DOCS | 5 | Permission-scoped read-only Confluence links and discrepancies. | Findings retain both sources, versions, scopes, and review state; revocation invalidates dependent views. |
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
-`nodejs-swagger2-document@0.12.0` reads a selected JSON or YAML document and emits
+`nodejs-swagger2-document@0.13.0` reads a selected JSON or YAML document and emits
 declared route facts, flat parameter serialization, and scalar/flat-array form and multipart-file
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.29.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.30.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -631,3 +631,33 @@ empty lists, unknown/malformed media and unresolved aliases. Runtime assertions
 keep document schema/media facts declared alongside observed handler binding.
 Strict OpenAPI qualification and runtime serialization guarantees are unchanged.
 Independent review found no blocker.
+
+
+### Swagger 2 response selection and missing-schema findings (2026-10-09)
+
+Document profile `0.13.0` and middleware `0.30.0` accept exact response status
+codes and `default`; range selectors such as `2XX` are diagnosed and omitted.
+They are not Swagger 2 response keys, even though the shared IR can represent
+ranges for other document dialects. See the [official Swagger 2 Responses
+Object](https://spec.openapis.org/oas/v2.0.html#responses-object).
+
+A bounded shared selector uses an own exact-status property before an own
+`default` property. Invalid or unresolved exact responses never fall back to a
+more permissive default. Invalid statuses and inherited properties select
+nothing. Existing source/document type and required-field comparisons use this
+same selection.
+
+A bound handler's literal JSON body paired with a concrete response lacking its
+own schema now produces inferred `handler.response.body.schema_missing` and
+`handler_response_body_schema_missing`. This replaces generic unresolved body
+comparison for that specific case. The claim retains source, binding, selector
+and reusable-response evidence and reports `examples_present`. It asserts only
+a missing schema: examples are not compared, no whole-body documentation claim
+is made, and no runtime response guarantee is inferred. Malformed/unresolved
+responses or present invalid schemas still remain unresolved.
+
+Validation: 975 offline tests and 52 pinned runtime cases. Cases cover inline and
+reusable default responses without schemas, exact-over-default precedence and
+examples without schemas. Independent review caught an overly broad initial
+predicate; its correction and example case passed follow-up review. Strict
+OpenAPI qualification and normalized response authority remain unchanged.

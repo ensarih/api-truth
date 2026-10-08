@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match", "runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-precedence", "runtime-binding-body-schema-missing-example"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -71,6 +71,15 @@ try {
       properties:{controller:{type:scenario.endsWith("type") ? "integer" : "string"},
         ...(scenario.endsWith("required") ? {name:{type:"string"}} : {})},
       ...(scenario.endsWith("required") ? {required:["name"]} : {})}}};
+  }
+  if (scenario === "runtime-binding-body-schema-missing") operation.responses = {"201":{description:"No content"}};
+  if (scenario === "runtime-binding-body-schema-missing-default") {
+    doc.responses = {Shared:{description:"No content"}};
+    operation.responses = {default:{$ref:"#/responses/Shared"}};
+  }
+  if (scenario === "runtime-binding-body-schema-missing-example") operation.responses = {"201":{description:"Example without schema",examples:{"application/json":{controller:"orders"}}}};
+  if (scenario === "runtime-binding-body-schema-missing-precedence") {
+    operation.responses = {"201":{description:"Explicit body",schema:{type:"object",properties:{controller:{type:"string"}}}},default:{description:"No content"}};
   }
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));
@@ -207,6 +216,9 @@ try {
       securityDeclaration: analysis.claims.find(item => item.predicate === "security.declaration"),
       securityDeclarationPointers: analysis.claims.find(item => item.predicate === "security.declaration")?.evidence_ids
         .map(id => analysis.evidence.find(item => item.evidence_id === id)?.location.pointer),
+      schemaMissingBody: analysis.claims.find(item => item.predicate === "handler.response.body.schema_missing"),
+      schemaMissingBodyPointers: analysis.claims.find(item => item.predicate === "handler.response.body.schema_missing")?.evidence_ids
+        .map(id => analysis.evidence.find(item => item.evidence_id === id)?.location.pointer).filter(Boolean),
       responseSchemaDeclaration: analysis.claims.find(item => item.predicate === "response.schema.declaration"),
       responseSchemaPointer: analysis.evidence.find(item => item.evidence_id === analysis.claims.find(item => item.predicate === "response.schema.declaration")?.evidence_ids[0])?.location.pointer,
       responseMediaDeclaration: analysis.claims.find(item => item.predicate === "response.media.declaration"),

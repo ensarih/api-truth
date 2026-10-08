@@ -5,7 +5,7 @@ import {
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
 import type {RuntimeBindingResolution, RuntimeBinding} from "./runtime-binding.js";
-import {resolveResponseSchema, resolveResponseObject} from "./response-schema-resolution.js";
+import {resolveResponseSchema, resolveResponseObject, selectResponseForStatus} from "./response-schema-resolution.js";
 import {compareResponseBodyTypes, compareResponseBodyPresence} from "./response-body-comparison.js";
 import { declaredSchemaBounds, schemaBoundFields } from "./schema-bounds.js";
 import { declaredSchemaConstraints } from "./schema-constraints.js";
@@ -28,7 +28,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.12.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.13.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -73,8 +73,8 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-10", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-29", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-11", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-30", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -668,6 +668,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     const pathItem = (raw.paths as Record<string, Record<string, unknown>>)[operation.path]!;
     const operationDefinition = pathItem[operation.method] as Record<string, unknown>;
     const responses = operationDefinition.responses as Record<string, unknown> | undefined;
+    const selected = selectResponseForStatus(responses, declaration.code);
     if (declaration.body) {
       const body = declaration.body;
       const bodyId = `ev-${hash(`${binding.handler_path}:${body.span}:${endpoint.endpoint_id}:response-body`).slice(0, 24)}`;
@@ -684,8 +685,8 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         value: {status_code: declaration.code, schema: body.schema, path: binding.handler_path,
           export_name: binding.export_name, policy: "literal-json-body-1"}});
       result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: bodyId}, evidence_ids: bodyIds});
-      const selectedKey = responses && Object.hasOwn(responses, String(declaration.code)) ? String(declaration.code) : "default";
-      const selectedResponse = responses?.[selectedKey];
+      const selectedKey = selected?.key;
+      const selectedResponse = selected?.response;
       const responseResolution = resolveResponseObject(selectedResponse, raw.responses);
       const selectedSchema = responseResolution.kind === "resolved" ? responseResolution.response.schema : undefined;
       const resolvedSchema = resolveResponseSchema(selectedSchema, raw.definitions);
@@ -700,18 +701,29 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         if (!endpoint.evidence_ids.includes(id)) endpoint.evidence_ids.push(id);
         result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind:"evidence", id}, evidence_ids:[bodyId,id]});
       }
-      const comparison = compareResponseBodyTypes(body.schema, comparisonSchema);
+      const bodySchemaMissing = responseResolution.kind === "resolved" && !Object.hasOwn(responseResolution.response, "schema");
+      const comparison = bodySchemaMissing ? {kind:"compared" as const,mismatches:[]} : compareResponseBodyTypes(body.schema, comparisonSchema);
       const documentPointer = responseResolution.kind === "resolved" && responseResolution.terminalPointer
         ? `${responseResolution.terminalPointer}${selectedSchema !== undefined ? "/schema" : ""}`
-        : responses && Object.hasOwn(responses, selectedKey)
+        : selectedKey !== undefined && responses && Object.hasOwn(responses, selectedKey)
           ? `${operation.pointer}/responses/${selectedKey}${selectedSchema !== undefined ? "/schema" : ""}` : `${operation.pointer}/responses`;
       const schemaEvidence = evidence(documentPointer, endpoint.endpoint_id);
+      if (bodySchemaMissing) {
+        const ids = [...new Set([...bodyIds, schemaEvidence, ...referenceIds])];
+        result.claims.push({claim_id:`claim-${hash(`${endpoint.endpoint_id}:body-schema-missing:${bodyId}`).slice(0,24)}`,
+          subject:{service_id:request.source.service_id,endpoint_id:endpoint.endpoint_id},
+          predicate:"handler.response.body.schema_missing",verification:"inferred",evidence_ids:ids,
+          value:{status_code:declaration.code,response_key:selectedKey!,examples_present:responseResolution.kind === "resolved" && Object.hasOwn(responseResolution.response,"examples"),policy:"literal-json-body-no-schema-1"}});
+        result.diagnostics.push({diagnostic_id:`diag-${hash(`${endpoint.endpoint_id}:body-schema-missing:${bodyId}`).slice(0,24)}`,
+          code:"handler_response_body_schema_missing",severity:"warning",affected_endpoint_ids:[endpoint.endpoint_id],evidence_ids:ids,
+          message:"The bound handler declares a literal JSON body for a response with no documented schema; response examples are not compared and runtime serialization remains unverified."});
+      }
       if (comparison.kind === "compared" && comparison.mismatches.length) result.claims.push({
         claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-type-discrepancy:${bodyId}`).slice(0, 24)}`,
         subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
         predicate: "handler.response.body.type.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
         value: {paths: comparison.mismatches, policy: "literal-json-body-types-4"}});
-      if (comparison.kind === "compared") {
+      if (comparison.kind === "compared" && !bodySchemaMissing) {
         const presence = compareResponseBodyPresence(body.schema, comparisonSchema);
         if (presence.kind === "compared" && presence.missing.length) result.claims.push({
           claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-required-discrepancy:${bodyId}`).slice(0, 24)}`,
@@ -732,7 +744,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         message: comparison.kind === "unresolved" ? "Literal JSON source shape could not be compared under the bounded schema policy."
           : "Literal JSON source types differ from explicit documented response types; runtime serialization remains unverified."});
     }
-    if (responses && !Object.hasOwn(responses, String(declaration.code)) && !Object.hasOwn(responses, "default")) {
+    if (responses && !selected) {
       const documentEvidence = evidence(`${operation.pointer}/responses`, endpoint.endpoint_id);
       const diagnosticId = `diag-${hash(`${endpoint.endpoint_id}:handler_response_status_discrepancy:${sourceId}`).slice(0, 24)}`;
       result.diagnostics.push({diagnostic_id: diagnosticId, code: "handler_response_status_discrepancy", severity: "warning",

@@ -66,3 +66,12 @@ export function resolveResponseObject(response:unknown,responses:unknown):Respon
   }
   return {kind:"unresolved",pointers:[...pointers].sort()};
 }
+
+
+/** Swagger 2 selects an exact status before default; an invalid exact response never falls back. */
+export function selectResponseForStatus(responses: unknown, code: number): {key:string; response:unknown} | undefined {
+  if (!Number.isInteger(code) || code < 100 || code > 599 || !responses || typeof responses !== "object" || Array.isArray(responses)) return undefined;
+  const map = responses as Record<string,unknown>;
+  const key = Object.hasOwn(map, String(code)) ? String(code) : Object.hasOwn(map, "default") ? "default" : undefined;
+  return key === undefined ? undefined : {key,response:map[key]};
+}

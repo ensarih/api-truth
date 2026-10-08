@@ -16,7 +16,7 @@ export type Swagger2Security = { state: "unknown" | "anonymous" } | {
 };
 export type Swagger2Parameter = Record<string, unknown> & { name: string; in: string; pointer: string };
 export type Swagger2Response = {
-  selector: { kind: "exact"; code: number } | { kind: "range"; range: string } | { kind: "default" };
+  selector: { kind: "exact"; code: number } | { kind: "default" };
   description?: string;
   schema?: unknown;
   headers?: Record<string, unknown>;
@@ -241,7 +241,6 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
         if (response.examples !== undefined) add("unsupported_construct", "warning", "Response examples are retained by the source but are not interpreted.", `${declarationPointer}/examples`);
         let selector: Swagger2Response["selector"];
         if (status === "default") selector = { kind: "default" };
-        else if (/^[1-5]XX$/.test(status)) selector = { kind: "range", range: status };
         else if (/^[1-5][0-9]{2}$/.test(status)) selector = { kind: "exact", code: Number(status) };
         else { add("unsupported_construct", "warning", `Unsupported response selector '${status}'.`, at); continue; }
         responses.push({ selector, ...(typeof response.description === "string" ? { description: response.description } : {}),

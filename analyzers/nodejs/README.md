@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.12.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.13.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.29.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.30.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -769,3 +769,33 @@ empty lists, unknown/malformed media and unresolved aliases. Runtime assertions
 keep document schema/media facts declared alongside observed handler binding.
 Strict OpenAPI qualification and runtime serialization guarantees are unchanged.
 Independent review found no blocker.
+
+
+### Swagger 2 response selection and missing-schema findings (2026-10-09)
+
+Document profile `0.13.0` and middleware `0.30.0` accept exact response status
+codes and `default`; range selectors such as `2XX` are diagnosed and omitted.
+They are not Swagger 2 response keys, even though the shared IR can represent
+ranges for other document dialects. See the [official Swagger 2 Responses
+Object](https://spec.openapis.org/oas/v2.0.html#responses-object).
+
+A bounded shared selector uses an own exact-status property before an own
+`default` property. Invalid or unresolved exact responses never fall back to a
+more permissive default. Invalid statuses and inherited properties select
+nothing. Existing source/document type and required-field comparisons use this
+same selection.
+
+A bound handler's literal JSON body paired with a concrete response lacking its
+own schema now produces inferred `handler.response.body.schema_missing` and
+`handler_response_body_schema_missing`. This replaces generic unresolved body
+comparison for that specific case. The claim retains source, binding, selector
+and reusable-response evidence and reports `examples_present`. It asserts only
+a missing schema: examples are not compared, no whole-body documentation claim
+is made, and no runtime response guarantee is inferred. Malformed/unresolved
+responses or present invalid schemas still remain unresolved.
+
+Validation: 975 offline tests and 52 pinned runtime cases. Cases cover inline and
+reusable default responses without schemas, exact-over-default precedence and
+examples without schemas. Independent review caught an overly broad initial
+predicate; its correction and example case passed follow-up review. Strict
+OpenAPI qualification and normalized response authority remain unchanged.

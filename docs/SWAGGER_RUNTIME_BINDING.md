@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.29.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.30.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -249,3 +249,14 @@ binding. Schema evidence points to its inline or reusable declaration; media
 evidence points to operation/root `produces`. Unknown media keeps schema facts
 and definition dependencies but cannot create response content or media claims.
 No document response fact is promoted by accepting a signed handler capture.
+
+
+## Response selection and missing schema
+
+Middleware `0.30.0` selects exact Swagger 2 status before default, never falling
+back from a present but unresolved exact response. Ranges are not accepted by
+this Swagger 2 profile. A concrete selected response with no schema and a bound
+literal JSON source body yields an inferred schema-missing finding with exact
+response/alias provenance. It records whether examples are present; examples
+are not interpreted. This is not an assertion that the whole body is undocumented
+or proof of runtime response behavior. Invalid responses/schemas remain unresolved.
