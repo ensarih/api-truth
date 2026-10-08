@@ -283,3 +283,28 @@ describe("contract snapshot wire contract", () => {
     }
   });
 });
+
+test.each(["enum", "const"])("%s values preserve schema-like JSON keys as inert data", keyword => {
+  const candidate = clone(validSnapshot);
+  const literal = {$ref: "#/schemas/literal", enum: [1, 1], properties: {x: {$ref: "https://example.invalid/value"}}};
+  candidate.schemas.Customer.schema = {[keyword]: keyword === "enum" ? [literal] : literal};
+  const result = parseContractSnapshot(candidate);
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value.schemas.Customer!.schema).toEqual(candidate.schemas.Customer.schema);
+});
+
+test("schema properties named enum retain real reference validation and exact pointers", () => {
+  const candidate = clone(validSnapshot);
+  candidate.schemas.Customer.schema = {type: "object", properties: {enum: {$ref: "#/schemas/missing"}}};
+  const result = parseContractSnapshot(candidate);
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error.issues).toContainEqual(expect.objectContaining({
+    code: "semantic.dangling_reference", path: "/schemas/Customer/schema/properties/enum/$ref",
+  }));
+});
+
+test("duplicate enum declarations nested in compositions are still rejected", () => {
+  const candidate = clone(validSnapshot);
+  candidate.schemas.Customer.schema = {allOf: [{enum: [{a: 1, b: 2}, {b: 2, a: 1}]}]};
+  expectInvalid(candidate, "semantic.invalid_api_schema");
+});

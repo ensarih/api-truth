@@ -124,11 +124,11 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
     for (const [key, child] of Object.entries(value)) {
       if (key === "properties" && obj(child)) {
         for (const [name, propertySchema] of Object.entries(child)) inspectSchema(propertySchema, `${pointer}/properties/${pointerPart(name)}`);
-      } else if (key !== "properties") inspectSchema(child, `${pointer}/${pointerPart(key)}`);
+      } else if (["items", "allOf", "additionalProperties"].includes(key)) inspectSchema(child, `${pointer}/${pointerPart(key)}`);
     }
   };
   for (const [name, schema] of Object.entries(definitionMap)) inspectSchema(schema, `/definitions/${pointerPart(name)}`);
-  const inspectRefs = (value: unknown, pointer: string, seen = new Set<object>()): void => {
+  const inspectRefs = (value: unknown, pointer: string, seen = new Set<object>(), map = false): void => {
     if (Array.isArray(value)) { value.forEach((item, i) => inspectRefs(item, `${pointer}/${i}`, seen)); return; }
     if (!obj(value) || seen.has(value)) return;
     seen.add(value);
@@ -141,7 +141,11 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
         if (target === undefined) add("missing_local_ref", "warning", `Local reference '${value.$ref}' does not resolve.`, `${pointer}/$ref`);
       }
     }
-    for (const [key, child] of Object.entries(value)) inspectRefs(child, `${pointer}/${pointerPart(key)}`, seen);
+    for (const [key, child] of Object.entries(value)) {
+      if (!map && (["enum", "default", "example", "examples", "security"].includes(key) || key.startsWith("x-"))) continue;
+      inspectRefs(child, `${pointer}/${pointerPart(key)}`, seen,
+        !map && ["properties", "definitions", "paths", "responses", "headers", "parameters", "securityDefinitions"].includes(key));
+    }
   };
   inspectRefs(input, "");
   if (diagnostics.some((item) => item.code === "external_ref")) return result("failed", [], {}, {}, diagnostics);

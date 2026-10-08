@@ -125,12 +125,12 @@ it does not substitute for a protected enterprise pilot.
 | P5-DOCS | 5 | Permission-scoped read-only Confluence links and discrepancies. | Findings retain both sources, versions, scopes, and review state; revocation invalidates dependent views. |
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
-`nodejs-swagger2-document@0.8.0` reads a selected JSON or YAML document and emits
+`nodejs-swagger2-document@0.9.0` reads a selected JSON or YAML document and emits
 declared route facts, flat parameter serialization, and scalar/flat-array form and multipart-file
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.13.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.14.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -265,3 +265,15 @@ without changing endpoint identity.
 
 These are document declarations. Runtime enforcement and normative constraint
 export remain gated; form patterns remain outside the supported form subset.
+
+
+### Schema positions and literal data (2026-10-08)
+
+Document `0.9.0` and middleware `0.14.0` distinguish enum/default/example data
+from schema declarations during inspection. An enum object may contain `$ref`,
+`enum` or `properties` keys without creating a reference or a nested constraint.
+The catalog likewise preserves enum/const JSON values without translating
+references inside them. Reference checks and duplicate-enum checks recurse only
+through actual schema positions, including compositions and dictionary schemas.
+Properties named `enum` or `default` still receive normal schema validation.
+No reference is fetched and no runtime or export authority is promoted.

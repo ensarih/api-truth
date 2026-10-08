@@ -486,3 +486,29 @@ test("pattern and enum edits invalidate extraction while retaining endpoint iden
   expect(Object.values(second.schemas)[0]!.schema).toEqual({type: "string", pattern: "^b$", enum: ["b"]});
   expect(second.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(1);
 });
+
+
+test("enum objects are literal data even when keys resemble schemas or references", async () => {
+  const values = [{$ref: "https://example.invalid/value", enum: [1, 1]},
+    {$ref: "#/schemas/literal", properties: {value: {enum: [2, 2]}}}];
+  const {adapter} = await service({...document, definitions: {Order: {enum: values}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints).toHaveLength(1);
+  expect(Object.values(result.schemas)[0]!.schema.enum).toEqual(values);
+  expect(result.diagnostics.map(item => item.code)).not.toEqual(expect.arrayContaining([
+    "external_ref", "missing_local_ref", "schema_keyword_unsupported",
+  ]));
+  expect(result.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(1);
+});
+
+test("schema properties named enum and default still follow real schema references", async () => {
+  const {adapter} = await service({...document, definitions: {Order: {type: "object", properties: {
+    enum: {$ref: "#/definitions/Value"}, default: {$ref: "#/definitions/Value"},
+  }}, Value: {type: "string"}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(2);
+  expect(Object.values(result.schemas).find(item => item.schema.type === "object")!.schema.properties?.enum?.$ref)
+    .toMatch(/^#\/schemas\//);
+});

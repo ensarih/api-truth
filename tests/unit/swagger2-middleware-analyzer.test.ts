@@ -489,3 +489,14 @@ test("middleware shares pattern and enum validation for YAML declarations", asyn
   expect(result.diagnostics.map(item => item.code)).toEqual(expect.arrayContaining(["schema_enum_duplicate", "schema_pattern_unsupported"]));
   expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
 });
+
+test("middleware preserves schema-like keys inside YAML enum literals", async () => {
+  const spec = document.replace("'200': { description: ok }", "'200': { description: ok, schema: { $ref: '#/definitions/Order' } }")
+    + "\nproduces: [application/json]\ndefinitions:\n  Order:\n    enum: [{'$ref': 'https://example.invalid/value', enum: [1, 1]}]\n";
+  const {adapter} = await service({"app.js": entry, "api/swagger/swagger.yaml": spec});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints).toHaveLength(1);
+  expect(Object.values(result.schemas)[0]!.schema.enum).toEqual([{$ref: "https://example.invalid/value", enum: [1, 1]}]);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("external_ref");
+});

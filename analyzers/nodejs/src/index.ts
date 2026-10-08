@@ -23,7 +23,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.8.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.9.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -68,8 +68,8 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-6", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-13", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-14", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {

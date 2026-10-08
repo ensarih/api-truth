@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.8.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.9.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.13.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.14.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -419,3 +419,15 @@ without changing endpoint identity.
 
 These are document declarations. Runtime enforcement and normative constraint
 export remain gated; form patterns remain outside the supported form subset.
+
+
+### Schema positions and literal data (2026-10-08)
+
+Document `0.9.0` and middleware `0.14.0` distinguish enum/default/example data
+from schema declarations during inspection. An enum object may contain `$ref`,
+`enum` or `properties` keys without creating a reference or a nested constraint.
+The catalog likewise preserves enum/const JSON values without translating
+references inside them. Reference checks and duplicate-enum checks recurse only
+through actual schema positions, including compositions and dictionary schemas.
+Properties named `enum` or `default` still receive normal schema validation.
+No reference is fetched and no runtime or export authority is promoted.

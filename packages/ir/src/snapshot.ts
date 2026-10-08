@@ -96,30 +96,53 @@ const evidenceReference = (
   if (!evidenceIds.has(id)) issues.push(issue(`${path}/${index}`, "semantic.dangling_reference", "unknown evidence reference"));
 });
 
+// Traverse schema positions only. Enum/const values are JSON data, never schemas.
+const schemaChildren = (value: Record<string, unknown>): Array<[string, unknown]> => {
+  const children: Array<[string, unknown]> = [];
+  if (value.properties && typeof value.properties === "object" && !Array.isArray(value.properties))
+    for (const [key, child] of Object.entries(value.properties)) children.push([`properties/${jsonPointerSegment(key)}`, child]);
+  for (const key of ["items", "additionalProperties", "not"])
+    if (value[key] && typeof value[key] === "object" && !Array.isArray(value[key])) children.push([key, value[key]]);
+  for (const key of ["allOf", "anyOf", "oneOf", "prefixItems"])
+    if (Array.isArray(value[key])) value[key].forEach((child, index) => children.push([`${key}/${index}`, child]));
+  return children;
+};
+
 const collectSchemaRefs = (value: unknown, path: string, refs: Array<{ ref: string; path: string }>) => {
-  if (!value || typeof value !== "object") return;
-  if (Array.isArray(value)) {
-    value.forEach((child, index) => collectSchemaRefs(child, `${path}/${index}`, refs));
-    return;
-  }
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "$ref" && typeof child === "string") refs.push({ ref: child, path: `${path}/$ref` });
-    else collectSchemaRefs(child, `${path}/${key}`, refs);
-  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const schema = value as Record<string, unknown>;
+  if (typeof schema.$ref === "string") refs.push({ref: schema.$ref, path: `${path}/$ref`});
+  for (const [childPath, child] of schemaChildren(schema)) collectSchemaRefs(child, `${path}/${childPath}`, refs);
 };
 
 const jsonPointerSegment = (value: string): string => value.replaceAll("~", "~0").replaceAll("/", "~1");
 
 const translateComponentRefs = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(translateComponentRefs);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).map(([key, child]) => {
-    if (key === "$ref" && typeof child === "string" && child.startsWith("#/schemas/")) {
-      return [key, `#/$defs/${jsonPointerSegment(child.slice("#/schemas/".length))}`];
-    }
-    return [key, translateComponentRefs(child)];
-  }));
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const schema = value as Record<string, unknown>;
+  const output = {...schema};
+  if (typeof schema.$ref === "string" && schema.$ref.startsWith("#/schemas/"))
+    output.$ref = `#/$defs/${jsonPointerSegment(schema.$ref.slice("#/schemas/".length))}`;
+  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties))
+    output.properties = Object.fromEntries(Object.entries(schema.properties).map(([key, child]) => [key, translateComponentRefs(child)]));
+  for (const key of ["items", "additionalProperties", "not"])
+    if (schema[key] && typeof schema[key] === "object") output[key] = translateComponentRefs(schema[key]);
+  for (const key of ["allOf", "anyOf", "oneOf", "prefixItems"])
+    if (Array.isArray(schema[key])) output[key] = schema[key].map(translateComponentRefs);
+  return output;
 };
+
+const snapshotSchemaRoots = (snapshot: ContractSnapshot): Array<[string, unknown]> => [
+  ...Object.entries(snapshot.schemas).map(([id, component]): [string, unknown] => [`/schemas/${jsonPointerSegment(id)}/schema`, component.schema]),
+  ...snapshot.endpoints.flatMap((endpoint, i): Array<[string, unknown]> => [
+    ...endpoint.parameters.map((parameter, j): [string, unknown] => [`/endpoints/${i}/parameters/${j}/schema`, parameter.schema]),
+    ...endpoint.request_bodies.map((body, j): [string, unknown] => [`/endpoints/${i}/request_bodies/${j}/schema`, body.schema]),
+    ...endpoint.responses.flatMap((response, j): Array<[string, unknown]> => [
+      ...response.content.map((content, k): [string, unknown] => [`/endpoints/${i}/responses/${j}/content/${k}/schema`, content.schema]),
+      ...(response.headers ?? []).map((header, k): [string, unknown] => [`/endpoints/${i}/responses/${j}/headers/${k}/schema`, header.schema]),
+    ]),
+  ]),
+];
 
 const canonicalJson = (value: unknown): string => {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -133,14 +156,13 @@ const conditionKey = (condition: Claim["condition"]): string =>
   condition === undefined ? "<unconditional>" : canonicalJson(condition);
 
 const containsDuplicateEnum = (value: unknown): boolean => {
-  if (Array.isArray(value)) return value.some(containsDuplicateEnum);
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   if (Array.isArray(record.enum)) {
     const members = record.enum.map(canonicalJson);
     if (new Set(members).size !== members.length) return true;
   }
-  return Object.values(record).some(containsDuplicateEnum);
+  return schemaChildren(record).some(([, child]) => containsDuplicateEnum(child));
 };
 
 const embeddedSchemaIssues = (snapshot: ContractSnapshot): ValidationIssue[] => {
@@ -161,7 +183,7 @@ const embeddedSchemaIssues = (snapshot: ContractSnapshot): ValidationIssue[] => 
     $defs: definitions,
     ...(candidates.length > 0 ? { anyOf: candidates } : {}),
   };
-  if (containsDuplicateEnum(graph)) {
+  if (snapshotSchemaRoots(snapshot).some(([, schema]) => containsDuplicateEnum(schema))) {
     return [issue("/schemas", "semantic.invalid_api_schema", "embedded schema enum values must be unique")];
   }
   try {
@@ -444,8 +466,7 @@ export const validateContractSnapshotSemantics = (snapshot: ContractSnapshot): V
   }
 
   const refs: Array<{ ref: string; path: string }> = [];
-  collectSchemaRefs(snapshot.schemas, "/schemas", refs);
-  collectSchemaRefs(snapshot.endpoints, "/endpoints", refs);
+  for (const [path, schema] of snapshotSchemaRoots(snapshot)) collectSchemaRefs(schema, path, refs);
   refs.forEach(({ ref, path }) => {
     if (ref.startsWith("#/schemas/") && !schemaIds.has(ref.slice("#/schemas/".length))) {
       issues.push(issue(path, "semantic.dangling_reference", "unknown schema reference"));
