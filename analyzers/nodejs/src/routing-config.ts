@@ -86,10 +86,20 @@ export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, r
       const router = swagger.bagpipes[name];
       if (reserved.has(name) || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(name)
         || name.endsWith("\n") || name.endsWith("\r") || !object(router) || router.name !== "swagger_router" || !object(routerOverride)
-        || Object.keys(routerOverride).length !== 1 || !directories(routerOverride.controllersDirs))
+        || Object.keys(routerOverride).length === 0
+        || Object.keys(routerOverride).some(key => !["controllersDirs", "mockControllersDirs", "mockMode", "controllersInterface"].includes(key))
+        || routerOverride.controllersDirs !== undefined && !directories(routerOverride.controllersDirs)
+        || routerOverride.mockControllersDirs !== undefined && !directories(routerOverride.mockControllersDirs, true)
+        || routerOverride.mockMode !== undefined && typeof routerOverride.mockMode !== "boolean"
+        || routerOverride.controllersInterface !== undefined && routerOverride.controllersInterface !== "middleware")
         return fail("environment_layer_unsupported");
-      swagger = {...swagger, bagpipes: {...swagger.bagpipes, [name]: {...router, controllersDirs: routerOverride.controllersDirs}}};
-      overriddenPointers.add(`/swagger/bagpipes/${pointerPart(name)}/controllersDirs`);
+      swagger = {...swagger, bagpipes: {...swagger.bagpipes, [name]: {...router, ...routerOverride}}};
+      for (const [key, field] of Object.entries(routerOverride)) {
+        const pointer = `/swagger/bagpipes/${pointerPart(name)}/${key}`;
+        overriddenPointers.add(pointer);
+        locations.push({path: layer.path, pointer});
+        if (Array.isArray(field)) field.forEach((_, index) => locations.push({path: layer.path, pointer: `${pointer}/${index}`}));
+      }
     }
   }
   const allowed = new Set(["bagpipes", "swaggerControllerPipe", "defaultPipe", "fittingsDirs", "mockMode",

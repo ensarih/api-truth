@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.17.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.18.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -486,3 +486,23 @@ name and pipeline evidence points to the default file. Layer edits invalidate
 extraction while endpoint identity stays stable. An isolated runtime case proves
 directory-array replacement and the selected controller candidate. Host overrides,
 startup execution and authoritative handler binding remain unverified.
+
+
+### Environment router mock declarations (2026-10-08)
+
+Middleware `0.18.0` permits a selected environment file to override `mockMode`,
+`mockControllersDirs` and `controllersInterface` on one existing named
+`swagger_router`, alongside the previously supported controller-directory list.
+Mock mode must be boolean, mock directory lists must be bounded and contained
+(empty is supported), and the interface must be exactly `middleware`.
+Other fields and interfaces remain unresolved. Arrays replace their default
+values; scalar and array-element evidence points to the environment file.
+
+The pinned router enables mocks when either its own mockMode or the global
+mockMode is true. A global create option of false does not disable a router's
+true setting. Normal handler candidates are therefore withheld for either
+true setting, while document endpoints remain available. Two isolated runtime
+cases verify environment-selected mocks and disabling a default router mock
+setting. Source edits invalidate extraction without changing endpoint identity.
+No mock handler binding, effective deployment configuration or authoritative
+normal-handler binding is asserted.

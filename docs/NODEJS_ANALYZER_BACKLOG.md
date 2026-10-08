@@ -7,7 +7,7 @@ declarations with flat parameter serialization and scalar/flat-array form and mu
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.17.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.18.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -133,7 +133,7 @@ installation, network, database, log, or model access occurs.
 **Priority:** P0 when present in the pilot, otherwise P1
 **Adapter identity:** a distinct versioned `nodejs-swagger-express-mw` profile
 
-The middleware `0.17.0` profile recognizes one direct default-file registration, composes
+The middleware `0.18.0` profile recognizes one direct default-file registration, composes
 `basePath` under that policy, and records exact controller/operationId source
 candidates for bounded CommonJS exports. One strict static default JSON/YAML
 configuration can select a declared controller pipeline and contained
@@ -235,6 +235,11 @@ to IR 1.0 until explicit profile selection is implemented.
   Directory evidence comes from the selected layer; other fields retain their
   default-file evidence. A pinned runtime case verifies array replacement
   (19 runtime tests). Dynamic/broader overlays remain unresolved.
+- Implemented environment router mock declarations: middleware `0.18.0` also
+  supports boolean router mockMode, contained mockControllersDirs replacement,
+  and explicit middleware interface. Global or router mock true withholds normal
+  candidates; create mock false cannot cancel router mock true. Exact overlay
+  evidence and two pinned runtime cases cover this behavior (21 runtime tests).
 - Remaining: broader conformance and complete affecting transitive version policy,
   effective configuration, startup and module initialization before
   authoritative binding and handler-derived facts.

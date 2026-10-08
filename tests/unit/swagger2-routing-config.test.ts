@@ -182,7 +182,7 @@ test("environment controller directory arrays replace defaults with exact layer 
 
 test.each(["missing", "router"])("unsupported environment router overlays stay unresolved: %s", name => {
   for (const override of [{controllersDirs: ["../outside"]}, {controllersDirs: []}, {controllersDirs: "controllers"},
-    {controllersDirs: ["production/controllers"], name: "custom_router"}, {mockControllersDirs: []}]) {
+    {controllersDirs: ["production/controllers"], name: "custom_router"}, {mockControllersDirs: ["../outside"]}]) {
     const tree = files(configuration());
     tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {bagpipes: {[name]: override}}}));
     const result = resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined,
@@ -190,3 +190,40 @@ test.each(["missing", "router"])("unsupported environment router overlays stay u
     expect(result.kind).toBe("unresolved");
   }
 });
+
+test("environment router mock settings retain other fields and exact pointers", () => {
+  const tree = files(configuration());
+  tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {bagpipes: {router: {
+    mockMode: false, mockControllersDirs: ["production/mocks"], controllersInterface: "middleware",
+  }}}}));
+  const selection = {name: "production", location: {path: "package.json", pointer: "/scripts/start"}};
+  const result = resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined, selection);
+  expect(result).toMatchObject({kind: "supported", controller_dirs: ["custom/controllers"]});
+  expect(result.evidence_locations).toEqual(expect.arrayContaining([
+    {path: "config/production.json", pointer: "/swagger/bagpipes/router/mockMode"},
+    {path: "config/production.json", pointer: "/swagger/bagpipes/router/mockControllersDirs/0"},
+    {path: "config/production.json", pointer: "/swagger/bagpipes/router/controllersInterface"},
+    {path: "config/default.json", pointer: "/swagger/bagpipes/router/controllersDirs/0"},
+  ]));
+});
+
+test("router mock true cannot be disabled by a top-level create mock false", () => {
+  const tree = files(configuration());
+  tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {bagpipes: {router: {mockMode: true}}}}));
+  const result = resolveSwaggerRoutingConfiguration(tree, root, new Map(),
+    {value: false, location: {path: "app.js", pointer: "span:0:10"}},
+    {name: "production", location: {path: "package.json", pointer: "/scripts/start"}});
+  expect(result).toMatchObject({kind: "unresolved", reason: "mock_routing_unverified"});
+  expect(result.evidence_locations).toContainEqual({path: "config/production.json", pointer: "/swagger/bagpipes/router/mockMode"});
+});
+
+test.each([{mockMode: "private-marker"}, {mockControllersDirs: ["../outside"]},
+  {controllersInterface: "pipe"}, {controllersInterface: "private-marker"}, {name: "swagger_router"}])(
+  "unsupported router environment settings stay unresolved", override => {
+    const tree = files(configuration());
+    tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {bagpipes: {router: override}}}));
+    const result = resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined,
+      {name: "production", location: {path: "package.json", pointer: "/scripts/start"}});
+    expect(result.kind).toBe("unresolved");
+    expect(JSON.stringify(result)).not.toContain("private-marker");
+  });

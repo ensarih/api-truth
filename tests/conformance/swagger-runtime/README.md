@@ -102,3 +102,6 @@ process; npm startup execution and deployment environment are not certified.
 
 A production directory-override scenario verifies that the environment
 controllersDirs array replaces the default array (19 total tests).
+
+Two router mock-mode scenarios verify environment-selected mock directories,
+router/global OR behavior, and disabling default router mocks (21 total tests).
