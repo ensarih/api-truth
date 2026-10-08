@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.6.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.7.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -31,7 +31,7 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-The document `0.6.0` and middleware `0.11.0` profiles map flat primitive
+The document `0.7.0` and middleware `0.12.0` profiles map flat primitive
 parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.11.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.12.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -373,3 +373,28 @@ and reusable definitions use this conversion.
 These remain source declarations. The change does not establish runtime
 validation, conditional requiredness or export eligibility. Normative export of
 unverified dictionary constraints remains gated by the existing exporter policy.
+
+
+### Declared numeric and size limits
+
+Document `0.7.0` and middleware `0.12.0` preserve finite `minimum`/`maximum`
+declarations and nonnegative safe-integer `minLength`/`maxLength` and
+`minItems`/`maxItems` declarations. This applies to reusable and inline schemas,
+including nested arrays, compositions and dictionaries, and to query/path/header
+parameter schemas. Zero and fractional numeric bounds remain intact.
+
+Unsupported values are omitted with exact source-pointer diagnostics. Strict
+exclusive bounds cannot be represented by the current IR, so their associated
+bound is omitted with `schema_exclusive_bound_unsupported`; false exclusivity
+with a valid numeric bound preserves the equivalent inclusive declaration.
+Orphaned flags remain diagnosed. Conflicting minimum/maximum pairs are both
+omitted with `schema_bounds_conflict`. The independent opposite bound is retained
+when only one exclusive bound is unsupported.
+
+Schema `required` arrays must contain unique nonempty string names (an empty
+list is retained). Malformed lists are omitted with `schema_required_unsupported`
+instead of failing the complete extraction. These remain declarations with
+partial coverage; runtime validation, normative constraint export, form-field
+limit support and other constraint keywords remain gated. Limit edits invalidate
+extraction without changing endpoint identity. No export eligibility or handler
+facts are promoted by this change.

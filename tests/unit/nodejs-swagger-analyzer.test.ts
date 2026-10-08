@@ -301,3 +301,115 @@ test.each([["A/B", "#/definitions/A/B"], ["A~2B", "#/definitions/A~2B"], ["A~", 
   expect(result.diagnostics.map(item => item.code)).toContain("schema_ref_unsupported");
   expect(result.dependencies.filter(item => item.to.kind === "schema").map(item => item.to.id)).toEqual([order.schema_id]);
 });
+
+test("schema bounds preserve zero, fractional numeric bounds and nested size declarations", async () => {
+  const schema = {type: "object", properties: {
+    amount: {type: "number", minimum: 0, maximum: 10.5, exclusiveMinimum: false, exclusiveMaximum: false},
+    label: {type: "string", minLength: 0, maxLength: 12},
+    values: {type: "array", minItems: 0, maxItems: 4, items: {type: "integer", minimum: -2, maximum: 3}},
+  }};
+  const {adapter} = await service({...document, definitions: {Order: schema}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(Object.values(result.schemas)[0]!.schema).toEqual({type: "object", properties: {
+    amount: {type: "number", minimum: 0, maximum: 10.5}, label: {type: "string", minLength: 0, maxLength: 12},
+    values: {type: "array", minItems: 0, maxItems: 4, items: {type: "integer", minimum: -2, maximum: 3}},
+  }});
+  expect(result.diagnostics.map(item => item.code)).not.toContain("schema_keyword_unsupported");
+});
+
+test.each(["minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"])(
+  "malformed %s is omitted with a precise declaration diagnostic", async key => {
+    const {adapter} = await service({...document, definitions: {Order: {type: "object", [key]: "private-limit-marker"}}});
+    const result = await adapter.analyze(request());
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(Object.values(result.schemas)[0]!.schema).toEqual({type: "object"});
+    const diagnostic = result.diagnostics.find(item => item.code === "schema_bound_unsupported")!;
+    expect(result.evidence.filter(item => diagnostic.evidence_ids.includes(item.evidence_id)).map(item => item.location.pointer))
+      .toContain(`/definitions/Order/${key}`);
+    expect(JSON.stringify(result)).not.toContain("private-limit-marker");
+  });
+
+test.each([[-1], [1.5], [Number.MAX_SAFE_INTEGER + 1]])("invalid size limits stay unknown: %s", async value => {
+  const {adapter} = await service({...document, definitions: {Order: {type: "array", minItems: value}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(Object.values(result.schemas)[0]!.schema.minItems).toBeUndefined();
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_bound_unsupported");
+});
+
+test.each([["minimum", "maximum"], ["minLength", "maxLength"], ["minItems", "maxItems"]])(
+  "contradictory %s/%s declarations are diagnosed together", async (lower, upper) => {
+    const {adapter} = await service({...document, definitions: {Order: {[lower]: 5, [upper]: 2}}});
+    const result = await adapter.analyze(request());
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(Object.values(result.schemas)[0]!.schema).toEqual({});
+    expect(result.diagnostics.map(item => item.code)).toContain("schema_bounds_conflict");
+  });
+
+test.each([[true], ["false"], [null]])("exclusive or invalid bounds never become inclusive: %s", async exclusive => {
+  const {adapter} = await service({...document, definitions: {Order: {type: "number", minimum: 1, maximum: 9,
+    exclusiveMinimum: exclusive, exclusiveMaximum: exclusive}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(Object.values(result.schemas)[0]!.schema).toEqual({type: "number"});
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_exclusive_bound_unsupported");
+});
+
+test.each([["id", "id"], [""], [1], null, "id"].map(value => [value]))(
+  "malformed schema required list preserves routes with diagnostics: %j", async required => {
+    const {adapter} = await service({...document, definitions: {Order: {type: "object", required}}});
+    const result = await adapter.analyze(request());
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(result.endpoints).toHaveLength(1);
+    expect(Object.values(result.schemas)[0]!.schema.required).toBeUndefined();
+    expect(result.diagnostics.map(item => item.code)).toContain("schema_required_unsupported");
+  });
+
+test("query, path and header limits use the same declared-bound conversion", async () => {
+  const spec = {...document, paths: {"/orders/{id}": {get: {
+    parameters: [{name: "id", in: "path", required: true, type: "string", minLength: 1, maxLength: 40},
+      {name: "count", in: "query", type: "integer", minimum: 0, maximum: 100},
+      {name: "X-Tags", in: "header", type: "array", minItems: 1, maxItems: 5, items: {type: "string"}}],
+    responses: {"200": {description: "ok"}},
+  }}}};
+  const {adapter} = await service(spec);
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints[0]!.parameters.map(item => item.schema)).toEqual([
+    {type: "string", minLength: 1, maxLength: 40}, {type: "integer", minimum: 0, maximum: 100},
+    {type: "array", minItems: 1, maxItems: 5, items: {type: "string"}},
+  ]);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("parameter_keyword_unsupported");
+  expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+});
+
+test("one exclusive bound leaves the independent inclusive bound declared", async () => {
+  const {adapter} = await service({...document, definitions: {Order: {type: "number", minimum: 1, maximum: 9, exclusiveMinimum: true}}});
+  const result = await adapter.analyze(request());
+  expect(Object.values(result.schemas)[0]!.schema).toEqual({type: "number", maximum: 9});
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_exclusive_bound_unsupported");
+});
+
+test("standalone exclusivity flags and valid required lists remain explicit", async () => {
+  const {adapter} = await service({...document, definitions: {Order: {type: "object", required: ["id"],
+    exclusiveMinimum: false, properties: {id: {type: "string"}}}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(Object.values(result.schemas)[0]!.schema.required).toEqual(["id"]);
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_exclusive_bound_unsupported");
+});
+
+test("a declared limit edit invalidates extraction without changing endpoint identity", async () => {
+  const spec = {...document, definitions: {Order: {type: "number", minimum: 0, maximum: 9}}};
+  const {root, adapter} = await service(spec);
+  const first = await adapter.analyze(request());
+  spec.definitions.Order.maximum = 8;
+  await writeFile(join(root, "service/api/swagger/swagger.json"), JSON.stringify(spec));
+  const second = await adapter.analyze(request());
+  expect(parseAnalyzerResult(second).ok).toBe(true);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.endpoints[0]!.endpoint_id).toBe(first.endpoints[0]!.endpoint_id);
+  expect(Object.values(second.schemas)[0]!.schema.maximum).toBe(8);
+  expect(second.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(1);
+});

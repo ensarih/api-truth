@@ -459,3 +459,18 @@ test("middleware uses the shared composed-schema conversion and dependency trave
   expect(result.diagnostics.map(item => item.code)).not.toContain("schema_keyword_unsupported");
   expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
 });
+
+test("middleware preserves declared bounds and diagnoses malformed required lists", async () => {
+  const spec = document.replace("'200': { description: ok }", "'200': { description: ok, schema: { $ref: '#/definitions/Order' } }")
+    + "\nproduces: [application/json]\ndefinitions:\n  Order:\n    type: object\n    required: [id, id]\n    properties:\n      id: { type: string, minLength: 1, maxLength: 40 }\n      count: { type: integer, minimum: 0, maximum: 100 }\n";
+  const {adapter} = await service({"app.js": entry, "api/swagger/swagger.yaml": spec});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints).toHaveLength(1);
+  const schema = Object.values(result.schemas)[0]!.schema;
+  expect(schema.required).toBeUndefined();
+  expect(schema.properties?.id).toEqual({type: "string", minLength: 1, maxLength: 40});
+  expect(schema.properties?.count).toEqual({type: "integer", minimum: 0, maximum: 100});
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_required_unsupported");
+  expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+});

@@ -4,6 +4,7 @@ import {
   deriveEndpointIdentity, parseAnalyzerRequest, parseAnalyzerResult,
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
+import { declaredSchemaBounds, schemaBoundFields } from "./schema-bounds.js";
 import { readSelectedDocument } from "./source.js";
 import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
@@ -21,7 +22,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.6.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.7.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -66,8 +67,8 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-4", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-11", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-5", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-12", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -313,7 +314,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       if (!id) { diagnostic("schema_ref_unsupported", `${pointer}/$ref`); return {}; }
       return { $ref: `#/schemas/${id}` };
     }
-    const output: ApiSchema = {};
+    const output: ApiSchema = declaredSchemaBounds(input, pointer, diagnostic);
     if (typeof input.type === "string" && ["string", "integer", "number", "boolean", "object", "array", "null"].includes(input.type))
       output.type = input.type as NonNullable<ApiSchema["type"]>;
     else if (input.type !== undefined) diagnostic("schema_type_unsupported", `${pointer}/type`);
@@ -321,7 +322,11 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     else if (input.format !== undefined) diagnostic("schema_format_unsupported", `${pointer}/format`);
     if (typeof input.title === "string") output.title = input.title;
     if (typeof input.description === "string") output.description = input.description;
-    if (Array.isArray(input.required) && input.required.every(item => typeof item === "string")) output.required = input.required as string[];
+    if (input.required !== undefined) {
+      if (Array.isArray(input.required) && input.required.every(item => typeof item === "string" && item.length > 0)
+        && new Set(input.required).size === input.required.length) output.required = input.required as string[];
+      else diagnostic("schema_required_unsupported", `${pointer}/required`);
+    }
     if (Array.isArray(input.enum) && input.enum.length) output.enum = input.enum as NonNullable<ApiSchema["enum"]>;
     if (input.properties && typeof input.properties === "object" && !Array.isArray(input.properties))
       output.properties = Object.fromEntries(Object.entries(input.properties).sort(([a], [b]) => a.localeCompare(b))
@@ -339,7 +344,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         output.additionalProperties = convertSchema(input.additionalProperties, `${pointer}/additionalProperties`, depth + 1);
       else diagnostic("schema_additional_properties_unsupported", `${pointer}/additionalProperties`);
     }
-    for (const key of Object.keys(input)) if (!["type", "format", "description", "required", "enum", "properties", "items", "title", "allOf", "additionalProperties"].includes(key))
+    for (const key of Object.keys(input)) if (!["type", "format", "description", "required", "enum", "properties", "items", "title", "allOf", "additionalProperties", ...schemaBoundFields].includes(key))
       diagnostic("schema_keyword_unsupported", `${pointer}/${pointerPart(key)}`);
     return output;
   };
@@ -393,9 +398,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       const paramEv = evidence(parameter.pointer, endpointId);
       const presence = declaredPresence(parameter);
       if (presence === "unknown") diagnostic("parameter_presence_unresolved", `${parameter.pointer}/required`, "warning", endpointId);
-      const parameterSchema = parameter.schema ?? Object.fromEntries(["type", "format", "description", "items", "enum"]
+      const parameterSchema = parameter.schema ?? Object.fromEntries(["type", "format", "description", "items", "enum", ...schemaBoundFields]
         .filter(key => parameter[key] !== undefined).map(key => [key, parameter[key]]));
-      for (const key of Object.keys(parameter)) if (!["name", "in", "pointer", "required", "schema", "type", "format", "description", "items", "enum", "collectionFormat", "allowEmptyValue"].includes(key))
+      for (const key of Object.keys(parameter)) if (!["name", "in", "pointer", "required", "schema", "type", "format", "description", "items", "enum", "collectionFormat", "allowEmptyValue", ...schemaBoundFields].includes(key))
         diagnostic("parameter_keyword_unsupported", `${parameter.pointer}/${pointerPart(key)}`, "warning", endpointId);
       const serialization = parameterSerialization(parameter);
       if (!serialization) diagnostic("parameter_serialization_unresolved", parameter.pointer, "warning", endpointId);
