@@ -1,0 +1,86 @@
+# Pinned Swagger runtime conformance
+
+This isolated test package runs synthetic services against the actual legacy
+framework. It is outside the workspace dependency graph; its dependencies are
+not used by the analyzer, portal, or normal offline tests.
+
+## Run locally
+
+From the repository root, using Node 24.6.0 and npm 11.5.1:
+
+```sh
+npm ci
+npm --prefix tests/conformance/swagger-runtime ci --ignore-scripts --no-audit --no-fund
+npm --prefix tests/conformance/swagger-runtime rebuild node --foreground-scripts
+npm run test:swagger:runtime
+```
+
+Installation needs the npm registry. General dependency lifecycle scripts are
+disabled; only the pinned `node` package is rebuilt to install its platform
+binary. After setup, scenarios use local modules and loopback HTTP only. The
+harness never scans branches, loads enterprise handlers, reads logs, or calls
+models. The default `npm run check` remains separate; CI runs conformance in
+its own job.
+
+## Tested versions
+
+| Part | Pin |
+|---|---|
+| Analyzer/test driver | Node 24.6.0 |
+| Legacy fixture runtime | Node 22.19.0 |
+| swagger-express-mw | 0.7.0 |
+| swagger-node-runner loaded by wrapper | 0.7.0 |
+| Express | 4.13.3 |
+| Runner's bagpipes | 0.1.2 |
+| Runner's config | 1.31.0 |
+| Runner's sway | 1.0.0 |
+
+All framework dependencies have a separate checked-in npm lockfile. Tests
+assert the versions actually resolved from the wrapper and runner, including
+key transitive packages. The Node runtime package pins the platform binary's
+version; each scenario verifies it. Local validation uses macOS arm64; CI adds
+Linux validation. Other Node, framework, dependency, and platform combinations
+are not certified by this fixture.
+
+A negative test records that the unmodified pinned config stack fails on
+Node 24 because its `util.isRegExp` dependency is absent. No compatibility shim
+or dependency patch is used to hide that failure.
+
+## Behavior checked
+
+Ten tests cover the default controller directory and basePath; operation-level
+override of a path controller; a configured directory; first-directory
+precedence; fallback when a first controller throws during initialization;
+missing modules and exports; explicit mock mode; an environment override to
+mock mode; and the Node 24 incompatibility.
+
+Each behavior scenario starts a fresh child process, constructs only known
+synthetic files in a temporary directory, and binds an ephemeral port on
+`127.0.0.1`. The scenario closes its server and removes its temporary service. The parent
+also owns and removes a per-case temporary sandbox, including after child
+failure or timeout.
+Framework caches cannot carry across cases. Child environment input is bounded;
+one scenario deliberately sets `swagger_mockMode` to exercise precedence.
+
+The driver calls framework `create`/`register` directly; the synthetic `app.js`
+is a source input for analysis, not a production startup proof.
+
+The same synthetic tree is analyzed separately with Node 24. Analyzer assertions
+check candidate paths and diagnostics, incomplete coverage, and the absence of
+`handler.binding`. In particular, the runtime can choose the first of two
+controllers while the analyzer conservatively reports ambiguity; environment
+configuration can select a mock while the source candidate remains a normal
+controller. Neither case is promoted to a verified binding.
+
+## Remaining binding gates
+
+This suite proves the listed behavior for this locked fixture. It does not
+establish the deployed entrypoint, effective environment/configuration,
+installed artifacts, arbitrary controller initialization, all transitive
+semantics, or handler-derived contract authority for a scanned service.
+Those gates remain in NB4. Future binding profiles must declare their tested
+version/runtime range and reject or diagnose cases outside it.
+
+Upstream semantics references: [wrapper entrypoint](https://github.com/apigee-127/swagger-express/blob/v0.7.0/lib/index.js),
+[runner configuration and pipe selection](https://github.com/apigee-127/swagger-node-runner/blob/v0.7.0/index.js),
+[controller router](https://github.com/apigee-127/swagger-node-runner/blob/v0.7.0/fittings/swagger_router.js).

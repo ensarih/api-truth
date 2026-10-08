@@ -41,3 +41,23 @@ jobs:
       - name: Stop isolated PostgreSQL
         if: always()
         run: npm run test:env:down
+
+  swagger-runtime-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tests/conformance/swagger-runtime/package-lock.json
+      - run: npm ci
+      - name: Install isolated locked framework fixtures
+        run: npm --prefix tests/conformance/swagger-runtime ci --ignore-scripts --no-audit --no-fund
+      - name: Install pinned fixture Node runtime
+        run: npm --prefix tests/conformance/swagger-runtime rebuild node --foreground-scripts
+      - name: Check runtime behavior and analyzer boundaries
+        run: npm run test:swagger:runtime

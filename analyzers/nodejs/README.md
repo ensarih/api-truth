@@ -251,3 +251,15 @@ candidates remain inferred and gain no handler-derived facts or dependencies.
 The wrapper delegates to the runner, so wrapper version alone is insufficient:
 see the tagged [wrapper source](https://github.com/apigee-127/swagger-express/blob/v0.7.0/lib/index.js)
 and [runner manifest](https://github.com/apigee-127/swagger-node-runner/blob/v0.7.0/package.json).
+
+
+### Runtime conformance fixture
+
+The separate [runtime harness](../../tests/conformance/swagger-runtime/README.md)
+tests the `0.7.0` wrapper/runner pair and its locked dependency tree against
+synthetic services. It checks directory/controller selection, initialization
+fallback, missing handlers, mocks and environment overrides. The legacy stack
+runs on pinned Node 22.19.0; analysis remains on Node 24.6.0. A negative test
+records the legacy stack's Node 24 failure. These behavior tests do not qualify
+installed artifacts or effective runtime configuration of a scanned service;
+handler candidates remain inferred.

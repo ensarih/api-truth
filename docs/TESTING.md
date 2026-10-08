@@ -192,3 +192,14 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
 The D04 offline scaffold and PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, D07 update/difference core, D08 event/worker orchestration, D09 environment lifecycle, D10 validated OpenAPI compilation/publication, and D11 shared query/portal/MCP are implemented. Real-browser and PostgreSQL cross-surface tests cover D11's acceptance boundary. D12 provider wiring and the complete D13 Phase 1 release scenario remain open. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance is pending. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, update contracts and limitations in `packages/updates/README.md`, orchestration capabilities in `packages/orchestration/README.md`, D09 behavior in `packages/environment/README.md`, and D10 behavior in `packages/openapi/README.md`.
+
+
+## Pinned Swagger framework behavior
+
+The isolated [Swagger runtime conformance package](../tests/conformance/swagger-runtime/README.md)
+exercises real framework routing with synthetic services and compares the
+analyzer's conservative candidate results. Setup installs its own locked
+framework dependencies and Node 22.19.0 fixture binary; the analyzer and normal
+checks keep Node 24.6.0. Run `npm run test:swagger:runtime` after the documented
+setup. This is a separate local and CI suite, not part of `npm run check`.
+No scanned service code is executed by extraction.

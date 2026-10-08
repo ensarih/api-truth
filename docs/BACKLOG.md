@@ -170,3 +170,15 @@ analysis; handler candidates carry limited lock evidence. The initial
 `0.7.0`/`0.7.0` conformance target remains uncertified. Runtime configuration,
 transitive behavior, installed-module identity, startup and authoritative
 handler binding are still pending in NB4.
+
+
+### Middleware runtime behavior prerequisite — 2026-10-08
+
+Ten isolated framework conformance tests now exercise synthetic routing on a
+pinned Node 22.19.0 runtime with wrapper/runner 0.7.0, Express 4.13.3 and locked
+transitive dependencies. The analyzer remains on Node 24.6.0. Tests retain
+ambiguity and environment overrides as binding gaps; the negative Node 24
+fixture records a real legacy compatibility failure. This is a separate CI job
+and local command, `npm run test:swagger:runtime`, after the
+[documented setup](../tests/conformance/swagger-runtime/README.md).
+Authoritative scanned-service handler binding remains pending in NB4.

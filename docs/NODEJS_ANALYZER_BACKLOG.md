@@ -178,8 +178,14 @@ to IR 1.0 until explicit profile selection is implemented.
   declarations, exact evidence pointers, source invalidation, and an explicitly
   uncertified `0.7.0`/`0.7.0` conformance target. Missing/unsupported versions
   remain diagnosed; no candidate promotion or installed/runtime proof occurs.
-- Remaining: conformance fixtures for runner behavior, affecting transitive
-  versions, effective configuration, startup and module initialization before
+- Implemented behavior prerequisite: an isolated wrapper/runner `0.7.0` pair,
+  Express `4.13.3`, Node `22.19.0` and a locked transitive tree. Ten conformance
+  tests cover controller/pipe-related selection, directory precedence and
+  initialization fallback, missing handlers, mock/environment behavior and
+  Node 24 incompatibility. Static analysis stays on Node 24 and candidates
+  remain inferred. See the [runtime harness](../tests/conformance/swagger-runtime/README.md).
+- Remaining: broader conformance and affecting transitive version policy,
+  effective configuration, startup and module initialization before
   authoritative binding and handler-derived facts.
 - Resolve handlers only through documented middleware/version semantics. The
   first profile must require an exact controller mapping plus `operationId`.
