@@ -162,3 +162,73 @@ test("const handlers cannot be exported before their initialization", () => {
   expect(resolver('exports.getOrder = read; const read = () => {};')("orders", "getOrder"))
     .toMatchObject({kind: "unresolved", code: "handler_initialization_unverified"});
 });
+
+const localModules = (controller: string, modules: Record<string, string>) => new Map([
+  [resolve(root, "package.json"), '{"type":"commonjs"}'],
+  [resolve(root, "api/controllers/orders.js"), controller],
+  ...Object.entries(modules).map(([path, source]) => [resolve(root, path), source] as [string, string]),
+]);
+const withLocal = 'const helper = require("./helper"); exports.getOrder = function(req, res) { helper.read(req, res); };';
+test("contained literal CommonJS imports carry initialization source evidence", () => {
+  const files = localModules(withLocal, {
+    "api/controllers/helper.js": 'const leaf = require("../helpers/leaf.cjs"); exports.read = function() { leaf.read(); };',
+    "api/helpers/leaf.cjs": 'exports.read = function() {};',
+  });
+  const result = createHandlerCandidateResolver(files, root)("orders", "getOrder");
+  expect(result).toMatchObject({kind: "candidate", initialization_sources: [
+    {path: "api/controllers/helper.js", package_scope: "package.json"}, {path: "api/helpers/leaf.cjs"},
+  ]});
+});
+test.each(["throw", "cycle", "missing", "esm", "shadow", "alternative", "external", "dynamic", "escape"])(
+  "local initialization %s cannot qualify a candidate", mode => {
+    let controller = withLocal;
+    const modules: Record<string, string> = {"api/controllers/helper.js": 'exports.read = function() {};'};
+    if (mode === "throw") modules["api/controllers/helper.js"] = 'throw new Error("private-import-marker"); exports.read = function() {};';
+    if (mode === "cycle") modules["api/controllers/helper.js"] = 'const root = require("./orders"); exports.read = function() {};';
+    if (mode === "missing") delete modules["api/controllers/helper.js"];
+    if (mode === "esm") modules["api/controllers/package.json"] = '{"type":"module"}';
+    if (mode === "shadow") controller = 'const require = () => {}; ' + controller;
+    if (mode === "alternative") modules["api/controllers/helper.json"] = '{}';
+    if (mode === "external") controller = controller.replace('./helper', 'external-library');
+    if (mode === "dynamic") controller = controller.replace('"./helper"', 'lookup()');
+    if (mode === "escape") controller = controller.replace('./helper', '../../../outside');
+    const result = createHandlerCandidateResolver(localModules(controller, modules), root)("orders", "getOrder");
+    expect(result.kind).toBe("unresolved");
+    expect(JSON.stringify(result)).not.toContain("private-import-marker");
+  });
+test("local imports respect shared depth and byte limits", () => {
+  const modules: Record<string, string> = {};
+  for (let i = 0; i < 12; i++) modules[`api/controllers/leaf${i}.js`] =
+    `const next = require("./leaf${i + 1}"); exports.read = function() {};`;
+  expect(createHandlerCandidateResolver(localModules(withLocal.replace('./helper', './leaf0'), modules), root)("orders", "getOrder"))
+    .toMatchObject({kind: "unresolved", code: "handler_source_limit_exceeded"});
+  const large = {"api/controllers/helper.js": `/*${"x".repeat(999_950)}*/ exports.read = function() {};`};
+  expect(createHandlerCandidateResolver(localModules(withLocal, large), root)("orders", "getOrder"))
+    .toMatchObject({kind: "unresolved", code: "handler_source_limit_exceeded"});
+});
+
+test("repeated local imports produce one deterministic initialization source", () => {
+  const source = 'const first = require("./helper"); const second = require("./helper"); exports.getOrder = function() {};';
+  const lookup = createHandlerCandidateResolver(localModules(source, {"api/controllers/helper.js": 'exports.read = function() {};'}), root);
+  const first = lookup("orders", "getOrder");
+  expect(first).toMatchObject({kind: "candidate", initialization_sources: [{path: "api/controllers/helper.js", package_scope: "package.json"}]});
+  expect(lookup("orders", "getOrder")).toEqual(first);
+});
+test("a child module's nearest package scope controls eligibility", () => {
+  const files = localModules(withLocal.replace('./helper', '../helpers/helper'), {
+    "api/helpers/helper.js": 'exports.read = function() {};', "api/helpers/package.json": '{"type":"module"}',
+  });
+  expect(createHandlerCandidateResolver(files, root)("orders", "getOrder"))
+    .toMatchObject({kind: "unresolved", code: "handler_module_format_unverified"});
+});
+test("the local initialization graph enforces its shared module count", () => {
+  const modules: Record<string, string> = {};
+  const imports: string[] = [];
+  for (let i = 0; i < 32; i++) {
+    modules[`api/controllers/helper${i}.js`] = 'exports.read = function() {};';
+    imports.push(`const value${i} = require("./helper${i}");`);
+  }
+  const source = imports.join('\n') + ' exports.getOrder = function() {};';
+  expect(createHandlerCandidateResolver(localModules(source, modules), root)("orders", "getOrder"))
+    .toMatchObject({kind: "unresolved", code: "handler_source_limit_exceeded"});
+});

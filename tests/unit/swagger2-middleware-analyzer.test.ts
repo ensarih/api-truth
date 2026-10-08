@@ -418,3 +418,30 @@ test("opaque controller initialization preserves the route and invalidates the p
   expect(second.status).toBe("partial");
   expect(JSON.stringify(second)).not.toContain("private-init-marker");
 });
+
+test("local initialization imports carry limited evidence and helper edits invalidate candidates", async () => {
+  const {root, adapter} = await service({"app.js": entry, "package.json": '{"type":"commonjs"}',
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "api/controllers/orders.js": 'const helper = require("./helper"); exports.getOrder = function(req, res) { helper.read(req, res); };',
+    "api/controllers/helper.js": 'exports.read = function(req, res) { res.status(201).json({value: true}); };'});
+  const first = await adapter.analyze(request());
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  const candidate = first.claims.find(item => item.predicate === "handler.candidate")!;
+  expect(candidate.verification).toBe("inferred");
+  const helperEvidence = first.evidence.find(item => item.location.path === "api/controllers/helper.js"
+    && item.scope.endpoint_id === first.endpoints[0]!.endpoint_id)!;
+  expect(candidate.evidence_ids).toContain(helperEvidence.evidence_id);
+  expect(helperEvidence.limitations).toContain("bounded local initialization syntax only; module execution and runtime binding unverified");
+  expect(first.dependencies.some(item => item.evidence_ids.includes(helperEvidence.evidence_id))).toBe(false);
+  expect(first.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  expect(first.endpoints[0]!.responses.map(item => item.status)).toEqual([{kind: "exact", code: 200}]);
+  expect((await adapter.analyze(request())).reproducibility_fingerprint).toBe(first.reproducibility_fingerprint);
+  await writeFile(join(root, "service/api/controllers/helper.js"), 'throw new Error("private-import-marker"); exports.read = function() {};');
+  const second = await adapter.analyze(request());
+  expect(parseAnalyzerResult(second).ok).toBe(true);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.endpoints.map(item => item.application_path)).toEqual(["/api/v1/orders/{id}"]);
+  expect(second.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+  expect(second.diagnostics.map(item => item.code)).toContain("handler_initialization_unverified");
+  expect(JSON.stringify(second)).not.toContain("private-import-marker");
+});

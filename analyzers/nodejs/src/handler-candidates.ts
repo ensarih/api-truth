@@ -5,6 +5,7 @@ import { parseStrictJson } from "./strict-json.js";
 
 export type HandlerCandidate = {
   kind: "candidate"; path: string; line: number; span: string; export_name: string; controller_directory: string; package_scope?: string;
+  initialization_sources?: Array<{path: string; package_scope?: string}>;
 };
 type UnresolvedCandidate = { kind: "unresolved"; code: string };
 export type HandlerCandidateResolution = HandlerCandidate | UnresolvedCandidate;
@@ -18,8 +19,8 @@ const functionValue = (node: ts.Node): node is ts.FunctionExpression | ts.ArrowF
 
 /** Source candidates under a static declared directory profile; no module loading or runtime binding. */
 export function createHandlerCandidateResolver(files: Map<string, string>, root: string,
-  configuration: RoutingConfiguration = resolveSwaggerRoutingConfiguration(files, root)): HandlerCandidateResolver {
-  const cache = new Map<string, ReturnType<typeof inspectModule>>();
+  configuration: RoutingConfiguration = resolveSwaggerRoutingConfiguration(files, root),
+  budget: () => void = () => {}): HandlerCandidateResolver {
   const packageScopes = new Map<string, string | UnresolvedCandidate>();
   return (controller, operationId) => {
     if (!/^[A-Za-z0-9_-]+(?:\.(?:js|cjs))?$/.test(controller) || reserved.has(controller)
@@ -51,18 +52,59 @@ export function createHandlerCandidateResolver(files: Map<string, string>, root:
       if (typeof scope !== "string") return scope;
       packageScope = scope;
     }
-    let inspected = cache.get(path);
-    if (!inspected) {
-      inspected = inspectModule(path, text);
-      cache.set(path, inspected);
-    }
+    const loaded = new Map<string, {module: ReturnType<typeof inspectModule>; package_scope?: string}>();
+    const visiting = new Set<string>();
+    let bytes = 0;
+    const inspectGraph = (absolute: string, depth: number): ReturnType<typeof inspectModule> => {
+      budget();
+      if (visiting.has(absolute)) return unresolved("handler_initialization_unverified");
+      const cached = loaded.get(absolute);
+      if (cached) return cached.module;
+      if (depth > 8 || loaded.size + visiting.size >= 32) return unresolved("handler_source_limit_exceeded");
+      const source = files.get(absolute);
+      if (source === undefined) return unresolved("handler_initialization_unverified");
+      bytes += Buffer.byteLength(source);
+      if (bytes > 1_000_000) return unresolved("handler_source_limit_exceeded");
+      let scope: string | undefined;
+      if (absolute.endsWith(".js")) {
+        const resolvedScope = findCommonJsScope(files, root, dirname(absolute));
+        if (typeof resolvedScope !== "string") return resolvedScope;
+        scope = resolvedScope;
+      }
+      visiting.add(absolute);
+      let failure: UnresolvedCandidate | undefined;
+      const module = inspectModule(absolute, source, node => {
+        if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression) || node.expression.text !== "require"
+          || node.arguments.length !== 1 || !ts.isStringLiteral(node.arguments[0]!)) return false;
+        const spec = node.arguments[0]!.text;
+        if (!/^(?:\.\.?\/)(?:[A-Za-z0-9_$-]+\/)*[A-Za-z0-9_$-]+(?:\.(?:js|cjs))?$/.test(spec)) return false;
+        const extension = /\.(?:js|cjs)$/.test(spec);
+        const base = resolve(dirname(absolute), spec);
+        const relativeBase = relative(root, base);
+        if (relativeBase === ".." || relativeBase.startsWith("../") || relativeBase.startsWith("..\\")) return false;
+        if (!extension && [`${base}.json`, `${base}/package.json`, `${base}/index.js`, `${base}/index.json`]
+          .some(alternative => files.has(alternative))) return false;
+        const child = inspectGraph(extension ? base : `${base}.js`, depth + 1);
+        if (child.kind === "unresolved") { failure = child; return false; }
+        return true;
+      }, budget);
+      visiting.delete(absolute);
+      const result = failure ?? module;
+      loaded.set(absolute, {module: result, ...(scope ? {package_scope: scope} : {})});
+      return result;
+    };
+    const inspected = inspectGraph(path, 0);
     if (inspected.kind === "unresolved") return inspected;
     const node = inspected.exports.get(operationId);
     if (!node) return unresolved("handler_export_unresolved");
     return { kind: "candidate", path: relative(root, path).replaceAll("\\", "/"),
       line: inspected.source.getLineAndCharacterOfPosition(node.getStart()).line + 1,
       span: `span:${node.getStart()}:${node.getEnd()}`, export_name: operationId, controller_directory: directory,
-      ...(packageScope ? { package_scope: packageScope } : {}) };
+      ...(packageScope ? { package_scope: packageScope } : {}),
+      ...(loaded.size > 1 ? {initialization_sources: [...loaded].filter(([absolute]) => absolute !== path)
+        .map(([absolute, item]) => ({path: relative(root, absolute).replaceAll("\\", "/"),
+          ...(item.package_scope ? {package_scope: item.package_scope} : {})}))
+        .sort((a, b) => a.path.localeCompare(b.path))} : {}) };
   };
 }
 
@@ -86,7 +128,8 @@ function findCommonJsScope(files: Map<string, string>, root: string, directory: 
   return unresolved("handler_module_format_unverified");
 }
 
-function inspectModule(path: string, text: string):
+function inspectModule(path: string, text: string, localRequire: (node: ts.Expression) => boolean = () => false,
+  budget: () => void = () => {}):
   | { kind: "module"; source: ts.SourceFile; exports: Map<string, ts.Node> }
   | { kind: "unresolved"; code: string } {
   if (Buffer.byteLength(text) > 1_000_000) return { kind: "unresolved", code: "handler_source_limit_exceeded" };
@@ -162,6 +205,7 @@ function inspectModule(path: string, text: string):
     let nodes = 0;
     while (stack.length) {
       const node = stack.pop()!;
+      if (nodes % 512 === 0) budget();
       if (++nodes > 50_000) return { kind: "unresolved", code: "handler_source_limit_exceeded" };
       if (ts.isIdentifier(node) && (node.text === "module" || node.text === "exports")
         && !allowedExportIdentifiers.has(node)) return { kind: "unresolved", code: "handler_export_unresolved" };
@@ -211,7 +255,8 @@ function inspectModule(path: string, text: string):
       if (exportStatements.has(statement)) continue;
       if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
         && statement.declarationList.declarations.every(declaration => ts.isIdentifier(declaration.name)
-          && declaration.initializer && inert(declaration.initializer))) continue;
+          && declaration.initializer && (inert(declaration.initializer)
+            || !symbols.has("require") && !written.has("require") && localRequire(declaration.initializer)))) continue;
       return unresolved("handler_initialization_unverified");
     }
     if ([...exportedValues.values()].some(value => !referenceInitialized(value)))

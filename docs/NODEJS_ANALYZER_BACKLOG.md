@@ -7,7 +7,7 @@ declarations with flat parameter serialization and scalar/flat-array form and mu
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.9.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.10.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -133,7 +133,7 @@ installation, network, database, log, or model access occurs.
 **Priority:** P0 when present in the pilot, otherwise P1
 **Adapter identity:** a distinct versioned `nodejs-swagger-express-mw` profile
 
-The middleware `0.9.0` profile recognizes one direct default-file registration, composes
+The middleware `0.10.0` profile recognizes one direct default-file registration, composes
 `basePath` under that policy, and records exact controller/operationId source
 candidates for bounded CommonJS exports. One strict static default JSON/YAML
 configuration can select a declared controller pipeline and contained
@@ -146,7 +146,7 @@ Candidates carry Swagger, source, configuration and contained package-scope
 evidence, remain inferred, and add no handler-derived contract facts or
 dependencies. Environment overrides, effective configuration, framework version
 and startup are still unverified. This slice does not complete the
-handler-binding or framework-version conformance gate below. The document `0.5.0` and middleware `0.9.0` profiles
+handler-binding or framework-version conformance gate below. The document `0.5.0` and middleware `0.10.0` profiles
 also preserve flat parameter collection formats and aggregate bounded scalar
 formData/file declarations per consumes media, with exact field/media evidence.
 Tabs, nested arrays, unsupported form constraints, URL-encoded files, malformed or
@@ -198,6 +198,11 @@ to IR 1.0 until explicit profile selection is implemented.
   opaque controller initialization and exports before const initialization.
   Literal/function-only source remains inferred; no execution proof is emitted.
   A twelfth pinned runtime test covers one failing controller with a valid export.
+- Implemented local initialization sources: profile `0.10.0` follows bounded
+  literal relative CommonJS imports under the syntax guard, records limited
+  source/scope evidence, and diagnoses missing/cyclic/opaque/external imports.
+  Helper edits invalidate candidates; two additional runtime cases cover working
+  and failing helper imports (14 runtime tests). No runtime binding is inferred.
 - Remaining: broader conformance and complete affecting transitive version policy,
   effective configuration, startup and module initialization before
   authoritative binding and handler-derived facts.

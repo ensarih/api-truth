@@ -48,7 +48,7 @@ or dependency patch is used to hide that failure.
 
 ## Behavior checked
 
-Twelve tests cover the default controller directory and basePath; operation-level
+Fourteen tests cover the default controller directory and basePath; operation-level
 override of a path controller; a configured directory; first-directory
 precedence; fallback when a first controller throws during initialization;
 missing modules and exports; explicit mock mode; an environment override to
@@ -88,3 +88,6 @@ Upstream semantics references: [wrapper entrypoint](https://github.com/apigee-12
 
 A single controller that throws before exporting a valid handler returns a runtime failure;
 the analyzer preserves its documented route and withholds the source candidate.
+
+Working and throwing local helper imports validate the bounded source graph policy
+against the pinned framework while preserving inferred candidate authority.

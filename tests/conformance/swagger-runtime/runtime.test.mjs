@@ -28,6 +28,8 @@ const cases = [
   ["directory-precedence", 200, "first"],
   ["initialization-fallback", 200, "second"],
   ["single-initialization-failure", 500, undefined],
+  ["local-import", 200, "local"],
+  ["local-import-failure", 500, undefined],
   ["missing-controller", 500, undefined],
   ["missing-export", 500, undefined],
   ["mock-mode", 200, "mock"],
@@ -51,7 +53,11 @@ for (const [scenario, status, marker] of cases) {
     }
     if (scenario === "operation-override") assert.equal(result.analysis.candidatePath, "api/controllers/alternate.js");
     if (scenario === "configured-directory") assert.equal(result.analysis.candidatePath, "custom/controllers/orders.js");
-    if (scenario === "single-initialization-failure") {
+    if (scenario === "local-import") {
+      assert.equal(result.analysis.candidatePath, "api/controllers/orders.js");
+      assert.deepEqual(result.analysis.initializationSources, ["api/helpers/reader.cjs"]);
+    }
+    if (["single-initialization-failure", "local-import-failure"].includes(scenario)) {
       assert.equal(result.analysis.candidatePath, undefined);
       assert.ok(result.analysis.diagnostics.includes("handler_initialization_unverified"));
     }

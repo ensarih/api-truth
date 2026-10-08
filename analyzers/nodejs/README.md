@@ -31,7 +31,7 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-The document `0.5.0` and middleware `0.9.0` profiles map flat primitive
+The document `0.5.0` and middleware `0.10.0` profiles map flat primitive
 parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.9.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.10.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -313,7 +313,7 @@ handler-derived facts and dependencies still require authoritative binding.
 
 ### Controller initialization guard
 
-Middleware `0.9.0` withholds a source handler candidate with
+The guard introduced in middleware `0.9.0` withholds a source handler candidate with
 `handler_initialization_unverified` when the controller contains opaque top-level
 initialization: calls/imported dependencies, throws, control flow, classes,
 property reads, computed object keys or spreads. The bounded syntax subset allows
@@ -329,3 +329,24 @@ not certify JavaScript execution, runtime globals, imported dependencies or
 production startup. Accepted candidates remain inferred. Unresolved candidates
 leave document-derived routes available with partial coverage. A controller edit
 invalidates extraction, and diagnostic output contains no exception/source text.
+
+
+### Local CommonJS initialization sources
+
+Middleware `0.10.0` extends the initialization guard to top-level const
+initializers using an unshadowed `require` with one literal relative path.
+Contained `.js` and `.cjs` files are inspected recursively using the same bounded
+syntax policy. Extensionless paths select a contained `.js` file only; competing
+JSON/directory forms stay unresolved. Paths outside the service, external
+packages, dynamic calls, import cycles, incompatible nearest package scopes and
+opaque initialization withhold the candidate. No service module is executed.
+
+The graph is limited to 32 source files including the controller, 8 import edges
+in depth, 1 MB of cumulative source bytes and the analysis time budget. Repeated
+imports are deduplicated. Accepted candidates include sorted
+`initialization_sources` with endpoint-scoped source and package evidence under
+`static-routing-source-candidates-2`. This evidence remains limited and inferred;
+it adds no authoritative handler dependency edges or handler-derived contracts.
+The complete contained tree is hashed, so helper and package-scope edits
+invalidate extraction. This extension does not establish runtime initialization,
+external configuration or authoritative handler binding.

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -33,6 +33,11 @@ try {
   await put("api/controllers/orders.js", handler("orders"));
   if (scenario === "single-initialization-failure") await put("api/controllers/orders.js",
     'throw new Error("synthetic initialization failure");\n' + handler("orders"));
+  if (["local-import", "local-import-failure"].includes(scenario)) {
+    await put("api/controllers/orders.js", 'const helper = require("../helpers/reader.cjs"); exports.getOrder = function(req, res) { helper.read(req, res); };');
+    await put("api/helpers/reader.cjs", (scenario === "local-import-failure" ? 'throw new Error("synthetic helper failure");\n' : "")
+      + handler("local").replace("exports.getOrder", "exports.read"));
+  }
   await put("api/controllers/alternate.js", handler("alternate"));
   await put("api/mocks/orders.js", handler("mock"));
   await put("app.js", `${scenario === "source-environment-override" ? 'process.env.swagger_mockMode = "true";\n' : ""}const express = require("express");
@@ -91,6 +96,7 @@ try {
   const analysis = JSON.parse(stdout);
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
     analysis: {status: analysis.status, candidatePath: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.path,
+      initializationSources: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.initialization_sources?.map(item => item.path),
       bindingClaim: analysis.claims.some(item => item.predicate === "handler.binding"), diagnostics: analysis.diagnostics.map(item => item.code)}}));
 } finally {
   if (server) { server.closeAllConnections(); await new Promise((accept, reject) => server.close(error => error ? reject(error) : accept())); }
