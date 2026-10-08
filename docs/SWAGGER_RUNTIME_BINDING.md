@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.28.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.29.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -239,3 +239,13 @@ Unknown or unsupported declarations remain unknown. Even when a signed capture
 proves handler binding, it does not prove that authentication is enforced or that
 an anonymous operation is actually public. Security evidence and strict OpenAPI
 qualification are unchanged.
+
+
+## Response declaration provenance
+
+Middleware `0.29.0` retains document schema and selected media declarations as
+status-scoped claims, separately from inferred handler body shapes and observed
+binding. Schema evidence points to its inline or reusable declaration; media
+evidence points to operation/root `produces`. Unknown media keeps schema facts
+and definition dependencies but cannot create response content or media claims.
+No document response fact is promoted by accepting a signed handler capture.

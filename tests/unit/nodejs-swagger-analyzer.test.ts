@@ -604,3 +604,46 @@ test("supported security claims depend only on used scheme declarations",async()
   expect(result.endpoints[0]!.security.state).toBe("declared");
   for(const id of declaration.evidence_ids)expect(result.dependencies).toContainEqual(expect.objectContaining({from_endpoint_id:result.endpoints[0]!.endpoint_id,to:{kind:"evidence",id}}));
 });
+
+test("reusable response schema and media claims preserve terminal and operation provenance",async()=>{
+  const doc=structuredClone(document) as any;doc.produces=["text/plain"];doc.paths["/orders/{id}"].get.produces=["application/json"];
+  doc.responses={Shared:{description:"Shared",schema:{$ref:"#/definitions/Order"}}};doc.paths["/orders/{id}"].get.responses={"200":{$ref:"#/responses/Shared"},default:{$ref:"#/responses/Shared"}};
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  const schemas=result.claims.filter(item=>item.predicate==="response.schema.declaration");
+  expect(schemas).toHaveLength(2);expect(new Set(schemas.map(item=>item.claim_id)).size).toBe(2);
+  for(const declaration of schemas){
+    expect(declaration.verification).toBe("declared");
+    expect(result.evidence.find(ev=>ev.evidence_id===declaration.evidence_ids[0])!.location.pointer).toBe("/responses/Shared/schema");
+  }
+  const media=result.claims.filter(item=>item.predicate==="response.media.declaration");
+  expect(media).toHaveLength(2);
+  for(const declaration of media){
+    expect(declaration.value).toMatchObject({media_types:["application/json"]});
+    expect(result.evidence.find(ev=>ev.evidence_id===declaration.evidence_ids[0])!.location.pointer).toBe("/paths/~1orders~1{id}/get/produces");
+  }
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+test.each([undefined,"invalid"])("response schema and definition dependencies survive unknown media: %j",async produces=>{
+  const doc=structuredClone(document) as any;delete doc.produces;delete doc.paths["/orders/{id}"].get.produces;
+  if(produces!==undefined)doc.paths["/orders/{id}"].get.produces=produces;
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  expect(result.endpoints[0]!.responses[0]!.content).toEqual([]);
+  expect(result.claims.filter(item=>item.predicate==="response.schema.declaration")).toHaveLength(1);
+  expect(result.claims.filter(item=>item.predicate==="response.media.declaration")).toEqual([]);
+  expect(result.dependencies.filter(item=>item.to.kind==="schema")).toHaveLength(1);
+  expect(result.diagnostics.map(item=>item.code)).toContain("response_media_unknown");
+});
+test("root media and explicit empty operation media keep their selected provenance",async()=>{
+  const doc=structuredClone(document) as any;doc.produces=["application/json"];delete doc.paths["/orders/{id}"].get.produces;const {adapter}=await service(doc);const root=await adapter.analyze(request());
+  const claim=root.claims.find(item=>item.predicate==="response.media.declaration")!;
+  expect(root.evidence.find(ev=>ev.evidence_id===claim.evidence_ids[0])!.location.pointer).toBe("/produces");
+  doc.paths["/orders/{id}"].get.produces=[];const empty=await service(doc);const result=await empty.adapter.analyze(request());
+  expect(result.endpoints[0]!.responses[0]!.content).toEqual([]);
+  expect(result.claims.find(item=>item.predicate==="response.media.declaration")!.value).toMatchObject({media_types:[]});
+});
+test("unresolved reusable responses retain only the selector, without schema or media claims",async()=>{
+  const doc=structuredClone(document) as any;doc.paths["/orders/{id}"].get.responses={"200":{$ref:"#/responses/Missing"}};
+  const {adapter}=await service(doc);const result=await adapter.analyze(request());
+  expect(result.claims.filter(item=>["response.schema.declaration","response.media.declaration"].includes(item.predicate))).toEqual([]);
+  expect(result.claims.find(item=>item.predicate==="response.status")!.value).toEqual({kind:"exact",code:200});
+});

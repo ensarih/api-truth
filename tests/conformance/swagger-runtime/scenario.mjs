@@ -207,6 +207,10 @@ try {
       securityDeclaration: analysis.claims.find(item => item.predicate === "security.declaration"),
       securityDeclarationPointers: analysis.claims.find(item => item.predicate === "security.declaration")?.evidence_ids
         .map(id => analysis.evidence.find(item => item.evidence_id === id)?.location.pointer),
+      responseSchemaDeclaration: analysis.claims.find(item => item.predicate === "response.schema.declaration"),
+      responseSchemaPointer: analysis.evidence.find(item => item.evidence_id === analysis.claims.find(item => item.predicate === "response.schema.declaration")?.evidence_ids[0])?.location.pointer,
+      responseMediaDeclaration: analysis.claims.find(item => item.predicate === "response.media.declaration"),
+      responseMediaPointer: analysis.evidence.find(item => item.evidence_id === analysis.claims.find(item => item.predicate === "response.media.declaration")?.evidence_ids[0])?.location.pointer,
       bodyDeclaration: analysis.claims.find(item => item.predicate === "handler.response.body.declaration"),
       responseDependencyPaths: [...new Set(analysis.dependencies.filter(item => item.to.kind === "evidence")
         .map(item => analysis.evidence.find(evidence => evidence.evidence_id === item.to.id)?.location.pointer)

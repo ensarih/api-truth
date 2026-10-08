@@ -28,7 +28,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.11.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.12.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -73,8 +73,8 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-9", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-28", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-10", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-29", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -437,6 +437,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         schema: convertSchema(body.schema, `${body.pointer}/schema`), serialization: { format: mediaType },
         presence: { state: declaredPresence(body), evidence_ids: [bodyEv] } });
     }
+    const declaredResponseSchemas: ApiSchema[] = [];
     for (const response of operation.responses) {
       const declarationPointer = response.declarationPointer ?? response.pointer;
       const responseIds = [...new Set([response.pointer, ...(response.referencePointers ?? [])])]
@@ -471,9 +472,28 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         if (!result.dependencies.some(item => item.from_endpoint_id === endpointId && item.to.kind === "evidence" && item.to.id === id))
           result.dependencies.push({from_endpoint_id:endpointId,to:{kind:"evidence",id},evidence_ids:[...new Set([id,...responseIds])]});
       }
-      const content = response.schema !== undefined && response.media.state === "known"
+      const schemaPointer = `${declarationPointer}/schema`;
+      const schema = response.schema !== undefined ? convertSchema(response.schema, schemaPointer) : undefined;
+      const addResponseFactDependency = (pointer: string): void => {
+        const id = evidence(pointer, endpointId);
+        if (!endpoint.evidence_ids.includes(id)) endpoint.evidence_ids.push(id);
+        if (!result.dependencies.some(item => item.from_endpoint_id === endpointId && item.to.kind === "evidence" && item.to.id === id))
+          result.dependencies.push({from_endpoint_id:endpointId,to:{kind:"evidence",id},evidence_ids:[...new Set([id,...responseIds])]});
+      };
+      if (schema) {
+        declaredResponseSchemas.push(schema);
+        claim(endpoint, "response.schema.declaration", {status:response.selector,schema}, schemaPointer, responseIds);
+        addResponseFactDependency(schemaPointer);
+        if (response.media.state === "known") {
+          const operationSource = (raw.paths as Record<string, Record<string, Record<string, unknown>>>)[operation.path]![operation.method]!;
+          const mediaPointer = operationSource.produces !== undefined ? `${operation.pointer}/produces` : "/produces";
+          claim(endpoint, "response.media.declaration", {status:response.selector,media_types:response.media.values}, mediaPointer, responseIds);
+          addResponseFactDependency(mediaPointer);
+        }
+      }
+      const content = schema && response.media.state === "known"
         ? response.media.values.map(mediaType => ({ media_type: mediaType,
-          schema: convertSchema(response.schema, `${declarationPointer}/schema`), serialization: { format: mediaType } })) : [];
+          schema, serialization: { format: mediaType } })) : [];
       if (response.schema !== undefined && response.media.state === "unknown")
         diagnostic("response_media_unknown", response.pointer, "warning", endpointId);
       endpoint.responses.push({ status: response.selector, content, ...(headers.length ? {headers} : {}) });
@@ -534,7 +554,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     };
     for (const parameter of endpoint.parameters) addSchemaDependencies(parameter.schema);
     for (const body of endpoint.request_bodies) addSchemaDependencies(body.schema);
-    for (const response of endpoint.responses) for (const content of response.content) addSchemaDependencies(content.schema);
+    for (const schema of declaredResponseSchemas) addSchemaDependencies(schema);
     result.endpoints.push(endpoint);
   }
 

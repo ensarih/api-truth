@@ -112,6 +112,10 @@ for (const [scenario, status, marker] of cases) {
     }
     if (scenario === "runtime-binding-stale") assert.ok(result.analysis.diagnostics.includes("runtime_binding_receipt_unverified"));
     if (scenario.startsWith("runtime-binding-body-")) {
+      assert.equal(result.analysis.responseSchemaDeclaration.verification, "declared");
+      assert.equal(result.analysis.responseMediaDeclaration.verification, "declared");
+      assert.deepEqual(result.analysis.responseMediaDeclaration.value.media_types, ["application/json"]);
+      assert.equal(result.analysis.responseMediaPointer, "/produces");
       assert.equal(result.analysis.bodyDeclaration.verification, "inferred");
       const properties = {controller:{type:"string"}};
       if (scenario.endsWith("present")) properties.name = {type:"string"};
@@ -128,6 +132,7 @@ for (const [scenario, status, marker] of cases) {
         assert.deepEqual(result.analysis.definitionDependencyPaths, ["/definitions/Base", "/definitions/Body", "/definitions/Fields"]);
       }
       if (scenario.startsWith("runtime-binding-body-object-")) {
+        assert.equal(result.analysis.responseSchemaPointer, "/responses/Shared/schema");
         assert.equal(result.analysis.catalogResponseContentCount, 1);
         assert.deepEqual(result.analysis.catalogResponseHeaders, [{name:"X-Count", schema:{type:"integer"}}]);
         assert.equal(result.analysis.catalogHeaderClaim.verification, "declared");

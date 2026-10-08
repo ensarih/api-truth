@@ -141,12 +141,12 @@ it does not substitute for a protected enterprise pilot.
 | P5-DOCS | 5 | Permission-scoped read-only Confluence links and discrepancies. | Findings retain both sources, versions, scopes, and review state; revocation invalidates dependent views. |
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
-`nodejs-swagger2-document@0.11.0` reads a selected JSON or YAML document and emits
+`nodejs-swagger2-document@0.12.0` reads a selected JSON or YAML document and emits
 declared route facts, flat parameter serialization, and scalar/flat-array form and multipart-file
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.28.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.29.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -607,3 +607,27 @@ handler binding. Unit cases cover used/unused definition provenance, unsupported
 schemes, escaped invalid names, missing/malformed declarations and empty
 alternatives. Independent review found no blocker. Runtime security enforcement
 and normative qualification remain pending in NB4.
+
+
+### Response schema and media declaration provenance (2026-10-09)
+
+Document profile `0.12.0` and middleware `0.29.0` emit status-scoped declared
+`response.schema.declaration` and `response.media.declaration` facts. Schema
+provenance points to the concrete inline or terminal reusable response schema;
+media provenance points to the selecting operation's `produces` or the inherited
+root declaration. Both retain selector/alias evidence and endpoint dependencies.
+Schemas are converted once per response rather than once per media type.
+
+A schema with unknown media stays available as a declaration, with its local
+schema-definition dependencies, while endpoint content stays empty and no media
+claim is invented. Explicit empty `produces` overrides retain an empty media
+list declaration. Unsupported aliases preserve only their existing selector;
+no schema/media facts are created for them. Schema conversion diagnostics still
+mark unsupported details and keep coverage incomplete.
+
+Validation: 962 offline tests and 48 pinned runtime cases. Unit tests cover
+reusable selector-specific claim IDs, operation/root media selection, explicit
+empty lists, unknown/malformed media and unresolved aliases. Runtime assertions
+keep document schema/media facts declared alongside observed handler binding.
+Strict OpenAPI qualification and runtime serialization guarantees are unchanged.
+Independent review found no blocker.

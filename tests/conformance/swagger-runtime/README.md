@@ -171,3 +171,9 @@ security and an operation anonymous override of inherited basic security. Both
 remain declared despite an observed handler binding; other fixtures retain unknown
 security. Total runtime cases remain 48. This is not an authentication-enforcement
 test or proof of production access policy.
+
+
+The existing body cases verify that document response-schema/media claims remain
+declared alongside inferred handler bodies and observed binding. Reusable cases
+assert terminal schema pointers; media evidence points to root `produces`.
+Total runtime cases remain 48.

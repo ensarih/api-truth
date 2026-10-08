@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.11.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.12.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.28.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.29.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -745,3 +745,27 @@ handler binding. Unit cases cover used/unused definition provenance, unsupported
 schemes, escaped invalid names, missing/malformed declarations and empty
 alternatives. Independent review found no blocker. Runtime security enforcement
 and normative qualification remain pending in NB4.
+
+
+### Response schema and media declaration provenance (2026-10-09)
+
+Document profile `0.12.0` and middleware `0.29.0` emit status-scoped declared
+`response.schema.declaration` and `response.media.declaration` facts. Schema
+provenance points to the concrete inline or terminal reusable response schema;
+media provenance points to the selecting operation's `produces` or the inherited
+root declaration. Both retain selector/alias evidence and endpoint dependencies.
+Schemas are converted once per response rather than once per media type.
+
+A schema with unknown media stays available as a declaration, with its local
+schema-definition dependencies, while endpoint content stays empty and no media
+claim is invented. Explicit empty `produces` overrides retain an empty media
+list declaration. Unsupported aliases preserve only their existing selector;
+no schema/media facts are created for them. Schema conversion diagnostics still
+mark unsupported details and keep coverage incomplete.
+
+Validation: 962 offline tests and 48 pinned runtime cases. Unit tests cover
+reusable selector-specific claim IDs, operation/root media selection, explicit
+empty lists, unknown/malformed media and unresolved aliases. Runtime assertions
+keep document schema/media facts declared alongside observed handler binding.
+Strict OpenAPI qualification and runtime serialization guarantees are unchanged.
+Independent review found no blocker.
