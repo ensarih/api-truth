@@ -21,7 +21,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.5.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.6.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -66,10 +66,10 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-3", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-10", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-4", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-11", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
-        ? "static-routing-source-candidates-1" : "none" }));
+        ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: request.ir_version, identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: request.analyzer, source: request.source,
@@ -305,7 +305,10 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     }
     const input = value as Record<string, unknown>;
     if (typeof input.$ref === "string") {
-      const name = input.$ref.startsWith("#/definitions/") ? input.$ref.slice("#/definitions/".length).replaceAll("~1", "/").replaceAll("~0", "~") : undefined;
+      const token = input.$ref.startsWith("#/definitions/") ? input.$ref.slice("#/definitions/".length) : undefined;
+      // This profile supports one JSON Pointer token, not nested paths or URI-fragment decoding.
+      const name = token !== undefined && /^[A-Za-z0-9._~!$&'()*+,;=:@?-]+$/.test(token) && !/~(?:[^01]|$)/.test(token)
+        ? token.replaceAll("~1", "/").replaceAll("~0", "~") : undefined;
       const id = name && definitionIds.get(name);
       if (!id) { diagnostic("schema_ref_unsupported", `${pointer}/$ref`); return {}; }
       return { $ref: `#/schemas/${id}` };
@@ -324,7 +327,19 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       output.properties = Object.fromEntries(Object.entries(input.properties).sort(([a], [b]) => a.localeCompare(b))
         .map(([name, child]) => [name, convertSchema(child, `${pointer}/properties/${pointerPart(name)}`, depth + 1)]));
     if (input.items !== undefined) output.items = convertSchema(input.items, `${pointer}/items`, depth + 1);
-    for (const key of Object.keys(input)) if (!["type", "format", "description", "required", "enum", "properties", "items", "title"].includes(key))
+    if (input.allOf !== undefined) {
+      if (Array.isArray(input.allOf) && input.allOf.length > 0 && input.allOf.length <= 32
+        && input.allOf.every(item => item !== null && typeof item === "object" && !Array.isArray(item)))
+        output.allOf = input.allOf.map((item, index) => convertSchema(item, `${pointer}/allOf/${index}`, depth + 1));
+      else diagnostic("schema_all_of_unsupported", `${pointer}/allOf`);
+    }
+    if (input.additionalProperties !== undefined) {
+      if (typeof input.additionalProperties === "boolean") output.additionalProperties = input.additionalProperties;
+      else if (input.additionalProperties !== null && typeof input.additionalProperties === "object" && !Array.isArray(input.additionalProperties))
+        output.additionalProperties = convertSchema(input.additionalProperties, `${pointer}/additionalProperties`, depth + 1);
+      else diagnostic("schema_additional_properties_unsupported", `${pointer}/additionalProperties`);
+    }
+    for (const key of Object.keys(input)) if (!["type", "format", "description", "required", "enum", "properties", "items", "title", "allOf", "additionalProperties"].includes(key))
       diagnostic("schema_keyword_unsupported", `${pointer}/${pointerPart(key)}`);
     return output;
   };
@@ -447,6 +462,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       }
       for (const child of Object.values(schema.properties ?? {})) addSchemaDependencies(child);
       if (schema.items) addSchemaDependencies(schema.items);
+      for (const branch of schema.allOf ?? []) addSchemaDependencies(branch);
+      if (schema.additionalProperties && typeof schema.additionalProperties === "object")
+        addSchemaDependencies(schema.additionalProperties);
     };
     for (const parameter of endpoint.parameters) addSchemaDependencies(parameter.schema);
     for (const body of endpoint.request_bodies) addSchemaDependencies(body.schema);

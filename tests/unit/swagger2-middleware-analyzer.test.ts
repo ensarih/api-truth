@@ -445,3 +445,17 @@ test("local initialization imports carry limited evidence and helper edits inval
   expect(second.diagnostics.map(item => item.code)).toContain("handler_initialization_unverified");
   expect(JSON.stringify(second)).not.toContain("private-import-marker");
 });
+
+test("middleware uses the shared composed-schema conversion and dependency traversal", async () => {
+  const spec = document.replace("'200': { description: ok }", "'200': { description: ok, schema: { allOf: [{ $ref: '#/definitions/Base' }, { type: object, additionalProperties: { $ref: '#/definitions/Value' } }] } }")
+    + "\nproduces: [application/json]\ndefinitions:\n  Base: { type: object, properties: { id: { type: string } } }\n  Value: { type: string }\n";
+  const {adapter} = await service({"app.js": entry, "api/swagger/swagger.yaml": spec});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  const schema = result.endpoints[0]!.responses[0]!.content[0]!.schema;
+  expect(schema.allOf).toHaveLength(2);
+  expect(schema.allOf![1]!.additionalProperties).toMatchObject({$ref: expect.stringMatching(/^#\/schemas\//)});
+  expect(result.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(2);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("schema_keyword_unsupported");
+  expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+});

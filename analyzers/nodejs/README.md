@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.5.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.6.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -31,7 +31,7 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-The document `0.5.0` and middleware `0.10.0` profiles map flat primitive
+The document `0.6.0` and middleware `0.11.0` profiles map flat primitive
 parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.10.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.11.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -350,3 +350,26 @@ it adds no authoritative handler dependency edges or handler-derived contracts.
 The complete contained tree is hashed, so helper and package-scope edits
 invalidate extraction. This extension does not establish runtime initialization,
 external configuration or authoritative handler binding.
+
+
+### Composed schemas and dictionaries
+
+Document `0.6.0` and middleware `0.11.0` preserve Swagger `allOf` compositions
+without flattening or merging their branches. Each composition must contain
+1–32 schema objects within the existing depth and document budgets.
+`additionalProperties` preserves booleans (including a closed dictionary with
+`false`) or a schema object. Empty schema objects stay unconstrained; malformed
+forms are omitted with scoped diagnostics and partial coverage.
+
+Local definition references remain reusable canonical `#/schemas/...` references,
+including recursive definitions and `~0`/`~1` escaped names. Nested pointer paths,
+invalid tilde escapes, invalid literal fragment characters and URI percent-encoded
+fragments remain unsupported and
+cannot create a schema reference. Endpoint dependencies follow
+references through composition branches and dictionary values, so referenced
+schema edits reach the affected endpoints. Both inline request/response schemas
+and reusable definitions use this conversion.
+
+These remain source declarations. The change does not establish runtime
+validation, conditional requiredness or export eligibility. Normative export of
+unverified dictionary constraints remains gated by the existing exporter policy.

@@ -207,3 +207,97 @@ test("unsupported profile IR version fails before filesystem access", async () =
   await expect(adapter.analyze({ ...request(), ir_version: "1.0.0" }))
     .rejects.toThrow("Swagger profile requires IR 1.1.0");
 });
+
+test("composed and dictionary schemas preserve reusable references and dependency fan-out", async () => {
+  const composed = {...document, definitions: {
+    Order: {allOf: [{$ref: "#/definitions/Base~1Order~0"}, {type: "object", properties: {
+      attributes: {type: "object", additionalProperties: {$ref: "#/definitions/Attribute"}},
+      closed: {type: "object", additionalProperties: false},
+    }}]},
+    "Base/Order~": {type: "object", required: ["id"], properties: {id: {type: "string"}}},
+    Attribute: {type: "object", properties: {next: {$ref: "#/definitions/Attribute"}}},
+  }};
+  const {adapter} = await service(composed);
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  const byPointer = (pointer: string) => Object.values(result.schemas).find(component => component.evidence_ids.some(id =>
+    result.evidence.find(item => item.evidence_id === id)?.location.pointer === pointer))!;
+  const base = byPointer("/definitions/Base~1Order~0");
+  const attribute = byPointer("/definitions/Attribute");
+  const order = byPointer("/definitions/Order");
+  expect(order.schema).toEqual({allOf: [{$ref: `#/schemas/${base.schema_id}`}, {type: "object", properties: {
+    attributes: {type: "object", additionalProperties: {$ref: `#/schemas/${attribute.schema_id}`}},
+    closed: {type: "object", additionalProperties: false},
+  }}]});
+  expect(attribute.schema.properties?.next).toEqual({$ref: `#/schemas/${attribute.schema_id}`});
+  expect(result.dependencies.filter(item => item.to.kind === "schema").map(item => item.to.id).sort())
+    .toEqual([order.schema_id, base.schema_id, attribute.schema_id].sort());
+  expect(result.diagnostics.map(item => item.code)).not.toContain("schema_keyword_unsupported");
+  expect((await adapter.analyze(request())).schemas).toEqual(result.schemas);
+});
+
+test.each([[], null, 1, ["unsupported"], Array.from({length: 33}, () => ({type: "object"}))].map(value => [value]))(
+  "malformed or excessive allOf remains diagnosed: %j", async value => {
+    const {adapter} = await service({...document, definitions: {Order: {type: "object", allOf: value}}});
+    const result = await adapter.analyze(request());
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(result.diagnostics.map(item => item.code)).toContain("schema_all_of_unsupported");
+    expect(Object.values(result.schemas)[0]!.schema.allOf).toBeUndefined();
+    expect(result.endpoints).toHaveLength(1);
+    expect(result.status).toBe("partial");
+  });
+
+test.each([null, 1, [], "private-schema-marker"].map(value => [value]))("invalid dictionary schema stays unknown: %j", async value => {
+  const {adapter} = await service({...document, definitions: {Order: {type: "object", additionalProperties: value}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_additional_properties_unsupported");
+  expect(Object.values(result.schemas)[0]!.schema.additionalProperties).toBeUndefined();
+  expect(JSON.stringify(result)).not.toContain("private-schema-marker");
+});
+
+test("inline request composition and open dictionaries preserve their declared shape", async () => {
+  const spec = {swagger: "2.0", info: {title: "Synthetic", version: "1"}, consumes: ["application/json"], produces: ["application/json"],
+    paths: {"/orders": {post: {parameters: [{in: "body", name: "order", required: true,
+      schema: {allOf: [{$ref: "#/definitions/Base"}, {type: "object", additionalProperties: true}]}}],
+      responses: {"200": {description: "ok", schema: {type: "object", additionalProperties: {}}}}}}},
+    definitions: {Base: {type: "object", properties: {id: {type: "string"}}}}};
+  const {adapter} = await service(spec);
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints[0]!.request_bodies[0]!.schema.allOf).toEqual([
+    {$ref: `#/schemas/${Object.keys(result.schemas)[0]}`}, {type: "object", additionalProperties: true}]);
+  expect(result.endpoints[0]!.responses[0]!.content[0]!.schema).toEqual({type: "object", additionalProperties: {}});
+  expect(result.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(1);
+  expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+});
+
+test("editing a definition referenced through a dictionary invalidates extraction", async () => {
+  const spec = {...document, definitions: {
+    Order: {type: "object", additionalProperties: {$ref: "#/definitions/Value"}}, Value: {type: "string"},
+  }};
+  const {root, adapter} = await service(spec);
+  const first = await adapter.analyze(request());
+  spec.definitions.Value.type = "integer";
+  await writeFile(join(root, "service/api/swagger/swagger.json"), JSON.stringify(spec));
+  const second = await adapter.analyze(request());
+  expect(parseAnalyzerResult(second).ok).toBe(true);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.endpoints[0]!.endpoint_id).toBe(first.endpoints[0]!.endpoint_id);
+  expect(second.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(2);
+  expect(Object.values(second.schemas).some(item => item.schema.type === "integer")).toBe(true);
+});
+
+test.each([["A/B", "#/definitions/A/B"], ["A~2B", "#/definitions/A~2B"], ["A~", "#/definitions/A~"],
+  ["%41", "#/definitions/%41"], ["A#B", "#/definitions/A#B"], ["A B", "#/definitions/A B"], ["A\n", "#/definitions/A\n"], ["A\r", "#/definitions/A\r"]])("unsupported definition pointer token cannot invent a reference: %s", async (name, ref) => {
+  const {adapter} = await service({...document, definitions: {
+    Order: {allOf: [{$ref: ref}]}, [name]: {type: "string"},
+  }});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  const order = Object.values(result.schemas).find(component => component.evidence_ids.some(id =>
+    result.evidence.find(item => item.evidence_id === id)?.location.pointer === "/definitions/Order"))!;
+  expect(order.schema.allOf).toEqual([{}]);
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_ref_unsupported");
+  expect(result.dependencies.filter(item => item.to.kind === "schema").map(item => item.to.id)).toEqual([order.schema_id]);
+});
