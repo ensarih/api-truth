@@ -422,3 +422,170 @@ test("placeholder names must agree across a consumes variant group", async () =>
     endpointIds: ["ep-json", "ep-vnd"] }));
   expect(result.diagnostics.filter((item) => item.code === "CONFLICTING_PATH_PARAMETER_NAMES")).toHaveLength(2);
 });
+
+const formSnapshot = async (mediaType = "multipart/form-data", format = "multipart") => {
+  const snapshot = await exportableGet();
+  snapshot.ir_version = "1.1.0";
+  snapshot.endpoints[0].request_bodies = [{ media_type: mediaType,
+    serialization: { format }, presence: { state: "required", evidence_ids: ["ev-proof"] },
+    schema: { type: "object", properties: {
+      tags: { type: "array", items: { type: "string" } },
+      ids: { type: "array", items: { type: "integer" } },
+      file: { type: "string" },
+    } }, encoding: {
+      tags: { style: "form", explode: true, evidence_ids: ["ev-proof"] },
+      ids: { style: "pipeDelimited", explode: false, evidence_ids: ["ev-proof"] },
+      file: { content_type: "application/octet-stream", evidence_ids: ["ev-proof"] },
+    } }];
+  return snapshot;
+};
+
+test.each([
+  ["multipart/form-data", "multipart"],
+  ["application/x-www-form-urlencoded", "urlencoded"],
+])("qualified %s encodings export strictly, sorted and without evidence metadata", async (mediaType, format) => {
+  const snapshot = await formSnapshot(mediaType, format);
+  const first = compileOpenApiSnapshot(snapshot, "strict");
+  expect(first.ok).toBe(true);
+  expect(first.diagnostics).toEqual([]);
+  const media = (first.document as any).paths["/api/orders/{orderId}"].get.requestBody.content[mediaType];
+  expect(media.encoding).toEqual({ file: { contentType: "application/octet-stream" },
+    ids: { style: "pipeDelimited", explode: false }, tags: { style: "form", explode: true } });
+  expect(Object.keys(media.encoding)).toEqual(["file", "ids", "tags"]);
+  snapshot.endpoints[0].request_bodies[0].encoding = Object.fromEntries(
+    Object.entries(snapshot.endpoints[0].request_bodies[0].encoding).reverse());
+  expect(compileOpenApiSnapshot(snapshot, "strict")).toEqual(first);
+});
+
+test.each(["weak", "limited", "service", "other"])("%s form encoding evidence omits the draft operation", async (kind) => {
+  const snapshot = await formSnapshot();
+  const proof = snapshot.evidence.find((item: any) => item.evidence_id === "ev-proof");
+  const encodingEvidence = { ...structuredClone(proof), evidence_id: "ev-encoding" };
+  if (kind === "weak") encodingEvidence.method = "type_declaration";
+  if (kind === "limited") encodingEvidence.limitations = ["partial"];
+  if (kind === "service") delete encodingEvidence.scope.endpoint_id;
+  if (kind === "other") {
+    const other = structuredClone(snapshot.endpoints[0]);
+    other.endpoint_id = "ep-other";
+    other.application_path = "/api/other/:orderId";
+    other.identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+      method: "GET", application_path: other.application_path });
+    snapshot.endpoints.push(other);
+    encodingEvidence.scope.endpoint_id = "ep-other";
+  }
+  snapshot.evidence.push(encodingEvidence);
+  snapshot.endpoints[0].request_bodies[0].encoding.tags.evidence_ids = ["ev-encoding"];
+  const draft = compileOpenApiSnapshot(snapshot, "draft");
+  expect((draft.document as any).paths["/api/orders/{orderId}"]).toBeUndefined();
+  expect(draft.diagnostics).toContainEqual({ code: "UNVERIFIED_FORM_ENCODING",
+    path: "/endpoints/ep-get/request_bodies/multipart~1form-data/encoding/tags", endpointIds: ["ep-get"] });
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+});
+
+test.each([
+  ["spaceDelimited", true, undefined, "array"],
+  ["pipeDelimited", true, undefined, "array"],
+  ["spaceDelimited", false, undefined, "string"],
+  ["pipeDelimited", false, undefined, "object"],
+  ["form", true, "application/json", "array"],
+  [undefined, false, "application/json", "array"],
+])("unsupported form encoding %s/%s/%s on %s blocks export", async (style, explode, contentType, type) => {
+  const snapshot = await formSnapshot();
+  const body = snapshot.endpoints[0].request_bodies[0];
+  body.encoding.tags = { ...(style === undefined ? {} : { style }), explode,
+    ...(contentType === undefined ? {} : { content_type: contentType }), evidence_ids: ["ev-proof"] };
+  body.schema.properties.tags = type === "array" ? { type, items: { type: "string" } } : { type };
+  expect(() => compileOpenApiSnapshot(snapshot, "draft")).toThrow("Invalid contract snapshot");
+  expect(() => compileOpenApiSnapshot(snapshot, "strict")).toThrow("Invalid contract snapshot");
+});
+
+test.each([
+  ["multipart/form-data", "urlencoded"],
+  ["application/x-www-form-urlencoded", "multipart"],
+  ["application/json", "multipart"],
+])("mismatched request serialization %s/%s remains unrepresentable", async (mediaType, format) => {
+  const snapshot = await formSnapshot(mediaType, format);
+  delete snapshot.endpoints[0].request_bodies[0].encoding;
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  expect(result.diagnostics.map((item) => item.code)).toContain("UNREPRESENTABLE_SERIALIZATION");
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+});
+
+test("form encodings do not establish schema requiredness or binary format constraints", async () => {
+  const snapshot = await formSnapshot();
+  const body = snapshot.endpoints[0].request_bodies[0];
+  body.schema.required = ["file"];
+  body.schema.properties.file.format = "binary";
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  const schema = (result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["multipart/form-data"].schema;
+  expect(schema.required).toBeUndefined();
+  expect(schema.properties.file.format).toBeUndefined();
+  expect(result.diagnostics.filter((item) => item.code === "UNVERIFIED_SCHEMA_CONSTRAINT")).toHaveLength(2);
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+});
+
+test("disjoint consumes variants preserve qualified form encoding", async () => {
+  const snapshot = await variantSnapshot();
+  snapshot.ir_version = "1.1.0";
+  const form = (await formSnapshot()).endpoints[0].request_bodies[0];
+  form.presence.evidence_ids = ["ev-vnd"];
+  Object.values(form.encoding).forEach((encoding: any) => { encoding.evidence_ids = ["ev-vnd"]; });
+  snapshot.endpoints[1].request_bodies = [form];
+  snapshot.endpoints[1].identity = deriveEndpointIdentity({ identity_version: "1.0.0", service_id: "orders",
+    method: "POST", application_path: "/api/orders", selectors: { consumes: ["multipart/form-data"] } });
+  const first = compileOpenApiSnapshot(snapshot, "strict");
+  expect(first.ok).toBe(true);
+  expect((first.document as any).paths["/api/orders"].post.requestBody.content["multipart/form-data"].encoding.tags)
+    .toEqual({ style: "form", explode: true });
+  snapshot.endpoints.reverse();
+  expect(compileOpenApiSnapshot(snapshot, "strict")).toEqual(first);
+});
+
+test.each(["form", "spaceDelimited", "pipeDelimited"])("qualified %s array encoding exports without schema defaults", async (style) => {
+  const snapshot = await formSnapshot("application/x-www-form-urlencoded", "urlencoded");
+  snapshot.endpoints[0].request_bodies[0].encoding.tags = { style, explode: false, evidence_ids: ["ev-proof"] };
+  const result = compileOpenApiSnapshot(snapshot, "strict");
+  expect(result.ok).toBe(true);
+  expect((result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["application/x-www-form-urlencoded"].encoding.tags)
+    .toEqual({ style, explode: false });
+});
+
+test.each([{ style: "form" }, { explode: true }])("partial form encoding %j cannot establish omitted facts", async (serialization) => {
+  const snapshot = await formSnapshot();
+  snapshot.endpoints[0].request_bodies[0].encoding.tags = { ...serialization, evidence_ids: ["ev-proof"] };
+  expect(() => compileOpenApiSnapshot(snapshot, "draft")).toThrow("Invalid contract snapshot");
+  expect(() => compileOpenApiSnapshot(snapshot, "strict")).toThrow("Invalid contract snapshot");
+});
+
+test("qualified encoding does not replace request body presence evidence", async () => {
+  const snapshot = await formSnapshot();
+  snapshot.endpoints[0].request_bodies[0].presence.evidence_ids = ["ev-type"];
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths).toEqual({});
+  expect(result.diagnostics.map((item) => item.code)).toContain("UNVERIFIED_REQUEST_BODY_PRESENCE");
+  expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+});
+
+test("form encoding preserves literal property names, including __proto__", async () => {
+  const snapshot = await formSnapshot();
+  const body = snapshot.endpoints[0].request_bodies[0];
+  body.schema.properties = JSON.parse('{"__proto__":{"type":"array","items":{"type":"string"}}}');
+  body.encoding = JSON.parse('{"__proto__":{"style":"form","explode":true,"evidence_ids":["ev-proof"]}}');
+  const result = compileOpenApiSnapshot(snapshot, "strict");
+  expect(result.ok).toBe(true);
+  const encoding = (result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["multipart/form-data"].encoding;
+  expect(Object.keys(encoding)).toEqual(["__proto__"]);
+  expect(encoding["__proto__"]).toEqual({ style: "form", explode: true });
+});
+
+test("a missing field encoding cannot acquire OpenAPI defaults in a complete form contract", async () => {
+  for (const missing of ["one", "all"]) {
+    const snapshot = await formSnapshot();
+    if (missing === "one") delete snapshot.endpoints[0].request_bodies[0].encoding.tags;
+    else delete snapshot.endpoints[0].request_bodies[0].encoding;
+    const draft = compileOpenApiSnapshot(snapshot, "draft");
+    expect((draft.document as any).paths).toEqual({});
+    expect(draft.diagnostics.map(item => item.code)).toContain("UNKNOWN_FORM_ENCODING");
+    expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+  }
+});

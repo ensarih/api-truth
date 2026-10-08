@@ -133,3 +133,30 @@ test("inline examples are checked against nearby schemas", () => {
     code: "UNVERIFIED_EXAMPLE",
   }));
 });
+
+test("qualified form encoding output passes official document and local reference validation", async () => {
+  const snapshot = JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json", import.meta.url), "utf8"));
+  snapshot.endpoints = [snapshot.endpoints[0]];
+  snapshot.schemas = {}; snapshot.claims = []; snapshot.editorial_reviews = [];
+  snapshot.export_eligibility = []; snapshot.dependencies = [];
+  snapshot.evidence = snapshot.evidence.filter((item: any) => item.scope.endpoint_id !== "ep-create");
+  snapshot.coverage = {status: "complete", analyzed_roots: ["src"], diagnostic_ids: []};
+  snapshot.ir_version = "1.1.0";
+  const endpoint = snapshot.endpoints[0];
+  snapshot.evidence.push({...snapshot.evidence[0], evidence_id: "ev-form", method: "deterministic_analysis",
+    limitations: [], scope: {service_id: "orders", snapshot_id: snapshot.snapshot_id, endpoint_id: endpoint.endpoint_id}});
+  endpoint.evidence_ids = ["ev-form"]; endpoint.parameters = endpoint.parameters.slice(0, 1);
+  endpoint.parameters[0].presence.evidence_ids = ["ev-form"];
+  endpoint.security = {state: "anonymous", evidence_ids: ["ev-form"], alternatives: []};
+  endpoint.responses[0].content[0].schema = {type: "string"};
+  for (const [media, format] of [["multipart/form-data", "multipart"], ["application/x-www-form-urlencoded", "urlencoded"]]) {
+    endpoint.request_bodies = [{media_type: media, serialization: {format},
+      schema: {type: "object", properties: {tags: {type: "array", items: {type: "string"}}}},
+      presence: {state: "optional", evidence_ids: ["ev-form"]},
+      encoding: {tags: {style: "form", explode: true, evidence_ids: ["ev-form"]}}}];
+    const compiled = compileOpenApiSnapshot(snapshot, "strict");
+    expect(compiled.ok, JSON.stringify(compiled.diagnostics)).toBe(true);
+    expect(validateDocument(compiled.document), JSON.stringify(validateDocument.errors)).toBe(true);
+    expect(validateOpenApiDocument(compiled.document)).toEqual({ok: true, diagnostics: []});
+  }
+});

@@ -10,7 +10,7 @@ import { createHandlerCandidateResolver } from "./handler-candidates.js";
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
 /** Direct swagger-express-mw default-file registration; handler binding remains unresolved. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.4.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.5.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;
@@ -20,6 +20,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
     let request = parsed.value;
+    if (request.ir_version !== "1.1.0") throw new Error("Swagger profile requires IR 1.1.0");
     if (request.analyzer.analyzer_id !== ANALYZER.analyzer_id || request.analyzer.analyzer_version !== ANALYZER.analyzer_version)
       throw new Error("Unsupported analyzer version");
     const project = resolve(options.projectRoot);

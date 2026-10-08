@@ -1,11 +1,12 @@
 # Node.js analyzer expansion backlog
 
-**Status:** active analyzer priority, 2026-10-06
+**Status:** active analyzer priority, 2026-10-08
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
-Express subset. `nodejs-swagger2-document@0.4.0` reads selected Swagger 2 JSON/YAML
-declarations with flat parameter serialization and scalar form/multipart-file
-extraction. Form encoding/export conformance remains open.
-`nodejs-swagger-express-mw@0.4.0` recognizes one direct default-file
+Express subset. `nodejs-swagger2-document@0.5.0` reads selected Swagger 2 JSON/YAML
+declarations with flat parameter serialization and scalar/flat-array form and multipart-file
+extraction. IR 1.1 encoding and qualified export are implemented; runtime binding and
+inline constraint eligibility remain open.
+`nodejs-swagger-express-mw@0.5.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -131,7 +132,7 @@ installation, network, database, log, or model access occurs.
 **Priority:** P0 when present in the pilot, otherwise P1
 **Adapter identity:** a distinct versioned `nodejs-swagger-express-mw` profile
 
-The `0.4.0` profile recognizes one direct default-file registration, composes
+The `0.5.0` profile recognizes one direct default-file registration, composes
 `basePath` under that policy, and records exact controller/operationId source
 candidates for bounded CommonJS exports. One strict static default JSON/YAML
 configuration can select a declared controller pipeline and contained
@@ -144,13 +145,18 @@ Candidates carry Swagger, source, configuration and contained package-scope
 evidence, remain inferred, and add no handler-derived contract facts or
 dependencies. Environment overrides, effective configuration, framework version
 and startup are still unverified. This slice does not complete the
-handler-binding or framework-version conformance gate below. Both `0.4.0` profiles
+handler-binding or framework-version conformance gate below. Both `0.5.0` profiles
 also preserve flat parameter collection formats and aggregate bounded scalar
 formData/file declarations per consumes media, with exact field/media evidence.
-Tabs, nested arrays, form arrays/unsupported constraints, URL-encoded files, malformed or
+Tabs, nested arrays, unsupported form constraints, URL-encoded files, malformed or
 referenced parameter entries, and conflicting payload declarations stay
-unresolved. Form property encoding and strict OpenAPI field-requiredness
-eligibility remain open; the compiler gate is unchanged.
+unresolved. Per-field encoding is retained in IR 1.1 and participates in contract
+differences without provenance-only noise. Qualified encoding exports to
+OpenAPI; declaration-only or limited evidence cannot enter normative output.
+Strict inline field-requiredness/format eligibility and runtime binding remain
+open. Legacy IR 1.0 snapshots remain readable; cross-version comparisons require
+a new same-version baseline. The orchestrated Express profile remains pinned
+to IR 1.0 until explicit profile selection is implemented.
 
 - Parse bounded Swagger 2 operations, path-level and operation-level parameter
   overrides, body parameters, `consumes`/`produces`, exact/range/default

@@ -397,3 +397,10 @@ test("source digest includes adjacent config and source collection rejects symli
   await symlink(join(root, "service", "controller.ts"), join(root, "service", "linked.ts"));
   await expect(adapter.analyze(request())).rejects.toThrow("Source boundary or input limit rejected");
 });
+
+
+test("unsupported profile IR version fails before filesystem access", async () => {
+  const adapter = createAnalyzer({ projectRoot: "/missing/profile-version-check" });
+  await expect(adapter.analyze({ ...request(), ir_version: "1.1.0" }))
+    .rejects.toThrow("Analyzer profile requires IR 1.0.0");
+});

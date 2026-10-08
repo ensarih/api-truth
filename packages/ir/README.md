@@ -33,7 +33,12 @@ Errors contain JSON-pointer-like field paths and controlled messages. They never
 
 ## Version and identity constants
 
-The current supported values are `IR_VERSION`, `EVENT_VERSION`, `VIEW_VERSION`, `CONFIG_VERSION`, `IDENTITY_VERSION`, and `ANALYZER_EXCHANGE_VERSION`, all currently `1.0.0`. The parsers reject unsupported versions rather than silently accepting a future wire shape.
+`IR_VERSION` is `1.1.0`; the other event, view, configuration, identity and
+analyzer-exchange versions remain `1.0.0`. Parsers read IR 1.0 and 1.1, and reject
+unsupported versions. Endpoint, snapshot and analyzer request/result JSON Schema IDs are versioned at
+1.1 (the exchange envelope protocol stays 1.0); independently validating the snapshot/result schema also prevents the new
+encoding field from appearing under IR 1.0. Older consumers reject IR 1.1 until
+upgraded; existing IR 1.0 snapshots do not need rewriting to remain readable.
 
 `deriveEndpointIdentity(input): EndpointIdentity` and `normalizeApplicationPathShape(path): string` implement route identity v1. The helper validates runtime input and throws `EndpointIdentityInputError` with a structured `validation` property when malformed. The route key contains stable service ID, method, normalized application path shape, and canonical supported routing selectors. Header names and media types use case-insensitive set semantics; query selector names and selector values retain case. Placeholder spelling is removed while supported Express/Spring placeholder constraints are retained; the endpoint's `application_path` and parameter names remain diffable facts. Labels, hosts, branches, line numbers, and deployments are not inputs. Literal path, constraint, method, or selector changes produce different identities.
 
@@ -70,3 +75,21 @@ The Spring contract test performs this representative mapping directly from the 
 ## Deliberate limits
 
 This package defines and validates wire contracts. It does not extract source, persist catalog state, execute analyzers, resolve deployments, compile OpenAPI, publish artifacts, call models, or migrate stored versions. Schema support is a bounded JSON Schema-compatible IR subset. Component references use only `#/schemas/<component-id>`; the parser rewrites that namespace into an isolated `$defs` graph and compiles it with Ajv. External and other reference namespaces are rejected. Adding keywords or reference catalogs requires a versioned contract change.
+
+
+## IR 1.1 form encoding
+
+Request bodies may include `encoding`, a map from a direct object property to
+either a supported `style`/`explode` pair or a `content_type`, plus nonempty
+`evidence_ids`. It applies only to `multipart/form-data` and
+`application/x-www-form-urlencoded`. Mixed modes, incomplete pairs, absent
+properties, dangling evidence, and unsupported delimiter/type combinations
+are rejected. The current Swagger producer extracts flat primitive fields
+and multipart files; richer encodings are not extracted. The exporter separately checks exact qualifying endpoint evidence;
+validation alone does not establish normative authority.
+
+Encoding is forbidden on IR 1.0 snapshots and analyzer results. Swagger
+profiles 0.5 require IR 1.1 requests; the current Express and decorator profiles,
+and the orchestrator's Express jobs, remain explicitly pinned to IR 1.0.
+Cross-version contract comparisons remain rejected; a profile/version
+transition needs a same-version baseline rather than silent promotion.

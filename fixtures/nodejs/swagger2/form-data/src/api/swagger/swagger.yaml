@@ -15,5 +15,10 @@ paths:
           collectionFormat: multi
         - {name: file, in: formData, type: file, required: true}
         - {name: label, in: formData, type: string}
+        - name: categories
+          in: formData
+          type: array
+          items: {type: string}
+          collectionFormat: multi
       responses:
         '201': {description: created}

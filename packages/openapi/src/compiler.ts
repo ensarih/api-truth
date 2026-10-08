@@ -131,6 +131,48 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
     return out;
   };
 
+  const exportRequestMedia = (item: Endpoint["request_bodies"][number], path: string,
+    endpointId: string): { media: Record<string, unknown>; safe: boolean } => {
+    const media: Record<string, unknown> = { schema: exportSchema(item.schema, `${path}/schema`, [endpointId]) };
+    const format = item.serialization.format;
+    const supportedFormat = format === undefined
+      || format === "json" && (item.media_type === "application/json" || item.media_type.endsWith("+json"))
+      || format === "multipart" && item.media_type === "multipart/form-data"
+      || format === "urlencoded" && item.media_type === "application/x-www-form-urlencoded";
+    if (item.serialization.content_encoding !== undefined || item.serialization.style !== undefined
+      || item.serialization.explode !== undefined || !supportedFormat)
+      add("UNREPRESENTABLE_SERIALIZATION", `${path}/serialization`, [endpointId]);
+    let safe = true;
+    if (["multipart/form-data", "application/x-www-form-urlencoded"].includes(item.media_type)) {
+      if (item.schema.type !== "object" || item.schema.properties === undefined) {
+        add("UNKNOWN_FORM_ENCODING", `${path}/encoding`, [endpointId]);
+        safe = false;
+      } else for (const name of Object.keys(item.schema.properties)) {
+        if (!Object.prototype.hasOwnProperty.call(item.encoding ?? {}, name)) {
+          add("UNKNOWN_FORM_ENCODING", `${path}/encoding/${pointer(name)}`, [endpointId]);
+          safe = false;
+        }
+      }
+    }
+    if (item.encoding !== undefined) {
+      const encoding: [string, Record<string, unknown>][] = [];
+      for (const [name, fact] of sorted(Object.entries(item.encoding), (entry) => entry[0])) {
+        const fieldPath = `${path}/encoding/${pointer(name)}`;
+        if (!hasQualifyingEvidence(fact.evidence_ids, endpointId, true)) {
+          add("UNVERIFIED_FORM_ENCODING", fieldPath, [endpointId]);
+          safe = false;
+        }
+        const value: Record<string, unknown> = {};
+        if (fact.style !== undefined) value.style = fact.style;
+        if (fact.explode !== undefined) value.explode = fact.explode;
+        if (fact.content_type !== undefined) value.contentType = fact.content_type;
+        encoding.push([name, value]);
+      }
+      media.encoding = Object.fromEntries(encoding);
+    }
+    return { media, safe };
+  };
+
   if (snapshot.coverage.status === "incomplete") add("INCOMPLETE_COVERAGE", "/coverage");
   plan.diagnostics.filter((item) => item.code !== "VARIANT_REQUIRES_REPRESENTATION")
     .forEach((item) => add(item.code, "/endpoints", item.endpointIds));
@@ -248,13 +290,10 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
           [endpoint.endpoint_id]);
         skipOperation = true;
       }
-      body[item.media_type] = { schema: exportSchema(item.schema,
-        `${endpointPath}/request_bodies/${pointer(item.media_type)}/schema`, [endpoint.endpoint_id]) };
-      if (item.serialization.content_encoding !== undefined || item.serialization.style !== undefined
-        || item.serialization.explode !== undefined
-        || item.serialization.format !== undefined && !(item.serialization.format === "json" && (item.media_type === "application/json" || item.media_type.endsWith("+json"))))
-        add("UNREPRESENTABLE_SERIALIZATION",
-        `${endpointPath}/request_bodies/${pointer(item.media_type)}/serialization`, [endpoint.endpoint_id]);
+      const exported = exportRequestMedia(item,
+        `${endpointPath}/request_bodies/${pointer(item.media_type)}`, endpoint.endpoint_id);
+      body[item.media_type] = exported.media;
+      if (!exported.safe) skipOperation = true;
     }
     if (Object.keys(body).length > 0) {
       const requestBody: Record<string, unknown> = { content: body };

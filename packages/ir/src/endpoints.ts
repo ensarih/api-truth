@@ -11,6 +11,13 @@ const SerializationSchema = Type.Object({
   content_encoding: Type.Optional(NonEmptyString()),
 }, { additionalProperties: false, minProperties: 1 });
 
+const FormEncodingSchema = Type.Record(Type.String({minLength: 1}), Type.Object({
+  style: Type.Optional(Type.Union([Type.Literal("form"), Type.Literal("spaceDelimited"), Type.Literal("pipeDelimited")])),
+  explode: Type.Optional(Type.Boolean()),
+  content_type: Type.Optional(NonEmptyString()),
+  evidence_ids: Type.Array(NonEmptyString(), {minItems: 1, uniqueItems: true}),
+}, {additionalProperties: false}));
+
 const ContentSchema = Type.Object({
   media_type: NonEmptyString(),
   schema: Type.Ref(ApiSchemaSchema),
@@ -30,6 +37,7 @@ export const EndpointSchema = Type.Object({
   }, { additionalProperties: false })),
   request_bodies: Type.Array(Type.Object({
     media_type: NonEmptyString(),
+    encoding: Type.Optional(FormEncodingSchema),
     schema: Type.Ref(ApiSchemaSchema),
     serialization: SerializationSchema,
     presence: Type.Ref(PresenceFactSchema),
@@ -54,6 +62,16 @@ export const EndpointSchema = Type.Object({
     }, { additionalProperties: false })),
   }, { additionalProperties: false }),
   evidence_ids: Type.Array(NonEmptyString(), { minItems: 1, uniqueItems: true }),
-}, { $id: "https://api-truth.dev/schemas/endpoint-1.0.0.json", additionalProperties: false });
+}, { $id: "https://api-truth.dev/schemas/endpoint-1.1.0.json", additionalProperties: false });
 
 export type Endpoint = Static<typeof EndpointSchema>;
+
+
+// Independent JSON Schema validators enforce the same legacy boundary as the parser.
+export const LegacyEncodingExclusion = {
+  if: {type: "object", properties: {ir_version: {const: "1.0.0"}}, required: ["ir_version"]},
+  then: {type: "object", properties: {endpoints: {type: "array", items: {type: "object", properties: {
+    request_bodies: {type: "array", items: {type: "object",
+      not: {type: "object", properties: {encoding: {}}, required: ["encoding"]}}},
+  }}}}},
+};

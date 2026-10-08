@@ -18,7 +18,7 @@ async function service(files: Record<string, string>) {
 }
 function request(): AnalyzerRequest {
   return {
-    exchange_version: "1.0.0", ir_version: "1.0.0", request_id: "middleware-test", analyzer: ANALYZER,
+    exchange_version: "1.0.0", ir_version: "1.1.0", request_id: "middleware-test", analyzer: ANALYZER,
     source: { repository_id: "example-repo", service_id: "example", service_root: "service",
       immutable_revision: "a".repeat(40), source_digest: "pending", access_label: "test" },
     resolution_inputs: [
@@ -285,4 +285,11 @@ test("controller interface overrides cannot silently inherit a middleware-only c
     expect(result.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
     expect(result.diagnostics.map(item => item.code)).toContain("handler_interface_unverified");
   }
+});
+
+
+test("unsupported profile IR version fails before filesystem access", async () => {
+  const adapter = createAnalyzer({ projectRoot: "/missing/profile-version-check" });
+  await expect(adapter.analyze({ ...request(), ir_version: "1.0.0" }))
+    .rejects.toThrow("Swagger profile requires IR 1.1.0");
 });

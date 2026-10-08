@@ -279,6 +279,7 @@ const endpointProjection = (endpoint: Endpoint, snapshot?: ContractSnapshot): Js
     presence: presenceProjection(body.presence),
     schema: canonicalSchema(body.schema),
     serialization: structuredClone(body.serialization),
+    ...(requestBodyEncodingProjection(body) === undefined ? {} : { encoding: requestBodyEncodingProjection(body) }),
   })).sort((left, right) => compareUtf8(left.media_type, right.media_type));
   const responsesByStatus = new Map<string, {
     status: Endpoint["responses"][number]["status"];
@@ -363,12 +364,26 @@ const parameterProjection = (parameter: Parameter): JsonValue => ({
   serialization: structuredClone(parameter.serialization),
 });
 
+// Encoding evidence explains where a declaration came from; it is not part of
+// the request contract. Keep only the semantic values, and treat an empty map
+// as equivalent to an omitted map.
+const requestBodyEncodingProjection = (body: RequestBody): JsonValue | undefined => {
+  const encoding = body.encoding;
+  if (encoding === undefined || Object.keys(encoding).length === 0) return undefined;
+  return Object.fromEntries(Object.entries(encoding).map(([property, value]) => [property, {
+    ...(value.style === undefined ? {} : { style: value.style }),
+    ...(value.explode === undefined ? {} : { explode: value.explode }),
+    ...(value.content_type === undefined ? {} : { content_type: value.content_type }),
+  }]));
+};
+
 const bodyProjection = (body: RequestBody): JsonValue => ({
   media_type: body.media_type,
   presence: presenceProjection(body.presence),
   schema: canonicalSchema(body.schema),
   serialization: structuredClone(body.serialization),
-});
+  ...(requestBodyEncodingProjection(body) === undefined ? {} : { encoding: requestBodyEncodingProjection(body) }),
+} as JsonValue);
 
 type ResponseGroup = {
   status: Response["status"];
@@ -427,7 +442,9 @@ const changedMemberCompatibility = (
     schema: canonicalSchema(after.schema),
     serialization: after.serialization,
   });
-  if (!otherwiseEqual) return "potentially_breaking";
+  const encodingEqual = canonicalJson(requestBodyEncodingProjection(before as RequestBody) ?? null)
+    === canonicalJson(requestBodyEncodingProjection(after as RequestBody) ?? null);
+  if (!otherwiseEqual || !encodingEqual) return "potentially_breaking";
   if (beforeState === "unknown" || afterState === "unknown") return "unknown";
   if (beforeState === "optional" && (afterState === "required" || afterState === "conditional")) {
     return "potentially_breaking";

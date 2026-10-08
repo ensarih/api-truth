@@ -196,3 +196,10 @@ Run all focused D07 tests with:
 ```sh
 npm run test:updates
 ```
+
+
+Request-body encoding is part of the semantic difference projection in IR 1.1.
+Delimiter, explode, or part content-type changes are potentially breaking.
+Encoding evidence IDs and map order do not create contract changes; absent and
+empty encoding maps compare equally. Comparisons still require matching IR
+versions, so version transitions cannot silently compare legacy and new facts.

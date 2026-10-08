@@ -13,7 +13,7 @@ export async function runCli(args: string[]): Promise<void> {
   if (!["--source", "--document", "--service", "--revision"].every(name => values.has(name))) throw new Error("Missing CLI arguments");
   const documentPath = values.get("--document")!;
   const candidate = {
-    exchange_version: "1.0.0", ir_version: values.get("--ir-version") ?? "1.0.0", request_id: "local-swagger2-extraction", analyzer: ANALYZER,
+    exchange_version: "1.0.0", ir_version: values.get("--ir-version") ?? "1.1.0", request_id: "local-swagger2-extraction", analyzer: ANALYZER,
     source: { repository_id: "local", service_id: values.get("--service"), service_root: ".", immutable_revision: values.get("--revision"), source_digest: "pending", access_label: "local" },
     resolution_inputs: [{ kind: "type_manifest", path: documentPath, digest: "pending" }],
     prior_dependencies: [], changed_paths: [], extraction_mode: "baseline",

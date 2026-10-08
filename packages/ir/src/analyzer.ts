@@ -1,7 +1,7 @@
 import { type Static, Type } from "@sinclair/typebox";
 import { SchemaComponentSchema } from "./api-schema.js";
 import { ClaimSchema, EvidenceSchema } from "./evidence.js";
-import { EndpointSchema } from "./endpoints.js";
+import { EndpointSchema, LegacyEncodingExclusion } from "./endpoints.js";
 import { SecuritySchemeFactSchema } from "./security.js";
 import {
   AnalyzerIdentitySchema, ContractSnapshotSchemaReferences, CoverageSchema, DependencySchema, DiagnosticSchema,
@@ -54,7 +54,7 @@ export const AnalyzerRequestSchema = Type.Object({
     timeout_ms: Type.Integer({ minimum: 1 }), max_files: Type.Integer({ minimum: 1 }), max_output_bytes: Type.Integer({ minimum: 1 }),
   }, { additionalProperties: false }),
   execution_policy: Type.Object({ network_access: Type.Literal(false), side_effects: Type.Literal("none") }, { additionalProperties: false }),
-}, { $id: "https://api-truth.dev/schemas/analyzer-request-1.0.0.json", additionalProperties: false });
+}, { $id: "https://api-truth.dev/schemas/analyzer-request-1.1.0.json", additionalProperties: false });
 
 export const AnalyzerResultSchema = Type.Object({
   exchange_version: AnalyzerExchangeVersionSchema,
@@ -76,7 +76,7 @@ export const AnalyzerResultSchema = Type.Object({
   dependencies: Type.Array(DependencySchema),
   diagnostics: Type.Array(DiagnosticSchema),
   reproducibility_fingerprint: NonEmptyString(),
-}, { $id: "https://api-truth.dev/schemas/analyzer-result-1.0.0.json", additionalProperties: false });
+}, { $id: "https://api-truth.dev/schemas/analyzer-result-1.1.0.json", allOf: [LegacyEncodingExclusion], additionalProperties: false });
 
 export type AnalyzerRequest = Static<typeof AnalyzerRequestSchema>;
 export type AnalyzerResult = Static<typeof AnalyzerResultSchema>;

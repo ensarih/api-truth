@@ -8,7 +8,7 @@ import { readSelectedDocument } from "./source.js";
 import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
-import { declaredPresence, parameterSerialization, supportedFormField } from "./swagger2-serialization.js";
+import { declaredPresence, parameterSerialization, supportedFormField, formFieldEncoding } from "./swagger2-serialization.js";
 import type { MiddlewareBinding } from "./middleware-binding.js";
 import type { RoutingConfiguration } from "./routing-config.js";
 import type { HandlerCandidateResolver } from "./handler-candidates.js";
@@ -19,7 +19,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.4.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.5.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -29,6 +29,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
     const request = parsed.value;
+    if (request.ir_version !== "1.1.0") throw new Error("Swagger profile requires IR 1.1.0");
     if (request.analyzer.analyzer_id !== ANALYZER.analyzer_id || request.analyzer.analyzer_version !== ANALYZER.analyzer_version)
       throw new Error("Unsupported analyzer version");
     if (request.resolution_inputs.length !== 1 || request.resolution_inputs[0]?.kind !== "type_manifest")
@@ -63,12 +64,12 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
-    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-2", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-4", documentPath,
+    ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-3", documentPath }))
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-5", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-1" : "none" }));
   const result: AnalyzerResult = {
-    exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
+    exchange_version: "1.0.0", ir_version: request.ir_version, identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: request.analyzer, source: request.source,
     status: "success", completed_at: new Date().toISOString(),
     coverage: { status: "complete", analyzed_roots: [documentPath], diagnostic_ids: [] },
@@ -401,7 +402,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     const properties = Object.fromEntries([...forms].sort((a, b) => a.name.localeCompare(b.name)).map(field =>
       [field.name, field.type === "file"
         ? {type: "string", format: "binary", ...(typeof field.description === "string" ? {description: field.description} : {})} as ApiSchema
-        : convertSchema(Object.fromEntries(["type", "format", "description", "enum"].filter(key => field[key] !== undefined)
+        : convertSchema(Object.fromEntries(["type", "format", "description", "enum", "items"].filter(key => field[key] !== undefined)
           .map(key => [key, field[key]])), field.pointer)]));
     const required = forms.filter(field => field.required === true).map(field => field.name).sort();
     for (const mediaType of operation.consumes.values) {
@@ -413,7 +414,11 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         diagnostic("form_file_media_unresolved", consumesPointer, "warning", endpoint.endpoint_id);
         continue;
       }
-      endpoint.request_bodies.push({media_type: mediaType,
+      const encoding = Object.fromEntries(forms.map(field => [field.name, {...formFieldEncoding(field),
+        evidence_ids: [evidence(field.pointer, endpoint.endpoint_id), mediaEv]}]));
+      for (const field of forms) claim(endpoint, "request.form.field.encoding",
+        {name: field.name, media_type: mediaType, ...formFieldEncoding(field)}, field.pointer);
+      endpoint.request_bodies.push({media_type: mediaType, encoding,
         schema: {type: "object", properties, ...(required.length ? {required} : {})},
         serialization: {format: mediaType === "multipart/form-data" ? "multipart" : "urlencoded"},
         presence: {state: required.length ? "required" : "optional", evidence_ids: [mediaEv, ...fieldEvidence]}});

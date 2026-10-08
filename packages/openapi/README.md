@@ -66,3 +66,17 @@ Run `npx vitest run tests/unit/openapi-projection.test.ts
 tests/unit/openapi-compiler.test.ts tests/unit/openapi-preparation.test.ts` from
 the repository root for focused tests.
 See the [backlog](../../docs/BACKLOG.md) for the remaining gates.
+
+
+## Form encoding
+
+IR 1.1 request bodies can retain per-property form encodings. Matched
+`urlencoded` and `multipart` serialization formats export into their exact
+media entries. Field encoding is sorted and emits `style`, `explode`, or
+`contentType`; evidence IDs never enter the OpenAPI document. Weak, limited or
+non-endpoint encoding evidence emits `UNVERIFIED_FORM_ENCODING` and omits the
+operation, including when merging consumes variants. Each direct form property
+must have an encoding record; missing records emit `UNKNOWN_FORM_ENCODING`
+and omit the operation. Required fields and format
+constraints still need their independent eligibility; declaring form encoding
+does not qualify other schema constraints.

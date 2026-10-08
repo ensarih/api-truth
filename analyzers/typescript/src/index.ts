@@ -14,6 +14,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
     let request = parsed.value;
+    if (request.ir_version !== "1.0.0") throw new Error("Analyzer profile requires IR 1.0.0");
     if (request.analyzer.analyzer_id !== ANALYZER.analyzer_id || request.analyzer.analyzer_version !== ANALYZER.analyzer_version) throw new Error("Unsupported analyzer version");
     const selectedRoot = resolve(options.projectRoot, request.source.service_root);
     if (request.resolution_inputs.some(item => item.kind === "classpath" || !inside(selectedRoot, resolve(options.projectRoot, item.path)))

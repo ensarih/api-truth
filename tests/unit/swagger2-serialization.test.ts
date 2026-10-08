@@ -3,7 +3,7 @@ import { ANALYZER, extractSwagger2Document } from "../../analyzers/nodejs/src/in
 import { parseAnalyzerResult, type AnalyzerRequest } from "../../packages/ir/src/index.js";
 
 const request: AnalyzerRequest = {
-  exchange_version: "1.0.0", ir_version: "1.0.0", request_id: "serialization",
+  exchange_version: "1.0.0", ir_version: "1.1.0", request_id: "serialization",
   analyzer: ANALYZER,
   source: {repository_id: "example", service_id: "example", service_root: ".",
     immutable_revision: "a".repeat(40), source_digest: "test", access_label: "test"},
@@ -117,8 +117,10 @@ test("multipart file declarations become binary string properties without invent
 
 test("unsupported fields never become a partial body that appears complete", () => {
   for (const unsupported of [
-    {name: "list", in: "formData", type: "array", items: {type: "string"}, collectionFormat: "multi"},
-    {name: "obj", in: "formData", type: "object"}, {name: "a", in: "formData", type: "string", allowEmptyValue: true},
+    {name: "list", in: "formData", type: "array", items: {type: "string"}, collectionFormat: "tsv"},
+    {name: "obj", in: "formData", type: "object"},
+    {name: "list", in: "formData", type: "array", items: {type: "array", items: {type: "string"}}},
+    {name: "list", in: "formData", type: "array", items: {type: "string", maxLength: 5}}, {name: "a", in: "formData", type: "string", allowEmptyValue: true},
     {name: "a", in: "formData", type: "string", maxLength: 5},
     {name: "a", in: "formData", type: "string", required: "false"},
     {name: "a", in: "formData", schema: {type: "string"}},
@@ -171,4 +173,28 @@ test("malformed or referenced parameter entries cannot silently disappear from a
     expect(result.endpoints[0]?.request_bodies).toEqual([]);
     expect(result.diagnostics.map(item => item.code)).toContain("request_body_declarations_unresolved");
   }
+});
+
+test.each(["csv", "multi", "ssv", "pipes", undefined])("form array %s retains its exact encoding and field evidence", format => {
+  const result = analyze([{...array("formData", format), required: false}],
+    {consumes: ["application/x-www-form-urlencoded", "multipart/form-data"]});
+  const expected = format === "multi" ? {style: "form", explode: true}
+    : format === "ssv" ? {style: "spaceDelimited", explode: false}
+    : format === "pipes" ? {style: "pipeDelimited", explode: false} : {style: "form", explode: false};
+  expect(result.endpoints[0]?.request_bodies).toHaveLength(2);
+  for (const body of result.endpoints[0]!.request_bodies) {
+    expect(body.schema.properties?.values).toEqual({type: "array", items: {type: "string"}});
+    expect(body.encoding?.values).toMatchObject(expected);
+    expect(result.evidence.filter(item => body.encoding?.values?.evidence_ids.includes(item.evidence_id))
+      .map(item => item.location.pointer)).toEqual(expect.arrayContaining([
+      "/paths/~1example/post/parameters/0", "/paths/~1example/post/consumes",
+    ]));
+  }
+});
+test("file parts carry content type instead of URL-style serialization", () => {
+  const result = analyze([{name: "file", in: "formData", type: "file"}], {consumes: ["multipart/form-data"]});
+  expect(result.endpoints[0]?.request_bodies[0]?.encoding?.file).toMatchObject({
+    content_type: "application/octet-stream", evidence_ids: expect.any(Array),
+  });
+  expect(result.endpoints[0]?.request_bodies[0]?.encoding?.file?.style).toBeUndefined();
 });

@@ -26,7 +26,7 @@ function yamlRequest(): AnalyzerRequest {
 }
 function request(): AnalyzerRequest {
   return {
-    exchange_version: "1.0.0", ir_version: "1.0.0", request_id: "swagger-test", analyzer: ANALYZER,
+    exchange_version: "1.0.0", ir_version: "1.1.0", request_id: "swagger-test", analyzer: ANALYZER,
     source: { repository_id: "orders-repo", service_id: "orders", service_root: "service", immutable_revision: "a".repeat(40), source_digest: "host-supplied-digest", access_label: "test" },
     resolution_inputs: [{ kind: "type_manifest", path: "service/api/swagger/swagger.json", digest: "host-supplied-digest" }],
     prior_dependencies: [], changed_paths: [], extraction_mode: "baseline",
@@ -199,4 +199,11 @@ test("operation-level anonymous security overrides inherited requirements", asyn
   expect(result.endpoints[0]?.security).toMatchObject({ state: "anonymous", alternatives: [] });
   const securityEvidence = result.evidence.find(item => result.endpoints[0]?.security.evidence_ids?.includes(item.evidence_id));
   expect(securityEvidence?.location.pointer).toBe("/paths/~1orders~1{id}/get/security");
+});
+
+
+test("unsupported profile IR version fails before filesystem access", async () => {
+  const adapter = createAnalyzer({ projectRoot: "/missing/profile-version-check" });
+  await expect(adapter.analyze({ ...request(), ir_version: "1.0.0" }))
+    .rejects.toThrow("Swagger profile requires IR 1.1.0");
 });

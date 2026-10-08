@@ -1,13 +1,14 @@
 import { Type } from "@sinclair/typebox";
 
-export const IR_VERSION = "1.0.0" as const;
+export const IR_VERSION = "1.1.0" as const;
+export const LEGACY_IR_VERSION = "1.0.0" as const;
 export const EVENT_VERSION = "1.0.0" as const;
 export const VIEW_VERSION = "1.0.0" as const;
 export const CONFIG_VERSION = "1.0.0" as const;
 export const IDENTITY_VERSION = "1.0.0" as const;
 export const ANALYZER_EXCHANGE_VERSION = "1.0.0" as const;
 
-export const IrVersionSchema = Type.Literal(IR_VERSION);
+export const IrVersionSchema = Type.Union([Type.Literal(LEGACY_IR_VERSION), Type.Literal(IR_VERSION)]);
 export const EventVersionSchema = Type.Literal(EVENT_VERSION);
 export const ViewVersionSchema = Type.Literal(VIEW_VERSION);
 export const ConfigVersionSchema = Type.Literal(CONFIG_VERSION);

@@ -56,6 +56,7 @@ test("both Swagger profiles extract the synthetic multipart upload with query ar
     expect(result.endpoints).toMatchObject([{application_path: path,
       parameters: [{name: "tags", serialization: {style: "form", explode: true}, presence: {state: "optional"}}],
       request_bodies: [{media_type: "multipart/form-data", serialization: {format: "multipart"},
+        encoding: {categories: {style: "form", explode: true}, file: {content_type: "application/octet-stream"}},
         presence: {state: "required"}, schema: {type: "object", required: ["file"],
           properties: {file: {type: "string", format: "binary"}, label: {type: "string"}}}}],
     }]);

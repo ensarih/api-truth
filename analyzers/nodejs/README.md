@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.4.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.5.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -31,7 +31,7 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-Both `0.4.0` profiles map flat primitive parameters using the declared
+Both `0.5.0` profiles map flat primitive parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
 
@@ -52,7 +52,7 @@ replacement delimiter is guessed. Supported mappings carry
 optional for non-path parameters and bodies; invalid or missing requiredness
 on a path remains unknown.
 
-Scalar `formData` fields are grouped into one object schema for each declared
+Scalar and flat primitive-array `formData` fields are grouped into one object schema for each declared
 `application/x-www-form-urlencoded` or `multipart/form-data` request media
 type. Operation `consumes` overrides the document value. Required form fields
 populate the schema's `required` list; any required field makes the body
@@ -60,17 +60,35 @@ required, otherwise the body is optional. Field types, descriptions, formats and
 Exact field and media declarations remain endpoint-scoped evidence. A multipart file becomes a string with
 `format: binary`; URL-encoded files remain unresolved in this profile.
 
-Form arrays, unsupported constraints/unknown fields, malformed or referenced parameter
+Tab-delimited or nested form arrays, unsupported constraints/unknown fields, malformed or referenced parameter
 entries, unknown media, duplicate body/form fields within one declaration list,
 multiple bodies, and mixed body/form declarations prevent a guessed complete
 body. Legitimate operation overrides of path-level declarations still apply.
 Documented routes and selected form declaration claims remain available.
 
-This slice records `urlencoded` and `multipart` format markers in D03.
-Per-property encoding and verified inline requiredness are still missing from
-the OpenAPI export gate: the compiler diagnoses these forms as unrepresentable
-and strict export stays blocked. Extraction is still partial and does not
-establish runtime validation or middleware/handler binding.
+The profiles require **IR 1.1.0**; both local commands default to it. Requests to these
+profiles explicitly selecting IR 1.0.0 fail before reading source.
+Existing IR 1.0 snapshots remain readable; they cannot contain `encoding`.
+Readers must be upgraded before consuming IR 1.1 output. Comparisons across
+different IR versions remain incompatible; establish a same-version baseline
+when moving a service to this profile.
+
+Per-field `encoding` records carry source/media evidence. Scalar fields use
+`form` with `explode: false`; arrays use the same supported query
+`collectionFormat` mappings above, including repeated `multi` values. File
+parts use an `application/octet-stream` content-type declaration under this
+bounded binary-file profile. Unsupported fields leave the body unresolved.
+Changing a delimiter reaches the contract-difference engine; moving or replacing
+evidence alone does not create a contract change.
+
+The compiler can export matched `urlencoded`/`multipart` bodies and their
+encoding when exact endpoint evidence qualifies. Declaration-only, limited,
+service-wide, or unrelated encoding evidence produces
+`UNVERIFIED_FORM_ENCODING` and omits the draft operation. Inline requiredness
+and format constraints retain their separate evidence gates. These Swagger
+extractions remain partial declarations; this slice does not make them strictly
+publishable or establish runtime validation, handler binding, or file MIME
+acceptance.
 
 The local upload fixture works with both commands:
 
@@ -105,7 +123,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.4.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.5.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and

@@ -259,8 +259,19 @@ const ParameterProjectionSchema = Type.Object({
   serialization: Type.Optional(SerializationProjectionSchema),
 }, { additionalProperties: false, minProperties: 1 });
 
+const RequestBodyEncodingProjectionSchema = Type.Record(NonEmptyString(), Type.Object({
+  style: Type.Optional(Type.Union([
+    Type.Literal("form"),
+    Type.Literal("spaceDelimited"),
+    Type.Literal("pipeDelimited"),
+  ])),
+  explode: Type.Optional(Type.Boolean()),
+  content_type: Type.Optional(NonEmptyString()),
+}, { additionalProperties: false, minProperties: 1 }));
+
 const RequestBodyProjectionSchema = Type.Object({
   media_type: Type.Optional(NonEmptyString()),
+  encoding: Type.Optional(RequestBodyEncodingProjectionSchema),
   presence: Type.Optional(PresenceProjectionSchema),
   schema: Type.Optional(Type.Ref(ApiSchemaSchema)),
   serialization: Type.Optional(SerializationProjectionSchema),

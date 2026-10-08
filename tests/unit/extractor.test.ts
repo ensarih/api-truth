@@ -312,3 +312,10 @@ test("tracks separate literal response state and clears it across branches or dy
   expect(result.endpoints.find(endpoint => endpoint.application_path === "/reset")!.responses[0]!.status)
     .toEqual({ kind: "unknown", reason: "Unsupported explicit response status" });
 });
+
+
+test("unsupported profile IR version fails before filesystem access", async () => {
+  const adapter = createAnalyzer({ projectRoot: "/missing/profile-version-check" });
+  await expect(adapter.analyze({ ...request(), ir_version: "1.1.0" }))
+    .rejects.toThrow("Analyzer profile requires IR 1.0.0");
+});

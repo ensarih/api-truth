@@ -109,3 +109,21 @@ describe("canonical JSON Schema exports", () => {
     expect(candidate.endpoints[2].request_bodies[0].presence.state).toBe("unknown");
   });
 });
+
+test("independent schemas version the encoding extension while accepting legacy snapshots", () => {
+  const ajv = new Ajv2020({strict: true, allErrors: true});
+  (addFormatsModule.default as unknown as (instance: Ajv2020) => void)(ajv);
+  jsonSchemaCatalog.forEach(schema => ajv.addSchema(schema));
+  const validate = ajv.getSchema(jsonSchemas.contractSnapshot.$id as string)!;
+  const snapshot = structuredClone(expressSnapshot);
+  expect(validate(snapshot)).toBe(true);
+  const endpoint = snapshot.endpoints[0];
+  endpoint.request_bodies = [{media_type: "application/x-www-form-urlencoded", serialization: {format: "urlencoded"},
+    schema: {type: "object", properties: {tags: {type: "array", items: {type: "string"}}}},
+    presence: {state: "optional", evidence_ids: [endpoint.evidence_ids[0]]},
+    encoding: {tags: {style: "form", explode: true, evidence_ids: [endpoint.evidence_ids[0]]}}}];
+  expect(validate(snapshot)).toBe(false);
+  snapshot.ir_version = "1.1.0";
+  expect(validate(snapshot), JSON.stringify(validate.errors)).toBe(true);
+  expect(parseContractSnapshot(snapshot).ok).toBe(true);
+});

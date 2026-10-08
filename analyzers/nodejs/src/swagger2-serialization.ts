@@ -30,8 +30,21 @@ export function parameterSerialization(parameter: Swagger2Parameter): Endpoint["
   return undefined;
 }
 
-/** No per-field form encoding exists in D03, so arrays and constrained/unknown fields remain unresolved. */
+/** Flat form fields only; nested arrays and unsupported constraints remain unresolved. */
 export function supportedFormField(parameter: Swagger2Parameter): boolean {
+  if (parameter.type === "array") {
+    const allowed = new Set(["name", "in", "pointer", "media", "required", "type", "description",
+      "items", "collectionFormat", "allowEmptyValue"]);
+    if (!parameter.name || Object.keys(parameter).some(key => !allowed.has(key))
+      || declaredPresence(parameter) === "unknown"
+      || parameter.description !== undefined && typeof parameter.description !== "string"
+      || !parameter.items || typeof parameter.items !== "object" || Array.isArray(parameter.items)) return false;
+    const items = parameter.items as Record<string, unknown>;
+    if (Object.keys(items).some(key => !["type", "format", "description", "enum"].includes(key))
+      || typeof items.type !== "string" || !primitives.has(items.type)) return false;
+    return supportedFormField({...items, name: "item", in: "formData", pointer: parameter.pointer})
+      && parameterSerialization({...parameter, in: "query"}) !== undefined;
+  }
   const allowed = new Set(["name", "in", "pointer", "media", "required", "type", "format", "description", "enum", "allowEmptyValue"]);
   if (!parameter.name || Object.keys(parameter).some(key => !allowed.has(key))
     || parameter.allowEmptyValue !== undefined && parameter.allowEmptyValue !== false
@@ -44,4 +57,13 @@ export function supportedFormField(parameter: Swagger2Parameter): boolean {
   return Array.isArray(parameter.enum) && parameter.enum.length > 0 && parameter.enum.every(value =>
     parameter.type === "string" ? typeof value === "string" : parameter.type === "boolean" ? typeof value === "boolean"
       : typeof value === "number" && Number.isFinite(value) && (parameter.type !== "integer" || Number.isInteger(value)));
+}
+
+
+export function formFieldEncoding(parameter: Swagger2Parameter): Omit<
+  NonNullable<Endpoint["request_bodies"][number]["encoding"]>[string], "evidence_ids"> {
+  return parameter.type === "file" ? {content_type: "application/octet-stream"}
+    : {style: parameter.type === "array" && parameter.collectionFormat === "ssv" ? "spaceDelimited"
+      : parameter.type === "array" && parameter.collectionFormat === "pipes" ? "pipeDelimited" : "form",
+    explode: parameter.type === "array" && parameter.collectionFormat === "multi"};
 }

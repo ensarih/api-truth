@@ -5,7 +5,7 @@ import {
   ClaimSchema, ConditionSchema, EditorialReviewSchema, EvidenceSchema, ExportEligibilitySchema,
   PresenceFactSchema, type Claim, type Evidence,
 } from "./evidence.js";
-import { EndpointSchema, type Endpoint } from "./endpoints.js";
+import { EndpointSchema, LegacyEncodingExclusion, type Endpoint } from "./endpoints.js";
 import { deriveEndpointIdentity, EndpointIdentitySchema } from "./identity.js";
 import { JsonValueSchema } from "./json-value.js";
 import { SecuritySchemeDefinitionSchema, SecuritySchemeFactSchema } from "./security.js";
@@ -79,7 +79,7 @@ export const ContractSnapshotSchema = Type.Object({
   export_eligibility: Type.Array(Type.Ref(ExportEligibilitySchema)),
   dependencies: Type.Array(DependencySchema),
   diagnostics: Type.Array(DiagnosticSchema),
-}, { $id: "https://api-truth.dev/schemas/contract-snapshot-1.0.0.json", additionalProperties: false });
+}, { $id: "https://api-truth.dev/schemas/contract-snapshot-1.1.0.json", allOf: [LegacyEncodingExclusion], additionalProperties: false });
 
 export type ContractSnapshot = Static<typeof ContractSnapshotSchema>;
 
@@ -287,6 +287,29 @@ export const validateContractSnapshotSemantics = (snapshot: ContractSnapshot): V
       );
     });
     endpoint.request_bodies.forEach((body, bodyIndex) => {
+      if (snapshot.ir_version === "1.0.0" && body.encoding !== undefined)
+        issues.push(issue(`/endpoints/${index}/request_bodies/${bodyIndex}/encoding`,
+          "semantic.unsupported_version_field", "form encoding requires IR 1.1.0"));
+      for (const [name, encoding] of Object.entries(body.encoding ?? {})) {
+        const at = `/endpoints/${index}/request_bodies/${bodyIndex}/encoding/${name.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+        evidenceReference(encoding.evidence_ids, evidenceIds, `${at}/evidence_ids`, issues);
+        if (!["application/x-www-form-urlencoded", "multipart/form-data"].includes(body.media_type)
+          || body.schema.type !== "object" || !Object.prototype.hasOwnProperty.call(body.schema.properties ?? {}, name))
+          issues.push(issue(at, "semantic.invalid_form_encoding", "encoding requires a direct form object property"));
+        const property = body.schema.properties?.[name];
+        const styleMode = encoding.style !== undefined || encoding.explode !== undefined;
+        if (styleMode ? encoding.style === undefined || encoding.explode === undefined || encoding.content_type !== undefined
+          : encoding.content_type === undefined)
+          issues.push(issue(at, "semantic.invalid_form_encoding", "encoding requires either style/explode or content type"));
+        if (encoding.style === "spaceDelimited" || encoding.style === "pipeDelimited") {
+          if (encoding.explode !== false || property?.type !== "array")
+            issues.push(issue(at, "semantic.invalid_form_encoding", "delimited form encoding requires a non-exploded array"));
+        }
+        if (styleMode && property?.type !== "array" && !["string", "integer", "number", "boolean"].includes(String(property?.type)))
+          issues.push(issue(at, "semantic.invalid_form_encoding", "unsupported form property type"));
+        if (encoding.content_type !== undefined && !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+*-]+$/.test(encoding.content_type))
+          issues.push(issue(at, "semantic.invalid_form_encoding", "unsupported part content type"));
+      }
       evidenceReference(
         body.presence.evidence_ids,
         evidenceIds,

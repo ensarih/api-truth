@@ -74,7 +74,7 @@ const snapshot = (
   coverage: "complete" | "incomplete" = "complete",
 ): ContractSnapshot => {
   const result: ContractSnapshot = {
-    ir_version: "1.0.0",
+    ir_version: "1.1.0",
     identity_version: "1.0.0",
     snapshot_id,
     service: { service_id: "pets", repository_id: "animal-care", root: "services/pets" },
@@ -100,6 +100,15 @@ const snapshot = (
       source: { kind: "source_code", source_id: "animal-care" },
       source_version: immutable_revision,
       location: { path: "src/routes.ts" },
+      method: "deterministic_analysis",
+      scope: { service_id: "pets", snapshot_id },
+      limitations: [],
+      access_label: "fixture-read",
+    }, {
+      evidence_id: "ev-encoding",
+      source: { kind: "source_code", source_id: "animal-care" },
+      source_version: immutable_revision,
+      location: { path: "src/forms.ts" },
       method: "deterministic_analysis",
       scope: { service_id: "pets", snapshot_id },
       limitations: [],
@@ -311,6 +320,45 @@ describe("D07 endpoint contract differences", () => {
       });
     },
   );
+
+  test("reports request-body encoding changes as potentially breaking", () => {
+    const before = endpoint("endpoint-body-encoding", "POST", "/pets");
+    before.request_bodies = [{ media_type: "application/x-www-form-urlencoded", presence: { state: "required", evidence_ids: ["ev-route"] }, schema: { type: "object", properties: { tags: { type: "array", items: { type: "string" } } } }, serialization: { format: "urlencoded" } }];
+    (before.request_bodies[0] as any).encoding = {
+      tags: { style: "form", explode: true, evidence_ids: ["ev-route"] },
+    };
+    const after = structuredClone(before);
+    (after.request_bodies[0] as any).encoding.tags.style = "spaceDelimited";
+    (after.request_bodies[0] as any).encoding.tags.explode = false;
+
+    const result = compare([before], [after]);
+    expect(result.differences).toEqual([expect.objectContaining({
+      kind: "request_body.changed",
+      compatibility: "potentially_breaking",
+      before: expect.objectContaining({ encoding: { tags: { style: "form", explode: true } } }),
+      after: expect.objectContaining({ encoding: { tags: { style: "spaceDelimited", explode: false } } }),
+    })]);
+    expect(JSON.stringify(result)).not.toContain("evidence_ids");
+  });
+
+  test("ignores encoding evidence and map order, and equates absent with empty encoding", () => {
+    const before = endpoint("endpoint-body-encoding-evidence", "POST", "/pets");
+    before.request_bodies = [{ media_type: "application/x-www-form-urlencoded", presence: { state: "required", evidence_ids: ["ev-route"] }, schema: { type: "object", properties: { tags: { type: "string" }, metadata: { type: "string" } } }, serialization: { format: "urlencoded" } }];
+    (before.request_bodies[0] as any).encoding = {
+      tags: { style: "form", explode: true, evidence_ids: ["ev-route"] },
+      metadata: { content_type: "application/json", evidence_ids: ["ev-route"] },
+    };
+    const after = structuredClone(before);
+    (after.request_bodies[0] as any).encoding = {
+      metadata: { evidence_ids: ["ev-encoding"], content_type: "application/json" },
+      tags: { evidence_ids: ["ev-encoding"], explode: true, style: "form" },
+    };
+    expect(compare([before], [after]).differences).toEqual([]);
+
+    delete (after.request_bodies[0] as any).encoding;
+    (before.request_bodies[0] as any).encoding = {};
+    expect(compare([before], [after]).differences).toEqual([]);
+  });
 
   test("compares bodies, grouped responses, and security as narrow canonical facts", () => {
     const before = endpoint("endpoint-members", "POST", "/pets");
