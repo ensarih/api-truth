@@ -8,7 +8,12 @@ export function compareResponseBodyTypes(actual: ApiSchema, expected: unknown): 
   const mismatches = new Set<string>();
   const visit = (shape: ApiSchema, schema: unknown, path: string, depth: number): void => {
     if (++nodes > 10000 || depth > 64 || mismatches.size >= 32) { unresolved = true; return; }
-    if (!object(schema) || ["$ref", "allOf", "anyOf", "oneOf", "not"].some(key => Object.hasOwn(schema, key))) { unresolved = true; return; }
+    if (!object(schema) || ["$ref", "anyOf", "oneOf", "not"].some(key => Object.hasOwn(schema, key))) { unresolved = true; return; }
+    if (Object.hasOwn(schema, "allOf")) {
+      if (!Array.isArray(schema.allOf) || schema.allOf.length === 0 || schema.allOf.length > 32) { unresolved = true; return; }
+      for (const branch of schema.allOf) visit(shape, branch, path, depth + 1);
+      if (unresolved) return;
+    }
     if (shape.anyOf) { for (const variant of shape.anyOf) visit(variant, schema, path, depth + 1); return; }
     if (schema.type !== undefined && (typeof schema.type !== "string" || !types.has(schema.type))) { unresolved = true; return; }
     if (schema.type && shape.type && schema.type !== shape.type && !(schema.type === "number" && shape.type === "integer")) {
@@ -32,11 +37,16 @@ export function compareResponseBodyPresence(actual: ApiSchema, expected: unknown
   const consume = (): boolean => { if (++nodes > 10000) unresolved = true; return !unresolved; };
   const visit = (shape: ApiSchema, schema: unknown, path: string, depth: number): void => {
     if (!consume() || depth > 64) { unresolved = true; return; }
-    if (!object(schema) || ["$ref", "allOf", "anyOf", "oneOf", "not"].some(key => Object.hasOwn(schema, key))) { unresolved = true; return; }
+    if (!object(schema) || ["$ref", "anyOf", "oneOf", "not"].some(key => Object.hasOwn(schema, key))) { unresolved = true; return; }
     if (schema.type !== undefined && (typeof schema.type !== "string" || !types.has(schema.type))) { unresolved = true; return; }
     if (schema.required !== undefined && (!Array.isArray(schema.required) || schema.required.length > 10000
       || schema.required.some(name => typeof name !== "string" || !name.length)
       || new Set(schema.required).size !== schema.required.length)) { unresolved = true; return; }
+    if (Object.hasOwn(schema, "allOf")) {
+      if (!Array.isArray(schema.allOf) || schema.allOf.length === 0 || schema.allOf.length > 32) { unresolved = true; return; }
+      for (const branch of schema.allOf) visit(shape, branch, path, depth + 1);
+      if (unresolved) return;
+    }
     if (shape.anyOf) { for (const variant of shape.anyOf) visit(variant, schema, path, depth + 1); return; }
     if (shape.type === "object" && (schema.type === undefined || schema.type === "object")) {
       for (const name of (schema.required ?? []) as string[]) {

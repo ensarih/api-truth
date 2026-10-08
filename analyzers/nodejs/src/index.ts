@@ -74,7 +74,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-8", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-25", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-26", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -671,14 +671,14 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-type-discrepancy:${bodyId}`).slice(0, 24)}`,
         subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
         predicate: "handler.response.body.type.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
-        value: {paths: comparison.mismatches, policy: "literal-json-body-types-3"}});
+        value: {paths: comparison.mismatches, policy: "literal-json-body-types-4"}});
       if (comparison.kind === "compared") {
         const presence = compareResponseBodyPresence(body.schema, comparisonSchema);
         if (presence.kind === "compared" && presence.missing.length) result.claims.push({
           claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-required-discrepancy:${bodyId}`).slice(0, 24)}`,
           subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id},
           predicate: "handler.response.body.required.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
-          value: {paths: presence.missing, policy: "literal-json-body-required-3"}});
+          value: {paths: presence.missing, policy: "literal-json-body-required-4"}});
         if (presence.kind === "unresolved" || presence.missing.length) result.diagnostics.push({
           diagnostic_id: `diag-${hash(`${endpoint.endpoint_id}:body-required:${bodyId}:${presence.kind}`).slice(0, 24)}`,
           code: presence.kind === "unresolved" ? "handler_response_body_presence_unresolved" : "handler_response_body_required_discrepancy",

@@ -1,6 +1,6 @@
 # API Truth — Development backlog
 
-**Updated:** 2026-10-08
+**Updated:** 2026-10-09
 **Source of truth for work status:** this file
 **Scope:** public synthetic-fixture development; an enterprise pilot requires separately authorized inputs.
 
@@ -9,6 +9,22 @@ specification](SPECIFICATION.md) defines the intended behavior, the [roadmap](RO
 defines phase gates, and the [Node.js analyzer backlog](NODEJS_ANALYZER_BACKLOG.md)
 contains the detailed adapter expansion. A **complete** status means implemented,
 reviewed, and validated; it does not imply that a later phase is complete.
+
+## Agreed execution priority — 2026-10-09
+
+1. Close critical Node.js analyzer gaps within explicit supported profiles.
+2. Verify the source-to-catalog-to-OpenAPI/portal/MCP path without promoting
+   declarations or observations to unverified normative contracts.
+3. Add sanitized log correlation, deployed URL mapping and request/response examples.
+4. Add grounded semantic API discovery with selectable OpenAI, Gemini and Claude providers.
+5. Complete live CI/CD provider wiring and environment integration.
+6. Add the Java/Spring analyzer and its conformance gate.
+7. Add permission-scoped Confluence context and documentation discrepancies.
+
+This order supersedes the earlier assumption that Java precedes runtime and
+semantic work. Existing phase and backlog IDs remain stable. Incremental updates,
+configured branch selection, provenance and environment distinctions remain
+requirements throughout; live-provider completion moves later, not out of scope.
 
 ## Current position
 
@@ -130,7 +146,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.25.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.26.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -518,3 +534,24 @@ fixtures verify catalog schemas, declared scalar headers and response/definition
 dependencies alongside existing handler comparisons. Independent review found no
 blocker. Broader compositions, dynamic bodies and validator analysis remain
 pending in NB4.
+
+
+### Composed response schemas in handler comparisons (2026-10-09)
+
+Middleware `0.26.0` resolves local definition references inside bounded Swagger
+`allOf` response schemas. Type and missing-field comparisons check every branch
+and sibling declaration as an intersection, without flattening the documented
+schema or merging incompatible constraints. Repeated findings are deduplicated;
+reference evidence and endpoint dependencies retain every resolved definition.
+
+Each composition contains 1–32 branches and shares the existing 64-depth,
+10,000-node and 128-definition resolution limits. Unsupported branches, malformed
+compositions, cycles and exhausted budgets remain unresolved and suppress partial
+comparison findings. `anyOf`, `oneOf` and `not` document compositions remain
+unsupported. Findings stay inferred source/document discrepancies; no runtime
+validation, requiredness inference or normative-contract promotion is added.
+
+Validation: 929 offline tests and 44 pinned runtime cases. Composed matching,
+type-conflicting and default required-field responses retain all definition
+dependencies. Independent review found no blocker. Broader alternatives, dynamic
+bodies and validator analysis remain pending in NB4.

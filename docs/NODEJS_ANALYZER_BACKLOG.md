@@ -1,13 +1,13 @@
 # Node.js analyzer expansion backlog
 
-**Status:** active analyzer priority, 2026-10-08
+**Status:** active analyzer priority, 2026-10-09
 **Current implementation:** `typescript-express@0.4.0` covers a bounded static
 Express subset. `nodejs-swagger2-document@0.10.0` reads selected Swagger 2 JSON/YAML
 declarations with flat parameter serialization and scalar/flat-array form and multipart-file
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.25.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.26.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -569,3 +569,24 @@ fixtures verify catalog schemas, declared scalar headers and response/definition
 dependencies alongside existing handler comparisons. Independent review found no
 blocker. Broader compositions, dynamic bodies and validator analysis remain
 pending in NB4.
+
+
+### Composed response schemas in handler comparisons (2026-10-09)
+
+Middleware `0.26.0` resolves local definition references inside bounded Swagger
+`allOf` response schemas. Type and missing-field comparisons check every branch
+and sibling declaration as an intersection, without flattening the documented
+schema or merging incompatible constraints. Repeated findings are deduplicated;
+reference evidence and endpoint dependencies retain every resolved definition.
+
+Each composition contains 1–32 branches and shares the existing 64-depth,
+10,000-node and 128-definition resolution limits. Unsupported branches, malformed
+compositions, cycles and exhausted budgets remain unresolved and suppress partial
+comparison findings. `anyOf`, `oneOf` and `not` document compositions remain
+unsupported. Findings stay inferred source/document discrepancies; no runtime
+validation, requiredness inference or normative-contract promotion is added.
+
+Validation: 929 offline tests and 44 pinned runtime cases. Composed matching,
+type-conflicting and default required-field responses retain all definition
+dependencies. Independent review found no blocker. Broader alternatives, dynamic
+bodies and validator analysis remain pending in NB4.

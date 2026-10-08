@@ -6,6 +6,22 @@
 
 Phases are acceptance-gated. Version numbers below are proposed milestones, not published releases or time estimates. Continuous updates and environment support are mandatory in Phase 1; later phases deepen them rather than introduce them.
 
+## Agreed execution priority — 2026-10-09
+
+1. Close critical Node.js analyzer gaps within explicit supported profiles.
+2. Verify the source-to-catalog-to-OpenAPI/portal/MCP path without promoting
+   declarations or observations to unverified normative contracts.
+3. Add sanitized log correlation, deployed URL mapping and request/response examples.
+4. Add grounded semantic API discovery with selectable OpenAI, Gemini and Claude providers.
+5. Complete live CI/CD provider wiring and environment integration.
+6. Add the Java/Spring analyzer and its conformance gate.
+7. Add permission-scoped Confluence context and documentation discrepancies.
+
+This order supersedes the earlier assumption that Java precedes runtime and
+semantic work. Existing phase and backlog IDs remain stable. Incremental updates,
+configured branch selection, provenance and environment distinctions remain
+requirements throughout; live-provider completion moves later, not out of scope.
+
 ## Overview
 
 | Phase | Milestone | Outcome |

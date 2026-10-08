@@ -7,6 +7,22 @@
 
 This replaces the initial proposal with the agreed code-first, continuously updated, environment-aware product. See the [specification](docs/SPECIFICATION.md), [architecture](docs/ARCHITECTURE.md), and [phased roadmap](docs/ROADMAP.md).
 
+## Agreed execution priority — 2026-10-09
+
+1. Close critical Node.js analyzer gaps within explicit supported profiles.
+2. Verify the source-to-catalog-to-OpenAPI/portal/MCP path without promoting
+   declarations or observations to unverified normative contracts.
+3. Add sanitized log correlation, deployed URL mapping and request/response examples.
+4. Add grounded semantic API discovery with selectable OpenAI, Gemini and Claude providers.
+5. Complete live CI/CD provider wiring and environment integration.
+6. Add the Java/Spring analyzer and its conformance gate.
+7. Add permission-scoped Confluence context and documentation discrepancies.
+
+This order supersedes the earlier assumption that Java precedes runtime and
+semantic work. Existing phase and backlog IDs remain stable. Incremental updates,
+configured branch selection, provenance and environment distinctions remain
+requirements throughout; live-provider completion moves later, not out of scope.
+
 ## 1. Outcome
 
 Give enterprise developers, architects, and their AI assistants a dependable answer to: **“Which API supports what I want to do in this environment, and how do I use it?”**

@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.25.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.26.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -672,3 +672,24 @@ fixtures verify catalog schemas, declared scalar headers and response/definition
 dependencies alongside existing handler comparisons. Independent review found no
 blocker. Broader compositions, dynamic bodies and validator analysis remain
 pending in NB4.
+
+
+### Composed response schemas in handler comparisons (2026-10-09)
+
+Middleware `0.26.0` resolves local definition references inside bounded Swagger
+`allOf` response schemas. Type and missing-field comparisons check every branch
+and sibling declaration as an intersection, without flattening the documented
+schema or merging incompatible constraints. Repeated findings are deduplicated;
+reference evidence and endpoint dependencies retain every resolved definition.
+
+Each composition contains 1–32 branches and shares the existing 64-depth,
+10,000-node and 128-definition resolution limits. Unsupported branches, malformed
+compositions, cycles and exhausted budgets remain unresolved and suppress partial
+comparison findings. `anyOf`, `oneOf` and `not` document compositions remain
+unsupported. Findings stay inferred source/document discrepancies; no runtime
+validation, requiredness inference or normative-contract promotion is added.
+
+Validation: 929 offline tests and 44 pinned runtime cases. Composed matching,
+type-conflicting and default required-field responses retain all definition
+dependencies. Independent review found no blocker. Broader alternatives, dynamic
+bodies and validator analysis remain pending in NB4.

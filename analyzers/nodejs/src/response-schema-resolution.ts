@@ -21,6 +21,10 @@ export function resolveResponseSchema(schema: unknown, definitions: unknown): Re
       return resolved;
     }
     const result:Record<string,unknown>={...value};
+    if(value.allOf!==undefined){
+      if(!Array.isArray(value.allOf)||value.allOf.length===0||value.allOf.length>32)throw new Error("Unsupported composition");
+      result.allOf=value.allOf.map(child=>visit(child,depth+1));
+    }
     if(value.properties!==undefined){
       if(!object(value.properties))throw new Error("Unsupported properties");
       const properties:Record<string,unknown>={};

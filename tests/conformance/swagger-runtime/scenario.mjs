@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -51,6 +51,14 @@ try {
     operation.responses = {[scenario.endsWith("required") ? "default" : "201"]:{$ref:"#/responses/Alias"}};
     doc.definitions = {Body:{type:"object",properties:{controller:{type:scenario.endsWith("type") ? "integer" : "string"},
       ...(scenario.endsWith("required") ? {name:{type:"string"}} : {})}, ...(scenario.endsWith("required") ? {required:["name"]} : {})}};
+  }
+  if (scenario.startsWith("runtime-binding-body-allof-")) {
+    operation.responses = {[scenario.endsWith("required") ? "default" : "201"]:{description:"Composed response",schema:{$ref:"#/definitions/Body"}}};
+    doc.definitions = {
+      Body:{allOf:[{$ref:"#/definitions/Base"},{$ref:"#/definitions/Fields"}]},
+      Base:{type:"object",properties:{controller:{type:scenario.endsWith("type") ? "integer" : "string"}}},
+      Fields:{type:"object",...(scenario.endsWith("required") ? {required:["name"],properties:{name:{type:"string"}}} : {})}
+    };
   }
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));

@@ -150,3 +150,10 @@ Assertions retain both response-chain and definition dependencies. The same fixt
 declarations. Response-object dependency assertions select object pointers
 separately from terminal field evidence. Header claims remain declared; the
 fixture does not establish runtime header emission.
+
+
+Three composed-response cases add matching types, a type discrepancy and a
+missing required field through the default response (44 total tests). Each uses
+local `allOf` definition references and verifies all three definition dependency
+pointers. Comparisons remain source declarations under an observed handler
+binding; no response schema is promoted to a runtime contract.

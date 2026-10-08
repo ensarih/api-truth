@@ -9,6 +9,6 @@ test("array variants and escaped property paths retain type conflicts", () => {
   expect(compare({type:"array", items:{anyOf:[{type:"integer"},{type:"string"}]}}, {type:"array",items:{type:"number"}})).toEqual({kind:"compared",mismatches:["/*"]});
   expect(compare({type:"object",properties:{"a/b~c":{type:"integer"}}}, {properties:{"a/b~c":{type:"string"}}}).mismatches).toEqual(["/a~1b~0c"]);
 });
-test.each([{$ref:"#/definitions/Body"}, {allOf:[{type:"string"}]}, {type:["string","null"]}, {type:"invalid"}, null])("unsupported schemas do not invent compatibility or conflicts: %j", schema => {
+test.each([{$ref:"#/definitions/Body"}, {allOf:[]}, {type:["string","null"]}, {type:"invalid"}, null])("unsupported schemas do not invent compatibility or conflicts: %j", schema => {
   expect(compare({type:"integer"}, schema)).toEqual({kind:"unresolved",mismatches:[]});
 });

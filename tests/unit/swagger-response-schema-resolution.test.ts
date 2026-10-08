@@ -40,3 +40,34 @@ test("reference expansion depth and node budgets are bounded",()=>{
   expect(resolve({$ref:"#/definitions/D0"},defs).kind).toBe("unresolved");
   expect(resolve({type:"object",properties:Object.fromEntries(Array.from({length:10001},(_,i)=>[`f${i}`,{type:"string"}]))},{}).kind).toBe("unresolved");
 });
+
+test("resolves definitions inside allOf without flattening or losing provenance",()=>{
+  const result=resolve({allOf:[{$ref:"#/definitions/Base"},{type:"object",required:["name"]}]},{Base:{type:"object",properties:{id:{type:"string"}}}});
+  expect(result).toEqual({kind:"resolved",schema:{allOf:[{type:"object",properties:{id:{type:"string"}}},{type:"object",required:["name"]}]},pointers:["/definitions/Base"]});
+  if(result.kind!=="resolved")return;
+  const actual={type:"object" as const,properties:{id:{type:"integer" as const}}};
+  expect(compareResponseBodyTypes(actual,result.schema)).toEqual({kind:"compared",mismatches:["/id"]});
+  expect(compareResponseBodyPresence(actual,result.schema)).toEqual({kind:"compared",missing:["/name"]});
+});
+test.each([[],null,[{type:"string"},null],Array.from({length:33},()=>({type:"string"}))])("invalid or oversized allOf is unresolved: %j",allOf=>{
+  expect(resolve({allOf},{}).kind).toBe("unresolved");
+  expect(compareResponseBodyTypes({type:"string"},{allOf})).toEqual({kind:"unresolved",mismatches:[]});
+  expect(compareResponseBodyPresence({type:"object"},{allOf})).toEqual({kind:"unresolved",missing:[]});
+});
+test("allOf preserves cycles and cumulative reference limits",()=>{
+  expect(resolve({$ref:"#/definitions/A"},{A:{allOf:[{$ref:"#/definitions/A"}]}}).kind).toBe("unresolved");
+  let schema:unknown={type:"string"};
+  for(let i=0;i<66;i++)schema={allOf:[schema]};
+  expect(resolve(schema,{}).kind).toBe("unresolved");
+});
+test("allOf checks siblings and every branch, without inferring requiredness",()=>{
+  const actual={type:"object" as const,properties:{id:{type:"integer" as const}}};
+  const schema={properties:{id:{type:"string"}},required:["label"],allOf:[{type:"object",required:["name"]},{type:"object",required:["name"]}]};
+  expect(compareResponseBodyTypes(actual,schema)).toEqual({kind:"compared",mismatches:["/id"]});
+  expect(compareResponseBodyPresence(actual,schema)).toEqual({kind:"compared",missing:["/label","/name"]});
+});
+test("unsupported composition branch withholds partial discrepancies",()=>{
+  const schema={allOf:[{type:"string"},{oneOf:[{type:"integer"}]}]};
+  expect(compareResponseBodyTypes({type:"integer"},schema)).toEqual({kind:"unresolved",mismatches:[]});
+  expect(compareResponseBodyPresence({type:"object"},{allOf:[{required:["id"]},{anyOf:[{type:"object"}]}]})).toEqual({kind:"unresolved",missing:[]});
+});

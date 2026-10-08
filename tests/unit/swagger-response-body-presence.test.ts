@@ -21,7 +21,7 @@ test("null fields are present and empty arrays do not invent missing items", () 
   expect(compare({type:"null"}, {type:"object",required:["id"]})).toEqual({kind:"compared",missing:[]});
 });
 
-test.each([{$ref:"#/definitions/Body"}, {allOf:[{required:["id"]}]}, {required:"id"}, {required:["id","id"]}, {required:[""]}, {required:[2]}, {properties:null}])
+test.each([{$ref:"#/definitions/Body"}, {allOf:[]}, {required:"id"}, {required:["id","id"]}, {required:[""]}, {required:[2]}, {properties:null}])
 ("unsupported required-field schemas remain unresolved: %j", schema => {
   expect(compare({type:"object",properties:{}}, schema)).toEqual({kind:"unresolved",missing:[]});
 });

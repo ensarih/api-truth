@@ -62,6 +62,9 @@ const cases = [
   ["runtime-binding-body-object-match", 201, "orders"],
   ["runtime-binding-body-object-type", 201, "orders"],
   ["runtime-binding-body-object-default-required", 201, "orders"],
+  ["runtime-binding-body-allof-match", 201, "orders"],
+  ["runtime-binding-body-allof-type", 201, "orders"],
+  ["runtime-binding-body-allof-required", 201, "orders"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -110,13 +113,16 @@ for (const [scenario, status, marker] of cases) {
       if (scenario.endsWith("present")) properties.name = {type:"string"};
       if (scenario.endsWith("null")) properties.name = {type:"null"};
       assert.deepEqual(result.analysis.bodyDeclaration.value.schema, {type:"object", properties});
-      assert.equal(result.analysis.diagnostics.includes("handler_response_body_required_discrepancy"), ["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required"].includes(scenario));
-      if (["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required"].includes(scenario)) {
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_required_discrepancy"), ["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-required"].includes(scenario));
+      if (["runtime-binding-body-required-missing", "runtime-binding-body-ref-required", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-required"].includes(scenario)) {
         assert.equal(result.analysis.requiredDiscrepancy.verification, "inferred");
         assert.deepEqual(result.analysis.requiredDiscrepancy.value.paths, ["/name"]);
       }
-      assert.equal(result.analysis.diagnostics.includes("handler_response_body_type_discrepancy"), (scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type"].includes(scenario)));
+      assert.equal(result.analysis.diagnostics.includes("handler_response_body_type_discrepancy"), (scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type", "runtime-binding-body-allof-type"].includes(scenario)));
       assert.equal(result.analysis.diagnostics.includes("handler_response_body_comparison_unresolved"), scenario.endsWith("cycle"));
+      if (scenario.startsWith("runtime-binding-body-allof-")) {
+        assert.deepEqual(result.analysis.definitionDependencyPaths, ["/definitions/Base", "/definitions/Body", "/definitions/Fields"]);
+      }
       if (scenario.startsWith("runtime-binding-body-object-")) {
         assert.equal(result.analysis.catalogResponseContentCount, 1);
         assert.deepEqual(result.analysis.catalogResponseHeaders, [{name:"X-Count", schema:{type:"integer"}}]);
@@ -126,7 +132,7 @@ for (const [scenario, status, marker] of cases) {
       }
       if (scenario.endsWith("ref") || scenario.startsWith("runtime-binding-body-ref-"))
         assert.deepEqual(result.analysis.definitionDependencyPaths, scenario.endsWith("cycle") ? [] : ["/definitions/Body"]);
-      if ((scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type"].includes(scenario))) assert.deepEqual(result.analysis.bodyDiscrepancy.value.paths, ["/controller"]);
+      if ((scenario.endsWith("mismatch") || ["runtime-binding-body-ref-type", "runtime-binding-body-object-type", "runtime-binding-body-allof-type"].includes(scenario))) assert.deepEqual(result.analysis.bodyDiscrepancy.value.paths, ["/controller"]);
     }
     if (scenario.startsWith("runtime-binding-response-")) {
       assert.equal(result.analysis.statusDeclaration.value.code, 201);

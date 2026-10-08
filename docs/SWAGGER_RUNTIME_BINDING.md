@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.25.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.26.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -206,3 +206,14 @@ keep the selector but withhold response details. Header extraction has a
 128-declaration cap and rejects arrays, unsupported schemas, invalid or
 case-conflicting names and Content-Type. These document facts do not prove that
 the captured handler emits the declared headers or validates its response.
+
+
+## Composed response comparisons
+
+Middleware `0.26.0` follows local definition references inside `allOf` and checks
+all branches and sibling type/required declarations against the literal source
+body shape. It preserves the document composition and definition dependencies.
+Compositions have 1–32 branches and share the bounded reference resolver's depth,
+node and definition limits. Unsupported alternatives, cycles and malformed or
+oversized compositions withhold partial findings. This is an inferred comparison
+of declarations, not validation of captured response bodies.
