@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.15.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.16.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -292,3 +292,26 @@ Two isolated runtime cases verify mock routing and create-over-file precedence.
 
 This does not resolve environment overrides or startup execution. Controller
 candidates remain inferred, and no authoritative handler binding is emitted.
+
+
+### Declared npm environment selection (2026-10-08)
+
+Middleware `0.16.0` recognizes the exact POSIX-style npm start declaration
+`NODE_ENV=production node app.js` (also development, test, staging and uat).
+The CommonJS manifest, matching root registration entrypoint and exact Node
+22.19.0 pin are still required; hooks, additional shell syntax, arbitrary names,
+cross-env commands and dynamic values remain unsupported.
+
+This selects at most one matching `config/<environment>.json`, `.yaml` or `.yml`
+in addition to at most one default file. The environment file currently supports
+only `{ "swagger": { "mockMode": false } }` with a boolean. Declared precedence is
+default file, environment file, then literal create option. Other config files,
+multiple representations, opaque files and broader environment-layer contents
+keep configuration unresolved. Exact environment-file and npm start pointers
+are retained; edits participate in the service digest and invalidate extraction.
+
+The analyzer never reads host environment values. This is a launch declaration,
+not proof of startup execution, deployment availability, effective environment
+or handler binding. Source environment hazards still suppress candidates.
+Two fresh-process framework cases verify selected production-file mock behavior;
+they do not execute or certify the service's npm start command.

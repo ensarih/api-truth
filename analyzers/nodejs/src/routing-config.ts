@@ -26,17 +26,24 @@ const knownFittings = new Set(["cors", "swagger_params_parser", "swagger_securit
 /** A static declaration profile. It never claims that environment/config layering is resolved. */
 export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, root: string,
   opaqueConfiguration: Map<string, string> = new Map(),
-  createMockMode?: {value: boolean; location: ConfigurationLocation}): RoutingConfiguration {
+  createMockMode?: {value: boolean; location: ConfigurationLocation},
+  environment?: {name: string; location: ConfigurationLocation}): RoutingConfiguration {
   const configFiles = [...files.keys(), ...opaqueConfiguration.keys()]
     .map(path => ({absolute: path, path: relativePath(root, path)}))
     .filter(item => item.path.startsWith("config/")).sort((a, b) => a.path.localeCompare(b.path));
   const locations: ConfigurationLocation[] = configFiles.map(item => ({path: item.path, pointer: "/"}));
   const fail = (reason: string): RoutingConfiguration => ({kind: "unresolved", code: "handler_configuration_unverified",
     reason, evidence_locations: locations});
-  if (configFiles.length > 1 || configFiles.some(item => !/^config\/default\.(?:json|ya?ml)$/.test(item.path)
-    || opaqueConfiguration.has(item.absolute))) return fail("layered_or_unsupported_configuration");
+  if (environment && !["development", "test", "production", "staging", "uat"].includes(environment.name))
+    return fail("environment_selection_unsupported");
+  if (environment) locations.push(environment.location);
+  const defaults = configFiles.filter(item => ["json", "yaml", "yml"].some(ext => item.path === `config/default.${ext}`));
+  const layers = configFiles.filter(item => environment && ["json", "yaml", "yml"].some(ext => item.path === `config/${environment.name}.${ext}`));
+  if (defaults.length > 1 || layers.length > 1 || configFiles.some(item =>
+    !defaults.includes(item) && !layers.includes(item) || opaqueConfiguration.has(item.absolute)))
+    return fail("layered_or_unsupported_configuration");
   let swagger: Record<string, unknown> = {};
-  const selected = configFiles[0];
+  const selected = defaults[0];
   if (selected) {
     const text = files.get(selected.absolute)!;
     if (Buffer.byteLength(text) > 1_000_000) return fail("configuration_limit_exceeded");
@@ -53,6 +60,19 @@ export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, r
     }
     if (!object(value) || value.swagger !== undefined && !object(value.swagger)) return fail("invalid_configuration");
     if (object(value.swagger)) swagger = value.swagger;
+  }
+  const layer = layers[0];
+  if (layer) {
+    const text = files.get(layer.absolute)!;
+    if (Buffer.byteLength(text) > 1_000_000) return fail("configuration_limit_exceeded");
+    let value: unknown;
+    try { value = layer.path.endsWith(".json") ? parseStrictJson(text) : parseStrictYaml(text); }
+    catch { return fail("invalid_configuration"); }
+    if (!object(value) || Object.keys(value).length !== 1 || !object(value.swagger)
+      || Object.keys(value.swagger).length !== 1 || typeof value.swagger.mockMode !== "boolean")
+      return fail("environment_layer_unsupported");
+    swagger = {...swagger, mockMode: value.swagger.mockMode};
+    locations.push({path: layer.path, pointer: "/swagger/mockMode"});
   }
   const allowed = new Set(["bagpipes", "swaggerControllerPipe", "defaultPipe", "fittingsDirs", "mockMode",
     "mapErrorsToJson", "startWithErrors", "startWithWarnings", "enforceUniqueOperationId"]);

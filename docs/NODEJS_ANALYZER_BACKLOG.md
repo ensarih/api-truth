@@ -7,7 +7,7 @@ declarations with flat parameter serialization and scalar/flat-array form and mu
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
 direct form requiredness and scalar format export are implemented.
-`nodejs-swagger-express-mw@0.15.0` recognizes one direct default-file
+`nodejs-swagger-express-mw@0.16.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
 Effective routing configuration, controller handler binding, framework version,
@@ -133,7 +133,7 @@ installation, network, database, log, or model access occurs.
 **Priority:** P0 when present in the pilot, otherwise P1
 **Adapter identity:** a distinct versioned `nodejs-swagger-express-mw` profile
 
-The middleware `0.15.0` profile recognizes one direct default-file registration, composes
+The middleware `0.16.0` profile recognizes one direct default-file registration, composes
 `basePath` under that policy, and records exact controller/operationId source
 candidates for bounded CommonJS exports. One strict static default JSON/YAML
 configuration can select a declared controller pipeline and contained
@@ -224,6 +224,12 @@ to IR 1.0 until explicit profile selection is implemented.
   evidence and precedence over the static file top-level setting. Two pinned
   runtime scenarios verify this precedence (16 runtime tests). Environment
   overrides and authoritative binding remain unverified.
+- Implemented explicit npm environment selection: middleware `0.16.0` records
+  a bounded POSIX-style `NODE_ENV=<known name> node <entrypoint>` launch
+  declaration and selects a static environment mock-mode layer. File/default,
+  environment-file and create-option precedence have exact evidence; two more
+  pinned runtime cases verify selection (18 runtime tests). Host environment,
+  arbitrary layered config and authoritative binding remain unverified.
 - Remaining: broader conformance and complete affecting transitive version policy,
   effective configuration, startup and module initialization before
   authoritative binding and handler-derived facts.

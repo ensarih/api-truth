@@ -92,3 +92,18 @@ test("a cumulative AST node limit leaves an opaque gap", () => {
   expect(resolveSwaggerStartup(input, root, binding).environment_inputs).toContainEqual(
     expect.objectContaining({variable: "unknown", operation: "opaque"}));
 });
+
+test.each(["development", "test", "production", "staging", "uat"])("explicit npm environment %s is a bounded launch declaration", environment => {
+  const result = resolveSwaggerStartup(files("", {type: "commonjs", scripts: {start: `NODE_ENV=${environment} node app.js`},
+    engines: {node: "22.19.0"}}), root, binding);
+  expect(result).toMatchObject({kind: "declared", environment_name: environment, entrypoint: "app.js"});
+  expect(result.evidence_locations).toContainEqual({path: "package.json", pointer: "/scripts/start"});
+});
+
+test.each(["NODE_ENV=private-marker node app.js", "NODE_ENV=production node app.js\n", "NODE_ENV=production PRIVATE=secret node app.js",
+  "cross-env NODE_ENV=production node app.js", "NODE_ENV='production' node app.js"])("unsupported environment launch syntax stays unresolved", start => {
+  const result = resolveSwaggerStartup(files("", {type: "commonjs", scripts: {start}, engines: {node: "22.19.0"}}), root, binding);
+  expect(result.kind).toBe("unresolved");
+  expect(JSON.stringify(result)).not.toContain("private-marker");
+  expect(JSON.stringify(result)).not.toContain("secret");
+});

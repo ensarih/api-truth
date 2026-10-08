@@ -69,7 +69,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-15", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-16", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -244,7 +244,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     const startup = middleware.startup;
     const startupIds = startupEvidence();
     if (startup?.kind === "declared") {
-      const value = {entrypoint: startup.entrypoint, node_version: startup.node_version, policy: "npm-start-declaration-1"};
+      const value = {entrypoint: startup.entrypoint, node_version: startup.node_version, ...(startup.environment_name ? {environment_name: startup.environment_name} : {}), policy: "npm-start-declaration-1"};
       result.claims.push({claim_id: `claim-${hash(`startup.entrypoint:${JSON.stringify(value)}`).slice(0, 24)}`,
         subject: {service_id: request.source.service_id}, predicate: "startup.entrypoint.declaration", value,
         verification: "declared", evidence_ids: startupIds});

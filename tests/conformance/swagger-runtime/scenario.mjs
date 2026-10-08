@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -48,7 +48,9 @@ try {
     SwaggerExpress.create({appRoot: __dirname${sourceOptions}}, function(error, middleware) {
       if (error) throw error; middleware.register(app);
     });`);
-  await put("package.json", JSON.stringify({type: "commonjs", dependencies: {"swagger-express-mw": "0.7.0"}}));
+  const npmEnvironment = ["npm-environment-routing", "npm-environment-mock"].includes(scenario);
+  await put("package.json", JSON.stringify({type: "commonjs",
+    ...(npmEnvironment ? {scripts: {start: "NODE_ENV=production node app.js"}, engines: {node: "22.19.0"}} : {}), dependencies: {"swagger-express-mw": "0.7.0"}}));
   await put("package-lock.json", await readFile(new URL("./package-lock.json", import.meta.url), "utf8"));
   if (["configured-directory", "directory-precedence", "initialization-fallback", "mock-mode"].includes(scenario)) {
     const dirs = scenario === "configured-directory" ? ["custom/controllers"]
@@ -65,6 +67,12 @@ try {
   } else await mkdir(join(root, "config"), {recursive: true});
 
   if (scenario === "create-mock-override") await put("config/default.json", JSON.stringify({swagger: {mockMode: true}}));
+
+  if (npmEnvironment) {
+    await put("config/default.json", JSON.stringify({swagger: {mockMode: true}}));
+    await put("config/production.json", JSON.stringify({swagger: {mockMode: scenario === "npm-environment-mock"}}));
+    process.env.NODE_ENV = "production";
+  }
 
   // Each scenario is a fresh process: config/module caches and environment cannot leak between fixtures.
   process.env.NODE_CONFIG_DIR = join(root, "config");

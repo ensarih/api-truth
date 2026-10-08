@@ -37,6 +37,8 @@ const cases = [
   ["source-environment-override", 200, "mock"],
   ["create-mock-mode", 200, "mock"],
   ["create-mock-override", 200, "orders"],
+  ["npm-environment-routing", 200, "orders"],
+  ["npm-environment-mock", 200, "mock"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -67,8 +69,8 @@ for (const [scenario, status, marker] of cases) {
       assert.equal(result.analysis.candidatePath, undefined);
       assert.ok(result.analysis.diagnostics.includes("handler_source_ambiguous"));
     }
-    if (scenario === "create-mock-override") assert.equal(result.analysis.candidatePath, "api/controllers/orders.js");
-    if (["mock-mode", "create-mock-mode"].includes(scenario)) assert.ok(result.analysis.diagnostics.includes("handler_configuration_unverified"));
+    if (["create-mock-override", "npm-environment-routing"].includes(scenario)) assert.equal(result.analysis.candidatePath, "api/controllers/orders.js");
+    if (["mock-mode", "create-mock-mode", "npm-environment-mock"].includes(scenario)) assert.ok(result.analysis.diagnostics.includes("handler_configuration_unverified"));
     if (scenario === "environment-override") {
       assert.equal(result.analysis.candidatePath, "api/controllers/orders.js");
       assert.notEqual(result.body.controller, "orders");

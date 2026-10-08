@@ -95,3 +95,7 @@ against the pinned framework while preserving inferred candidate authority.
 Two additional scenarios verify literal create-option `mockMode: true` and
 `mockMode: false` overriding a static file setting of true (16 total tests).
 These fixture results do not certify arbitrary application environments.
+
+Two production-environment scenarios verify file selection for mockMode false
+and true (18 total tests). They set the declared environment in a fresh isolated
+process; npm startup execution and deployment environment are not certified.

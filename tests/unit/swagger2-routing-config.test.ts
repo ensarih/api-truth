@@ -123,3 +123,48 @@ test("inline routers and named built-in fitting aliases retain their exact pipel
     {path: "config/default.json", pointer: "/swagger/bagpipes/controllers/2/controllersInterface"},
   ]));
 });
+
+test("explicit environment selects a static mockMode layer with exact evidence", () => {
+  const tree = files({swagger: {mockMode: true}});
+  tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {mockMode: false}}));
+  expect(resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined, {name: "production", location: {path: "package.json", pointer: "/scripts/start"}})).toMatchObject({
+    kind: "supported", controller_dirs: ["api/controllers"], evidence_locations: expect.arrayContaining([
+      {path: "config/production.json", pointer: "/swagger/mockMode"},
+    ]),
+  });
+  expect(resolveSwaggerRoutingConfiguration(tree, root).kind).toBe("unresolved");
+});
+
+test.each(["json", "yaml", "yml"])("environment layer %s has bounded parsing and create-option precedence", extension => {
+  const tree = files({swagger: {mockMode: false}});
+  tree.set(resolve(root, `config/production.${extension}`), extension === "json"
+    ? JSON.stringify({swagger: {mockMode: true}}) : "swagger:\n  mockMode: true\n");
+  const selection = {name: "production", location: {path: "package.json", pointer: "/scripts/start"}};
+  expect(resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined, selection).kind).toBe("unresolved");
+  expect(resolveSwaggerRoutingConfiguration(tree, root, new Map(), {value: false, location: {path: "app.js", pointer: "span:0:10"}}, selection).kind)
+    .toBe("supported");
+});
+
+test.each(["{", '{"swagger":{"mockMode":false,"mockMode":true}}',
+  JSON.stringify({swagger: {mockMode: "private-marker"}}), JSON.stringify({swagger: {bagpipes: {}}})])(
+  "unsupported environment layers stay unresolved without exposing content", content => {
+    const tree = files({swagger: {mockMode: false}});
+    tree.set(resolve(root, "config/production.json"), content);
+    const result = resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined,
+      {name: "production", location: {path: "package.json", pointer: "/scripts/start"}});
+    expect(result.kind).toBe("unresolved");
+    expect(JSON.stringify(result)).not.toContain("private-marker");
+  });
+
+test("duplicate, foreign and opaque environment files remain unresolved", () => {
+  const selection = {name: "production", location: {path: "package.json", pointer: "/scripts/start"}};
+  for (const extra of ["production.yaml", "staging.json", "production.js"]) {
+    const tree = files({swagger: {mockMode: false}});
+    tree.set(resolve(root, "config/production.json"), JSON.stringify({swagger: {mockMode: false}}));
+    tree.set(resolve(root, `config/${extra}`), "swagger: {mockMode: false}");
+    expect(resolveSwaggerRoutingConfiguration(tree, root, new Map(), undefined, selection).kind).toBe("unresolved");
+  }
+  const opaque = new Map([[resolve(root, "config/production.properties"), `sha256:${"a".repeat(64)}`]]);
+  expect(resolveSwaggerRoutingConfiguration(files({swagger: {mockMode: false}}), root, opaque, undefined, selection).kind)
+    .toBe("unresolved");
+});

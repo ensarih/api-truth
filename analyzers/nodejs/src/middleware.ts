@@ -12,7 +12,7 @@ import { createHandlerCandidateResolver } from "./handler-candidates.js";
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
 /** Direct swagger-express-mw default-file registration; handler binding remains unresolved. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.15.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.16.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;
@@ -58,12 +58,15 @@ export function createAnalyzer(options: { projectRoot: string }) {
     };
     const binding = findSwaggerMiddlewareBinding(tree.files, tree.root);
     budget();
+    const startup = resolveSwaggerStartup(tree.files, tree.root, binding, budget);
     const routingConfiguration = resolveSwaggerRoutingConfiguration(tree.files, tree.root, tree.opaqueConfiguration,
-      binding?.mock_mode ? {value: binding.mock_mode.value, location: {path: binding.path, pointer: binding.mock_mode.pointer}} : undefined);
+      binding?.mock_mode ? {value: binding.mock_mode.value, location: {path: binding.path, pointer: binding.mock_mode.pointer}} : undefined,
+      startup.kind === "declared" && startup.environment_name
+        ? {name: startup.environment_name, location: {path: "package.json", pointer: "/scripts/start"}} : undefined);
     const result = extractSwagger2Document(request, expectedDocument, text,
       binding ? { kind: "verified", binding, routingConfiguration,
         frameworkLock: resolveSwaggerFrameworkLock(tree.files, tree.root, tree.opaqueConfiguration),
-        startup: resolveSwaggerStartup(tree.files, tree.root, binding, budget),
+        startup,
         handlerResolver: createHandlerCandidateResolver(tree.files, tree.root, routingConfiguration, budget) }
         : { kind: "unverified" });
     budget();

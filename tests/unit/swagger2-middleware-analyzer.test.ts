@@ -545,3 +545,23 @@ test.each(["mockMode: process.env.MODE", "mockMode: 'false'", "mockMode: false, 
     expect(result.status).toBe("failed");
     expect(result.diagnostics.map(item => item.code)).toContain("middleware_registration_unverified");
   });
+
+test("npm environment selects a declared mock layer without claiming deployment or binding", async () => {
+  const {root, adapter} = await service({"app.js": entry,
+    "package.json": JSON.stringify({type: "commonjs", scripts: {start: "NODE_ENV=production node app.js"}, engines: {node: "22.19.0"}}),
+    "config/default.json": JSON.stringify({swagger: {mockMode: true}}),
+    "config/production.json": JSON.stringify({swagger: {mockMode: false}}),
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "api/controllers/orders.js": 'exports.getOrder = function() {};'});
+  const first = await adapter.analyze(request());
+  expect(first.endpoints).toHaveLength(1);
+  expect(first.claims.find(item => item.predicate === "startup.entrypoint.declaration")?.value)
+    .toMatchObject({environment_name: "production"});
+  expect(first.claims.some(item => item.predicate === "handler.candidate")).toBe(true);
+  expect(first.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  await writeFile(join(root, "service/config/production.json"), JSON.stringify({swagger: {mockMode: true}}));
+  const second = await adapter.analyze(request());
+  expect(second.endpoints[0]!.endpoint_id).toBe(first.endpoints[0]!.endpoint_id);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+});

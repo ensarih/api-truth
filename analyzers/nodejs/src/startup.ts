@@ -9,7 +9,7 @@ export type EnvironmentInput = {
   location: {path: string; pointer: string; line: number};
 };
 export type StartupResolution = {
-  kind: "declared"; entrypoint: string; node_version: "22.19.0";
+  kind: "declared"; entrypoint: string; node_version: "22.19.0"; environment_name?: string;
   evidence_locations: ConfigurationLocation[]; environment_inputs: EnvironmentInput[];
 } | {kind: "unresolved"; evidence_locations: ConfigurationLocation[]; environment_inputs: EnvironmentInput[]};
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -89,10 +89,10 @@ export function resolveSwaggerStartup(files: Map<string, string>, root: string, 
     if (!object(manifest) || manifest.type !== "commonjs" || !object(manifest.scripts) || !object(manifest.engines)
       || manifest.engines.node !== "22.19.0" || manifest.scripts.prestart !== undefined || manifest.scripts.poststart !== undefined
       || typeof manifest.scripts.start !== "string") return unresolved();
-    const match = /^node ([A-Za-z0-9_-]+\.(?:js|cjs))$/.exec(manifest.scripts.start);
-    if (!match || match[1] !== binding.path || !files.has(resolve(root, binding.path))) return unresolved();
+    const match = /^(?:NODE_ENV=(development|test|production|staging|uat) )?node ([A-Za-z0-9_-]+\.(?:js|cjs))$/.exec(manifest.scripts.start);
+    if (!match || match[0] !== manifest.scripts.start || match[2] !== binding.path || !files.has(resolve(root, binding.path))) return unresolved();
     evidence_locations.push({path: "package.json", pointer: "/scripts/start"},
       {path: "package.json", pointer: "/type"}, {path: "package.json", pointer: "/engines/node"});
-    return {kind: "declared", entrypoint: binding.path, node_version: "22.19.0", evidence_locations, environment_inputs};
+    return {kind: "declared", entrypoint: binding.path, node_version: "22.19.0", ...(match[1] ? {environment_name: match[1]} : {}), evidence_locations, environment_inputs};
   } catch { return unresolved(); }
 }
