@@ -2,15 +2,51 @@ import { resolve } from "node:path";
 import type { ConfigurationLocation } from "./routing-config.js";
 import { parseStrictJson } from "./strict-json.js";
 
+export type RoutingDependencyResolution = {
+  kind: "locked"; versions: Record<string, string>; conformance_target: boolean; evidence_locations: ConfigurationLocation[];
+} | {kind: "unresolved"; conformance_target: false; evidence_locations: ConfigurationLocation[]};
 export type FrameworkLockResolution = {
   kind: "locked"; wrapper_version: string; runner_version: string; conformance_target: boolean;
-  evidence_locations: ConfigurationLocation[];
+  evidence_locations: ConfigurationLocation[]; routing_dependencies: RoutingDependencyResolution;
 } | { kind: "unresolved"; code: "framework_version_unverified"; evidence_locations: ConfigurationLocation[] };
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const exactVersion = (value: unknown): value is string => typeof value === "string" && value.length < 100
   && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value);
 const pointer = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
+
+/** Only the three routing-affecting runner dependencies; never a complete installed graph. */
+function routingDependencies(packages: Record<string, unknown>, runnerPath: string,
+  runner: Record<string, unknown>, lockPath: string): RoutingDependencyResolution {
+  const evidence_locations: ConfigurationLocation[] = [];
+  const unresolved = (): RoutingDependencyResolution => ({kind: "unresolved", conformance_target: false, evidence_locations});
+  if (!object(runner.dependencies)) return unresolved();
+  const versions: Record<string, string> = {};
+  const targets = {bagpipes: ["0.1.2", "^0.1.0"], config: ["1.31.0", "^1.16.0"], sway: ["1.0.0", "^1.0.0"]};
+  for (const [name, [target, targetRange]] of Object.entries(targets)) {
+    evidence_locations.push({path: lockPath, pointer: `/packages/${pointer(runnerPath)}/dependencies/${name}`});
+    let parent = runnerPath;
+    let selected: string | undefined;
+    while (true) {
+      const candidate = `${parent ? `${parent}/` : ""}node_modules/${name}`;
+      if (Object.hasOwn(packages, candidate)) { selected = candidate; break; }
+      if (!parent) break;
+      const boundary = parent.lastIndexOf("/node_modules/");
+      parent = boundary < 0 ? "" : parent.slice(0, boundary);
+    }
+    if (!selected) return unresolved();
+    evidence_locations.push({path: lockPath, pointer: `/packages/${pointer(selected)}/version`});
+    const entry = packages[selected];
+    if (!object(entry) || entry.link !== undefined && entry.link !== false
+      || entry.name !== undefined && entry.name !== name || !exactVersion(entry.version)) return unresolved();
+    const spec = runner.dependencies[name];
+    // Exact specs are recorded. The only accepted ranges are the tested range/version pairs.
+    if (spec !== entry.version && !(spec === targetRange && entry.version === target)) return unresolved();
+    versions[name] = entry.version;
+  }
+  return {kind: "locked", versions, conformance_target: Object.entries(targets).every(([name, [target]]) => versions[name] === target),
+    evidence_locations};
+}
 
 /** Lockfile declarations only: this neither reads installed modules nor proves runtime loading. */
 export function resolveSwaggerFrameworkLock(files: Map<string, string>, root: string,
@@ -63,6 +99,7 @@ export function resolveSwaggerFrameworkLock(files: Map<string, string>, root: st
       {path: lockPath, pointer: `/packages/${pointer(wrapperPath)}/dependencies/swagger-node-runner`},
       {path: lockPath, pointer: `/packages/${pointer(runnerPath)}/version`});
     return {kind: "locked", wrapper_version: declared, runner_version: runner.version,
-      conformance_target: declared === "0.7.0" && runner.version === "0.7.0", evidence_locations: locations};
+      conformance_target: declared === "0.7.0" && runner.version === "0.7.0", evidence_locations: locations,
+      routing_dependencies: routingDependencies(packages, runnerPath, runner, lockPath)};
   } catch { return fail(); }
 }

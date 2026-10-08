@@ -316,6 +316,7 @@ test("locked framework declarations join candidates without establishing runtime
   expect(first.claims.some(item => item.predicate === "handler.binding")).toBe(false);
   expect(first.endpoints[0]!.responses.map(item => item.status)).toEqual([{kind: "exact", code: 200}]);
   expect(first.diagnostics.map(item => item.code)).toContain("framework_runtime_unverified");
+  expect(first.diagnostics.map(item => item.code)).toContain("framework_routing_dependencies_unverified");
   lock.packages["node_modules/swagger-node-runner"].version = "0.7.1";
   await writeFile(join(root, "service/package-lock.json"), JSON.stringify(lock));
   const second = await adapter.analyze(request());
@@ -362,5 +363,40 @@ test("bounded npm start declarations remain limited and source environment write
     .map(item => item.evidence_id));
   expect(second.dependencies.some(item => item.evidence_ids.some(id => environmentIds.has(id)))).toBe(false);
   expect(JSON.stringify(second)).not.toContain("private-runtime-value");
+  expect(second.status).toBe("partial");
+});
+
+test("routing dependency declarations preserve scoped evidence and invalidate without promoting handlers", async () => {
+  const manifest = {type: "commonjs", dependencies: {"swagger-express-mw": "0.7.0"}};
+  const lock = {lockfileVersion: 3, packages: {
+    "": {dependencies: manifest.dependencies},
+    "node_modules/swagger-express-mw": {version: "0.7.0", dependencies: {"swagger-node-runner": "^0.7.0"}},
+    "node_modules/swagger-node-runner": {version: "0.7.0", dependencies: {bagpipes: "^0.1.0", config: "^1.16.0", sway: "^1.0.0"}},
+    "node_modules/bagpipes": {version: "0.1.2"}, "node_modules/config": {version: "1.31.0"}, "node_modules/sway": {version: "1.0.0"},
+  }};
+  const {root, adapter} = await service({"app.js": entry,
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "package.json": JSON.stringify(manifest), "package-lock.json": JSON.stringify(lock),
+    "api/controllers/orders.js": "exports.getOrder = function(req, res) { res.status(201).json({value: true}); };"});
+  const first = await adapter.analyze(request());
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  expect(first.claims).toContainEqual(expect.objectContaining({predicate: "framework.routing_dependencies.declaration", verification: "declared",
+    value: {versions: {bagpipes: "0.1.2", config: "1.31.0", sway: "1.0.0"}, conformance_target: true,
+      policy: "npm-routing-dependencies-declaration-1"}}));
+  const candidate = first.claims.find(item => item.predicate === "handler.candidate")!;
+  expect(candidate.verification).toBe("inferred");
+  expect(first.evidence.filter(item => candidate.evidence_ids.includes(item.evidence_id))).toContainEqual(expect.objectContaining({
+    location: {path: "package-lock.json", pointer: "/packages/node_modules~1config/version"},
+    scope: expect.objectContaining({endpoint_id: first.endpoints[0]!.endpoint_id})}));
+  expect(first.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  expect(first.endpoints[0]!.responses.map(item => item.status)).toEqual([{kind: "exact", code: 200}]);
+  lock.packages["node_modules/config"].version = "1.30.0";
+  await writeFile(join(root, "service/package-lock.json"), JSON.stringify(lock));
+  const second = await adapter.analyze(request());
+  expect(parseAnalyzerResult(second).ok).toBe(true);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.claims.some(item => item.predicate === "framework.routing_dependencies.declaration")).toBe(false);
+  expect(second.diagnostics.map(item => item.code)).toContain("framework_routing_dependencies_unverified");
+  expect(second.claims.find(item => item.predicate === "handler.candidate")?.verification).toBe("inferred");
   expect(second.status).toBe("partial");
 });

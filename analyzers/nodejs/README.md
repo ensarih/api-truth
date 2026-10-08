@@ -31,7 +31,7 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-The document `0.5.0` and middleware `0.7.0` profiles map flat primitive
+The document `0.5.0` and middleware `0.8.0` profiles map flat primitive
 parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.7.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.8.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -291,3 +291,21 @@ startup evidence. They add no authoritative handler dependencies or facts.
 An empty inventory is not proof that external loaders, imported packages,
 reflection, global aliases, environment overrides or deployment settings are
 absent; all runtime/startup/binding gates remain in place.
+
+
+### Routing dependency lock declarations
+
+Middleware `0.8.0` additionally records `framework.routing_dependencies.declaration`
+for three runner dependencies: `bagpipes`, `config`, and `sway`. The policy walks
+bounded npm lock package locations from the runner through its ancestors, taking
+the nearest entry; a malformed or linked nearest entry never falls back to a
+hoisted copy. Exact dependency specs are supported, as are only the tested
+range/version pairs: `^0.1.0` / `0.1.2`, `^1.16.0` / `1.31.0`, and `^1.0.0` / `1.0.0`.
+Missing entries, aliases and other ranges remain unverified with diagnostics.
+
+The claim contains selected versions and exact source pointers. Its target flag
+requires both the wrapper/runner pair and these three versions to match the
+isolated harness. This is a partial lock declaration, not the complete dependency
+graph, installed-module identity, integrity verification or runtime certification.
+Candidates carry limited endpoint-scoped lock evidence and remain inferred;
+handler-derived facts and dependencies still require authoritative binding.

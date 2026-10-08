@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.7.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.8.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -193,3 +193,13 @@ Detected inputs suppress source handler candidates and preserve documented
 routes. Runtime conformance now includes a source mock-mode override (11 tests).
 Production invocation, effective external configuration and authoritative
 handler binding remain pending; an empty inventory proves none of them.
+
+
+### Middleware routing dependency prerequisite — 2026-10-08
+
+Profile `0.8.0` records bounded nearest npm lock declarations for bagpipes,
+config and sway, with exact source pointers and tested range/version policy.
+Missing, linked, aliased or unsupported dependencies remain diagnosed. Lock
+changes invalidate analysis; candidates carry limited dependency evidence.
+The complete dependency graph, installed identity, effective configuration,
+startup execution and authoritative handler binding remain pending in NB4.

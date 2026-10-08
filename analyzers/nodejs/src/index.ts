@@ -67,7 +67,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-3", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-7", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-8", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-1" : "none" }));
   const result: AnalyzerResult = {
@@ -104,9 +104,12 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     });
     return id;
   };
-  const frameworkEvidence = (endpointId?: string): string[] => {
+  const frameworkEvidence = (endpointId?: string, routing = false): string[] => {
     if (middleware?.kind !== "verified") return [];
-    return (middleware.frameworkLock?.evidence_locations ?? []).map(location => {
+    const lock = middleware.frameworkLock;
+    const locations = routing ? lock?.kind === "locked" ? lock.routing_dependencies.evidence_locations : []
+      : lock?.evidence_locations ?? [];
+    return locations.map(location => {
       const id = `ev-${hash(`${location.path}:${location.pointer}:${endpointId ?? ""}:framework-lock`).slice(0, 24)}`;
       if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
         evidence_id: id, source: {kind: "configuration", source_id: request.source.repository_id},
@@ -223,6 +226,19 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
       diagnostic(framework.conformance_target ? "framework_runtime_unverified" : "framework_version_unsupported",
         "", "warning", undefined, frameworkIds);
     } else diagnostic("framework_version_unverified", "", "warning", undefined, frameworkIds);
+    if (framework?.kind === "locked") {
+      const routing = framework.routing_dependencies;
+      const ids = frameworkEvidence(undefined, true);
+      if (routing.kind === "locked") {
+        const value = {versions: routing.versions, conformance_target: framework.conformance_target && routing.conformance_target,
+          policy: "npm-routing-dependencies-declaration-1"};
+        result.claims.push({claim_id: `claim-${hash(`framework.routing:${JSON.stringify(value)}`).slice(0, 24)}`,
+          subject: {service_id: request.source.service_id}, predicate: "framework.routing_dependencies.declaration", value,
+          verification: "declared", evidence_ids: ids});
+        diagnostic(value.conformance_target ? "framework_routing_dependencies_runtime_unverified" : "framework_routing_dependencies_unsupported",
+          "", "warning", undefined, ids);
+      } else diagnostic("framework_routing_dependencies_unverified", "", "warning", undefined, ids);
+    }
     const startup = middleware.startup;
     const startupIds = startupEvidence();
     if (startup?.kind === "declared") {
@@ -561,7 +577,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     endpoint.evidence_ids.push(...frameworkIds);
     const startupIds = startupEvidence(endpoint.endpoint_id);
     endpoint.evidence_ids.push(...startupIds);
-    const evidenceIds = [...startupIds, ...frameworkIds, ...configEvidence, evidence(mappingAt, endpoint.endpoint_id),
+    const routingIds = frameworkEvidence(endpoint.endpoint_id, true);
+    endpoint.evidence_ids.push(...routingIds);
+    const evidenceIds = [...routingIds, ...startupIds, ...frameworkIds, ...configEvidence, evidence(mappingAt, endpoint.endpoint_id),
       evidence(`${operation.pointer}/operationId`, endpoint.endpoint_id), id, ...(scopeId ? [scopeId] : [])];
     result.claims.push({ claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.candidate:${id}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate: "handler.candidate",
