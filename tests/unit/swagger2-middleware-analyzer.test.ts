@@ -400,3 +400,21 @@ test("routing dependency declarations preserve scoped evidence and invalidate wi
   expect(second.claims.find(item => item.predicate === "handler.candidate")?.verification).toBe("inferred");
   expect(second.status).toBe("partial");
 });
+
+test("opaque controller initialization preserves the route and invalidates the prior candidate", async () => {
+  const {root, adapter} = await service({"app.js": entry, "package.json": '{"type":"commonjs"}',
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "api/controllers/orders.js": "exports.getOrder = function(req, res) {};"});
+  const first = await adapter.analyze(request());
+  expect(first.claims.some(item => item.predicate === "handler.candidate")).toBe(true);
+  await writeFile(join(root, "service/api/controllers/orders.js"),
+    'throw new Error("private-init-marker"); exports.getOrder = function(req, res) {};');
+  const second = await adapter.analyze(request());
+  expect(parseAnalyzerResult(second).ok).toBe(true);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.endpoints.map(item => item.application_path)).toEqual(["/api/v1/orders/{id}"]);
+  expect(second.claims.some(item => ["handler.candidate", "handler.binding"].includes(item.predicate))).toBe(false);
+  expect(second.diagnostics.map(item => item.code)).toContain("handler_initialization_unverified");
+  expect(second.status).toBe("partial");
+  expect(JSON.stringify(second)).not.toContain("private-init-marker");
+});

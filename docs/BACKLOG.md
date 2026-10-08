@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.8.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.9.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -203,3 +203,13 @@ Missing, linked, aliased or unsupported dependencies remain diagnosed. Lock
 changes invalidate analysis; candidates carry limited dependency evidence.
 The complete dependency graph, installed identity, effective configuration,
 startup execution and authoritative handler binding remain pending in NB4.
+
+
+### Middleware controller initialization guard — 2026-10-08
+
+Profile `0.9.0` withholds handler candidates for opaque top-level initialization
+and premature const exports. A bounded literal/function-only syntax subset stays
+eligible as inferred source evidence. Routes remain available, controller edits
+invalidate extraction, and diagnostics omit source/exception text. The runtime
+harness now includes one failing controller with a valid export (12 tests).
+Actual module execution and authoritative binding remain pending in NB4.

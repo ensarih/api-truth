@@ -31,7 +31,7 @@ CI orchestration selection remain backlog items.
 
 ## Parameter serialization and form declarations
 
-The document `0.5.0` and middleware `0.8.0` profiles map flat primitive
+The document `0.5.0` and middleware `0.9.0` profiles map flat primitive
 parameters using the declared
 [Swagger 2 parameter rules](https://spec.openapis.org/oas/v2.0.html#parameter-object)
 and [OpenAPI serialization styles](https://spec.openapis.org/oas/v3.1.1.html#style-examples):
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.8.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.9.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -309,3 +309,23 @@ isolated harness. This is a partial lock declaration, not the complete dependenc
 graph, installed-module identity, integrity verification or runtime certification.
 Candidates carry limited endpoint-scoped lock evidence and remain inferred;
 handler-derived facts and dependencies still require authoritative binding.
+
+
+### Controller initialization guard
+
+Middleware `0.9.0` withholds a source handler candidate with
+`handler_initialization_unverified` when the controller contains opaque top-level
+initialization: calls/imported dependencies, throws, control flow, classes,
+property reads, computed object keys or spreads. The bounded syntax subset allows
+function declarations, direct export assignments, string directives and const
+initializers containing function expressions or literal scalar/array/object
+values. Function bodies and parameter defaults are deferred. Exported const
+handlers must be initialized before the export assignment; function declarations
+may be referenced before their declaration. Duplicate top-level bindings are
+also withheld.
+
+This is a conservative source-candidate filter. It never loads modules and does
+not certify JavaScript execution, runtime globals, imported dependencies or
+production startup. Accepted candidates remain inferred. Unresolved candidates
+leave document-derived routes available with partial coverage. A controller edit
+invalidates extraction, and diagnostic output contains no exception/source text.

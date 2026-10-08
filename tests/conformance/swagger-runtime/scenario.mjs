@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override"]);
+  "single-initialization-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -31,6 +31,8 @@ try {
   if (scenario === "missing-export") operation.operationId = "missingExport";
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));
+  if (scenario === "single-initialization-failure") await put("api/controllers/orders.js",
+    'throw new Error("synthetic initialization failure");\n' + handler("orders"));
   await put("api/controllers/alternate.js", handler("alternate"));
   await put("api/mocks/orders.js", handler("mock"));
   await put("app.js", `${scenario === "source-environment-override" ? 'process.env.swagger_mockMode = "true";\n' : ""}const express = require("express");

@@ -135,3 +135,30 @@ test("multiple possible modules cannot assume the first require call succeeds", 
   expect(createHandlerCandidateResolver(files, root)("orders", "getOrder"))
     .toMatchObject({kind: "unresolved", code: "handler_module_resolution_unverified"});
 });
+
+test.each([
+  'throw new Error("private-init-marker");',
+  'initialize();',
+  'const dependency = require("./dependency");',
+  'const value = unknown.property;',
+  'const value = new Service();',
+  'if (flag) initialize();',
+  'while (flag) {}',
+  'class Helper { static value = initialize(); }',
+  'const value = { [initialize()]: 1 };',
+  'const value = { ...unknown };',
+  'const value = 1; const value = 2;',
+])("opaque initialization withholds a handler candidate: %s", prefix => {
+  const result = resolver(`${prefix}\nexports.getOrder = function() {};`)("orders", "getOrder");
+  expect(result).toMatchObject({kind: "unresolved", code: "handler_initialization_unverified"});
+  expect(JSON.stringify(result)).not.toContain("private-init-marker");
+});
+
+test("function bodies are deferred and literal declarations stay eligible", () => {
+  expect(resolver('"use strict"; const label = "example"; const options = {enabled: true, values: [1, null]};\nexports.getOrder = function() { throw new Error("deferred"); };')("orders", "getOrder").kind).toBe("candidate");
+});
+
+test("const handlers cannot be exported before their initialization", () => {
+  expect(resolver('exports.getOrder = read; const read = () => {};')("orders", "getOrder"))
+    .toMatchObject({kind: "unresolved", code: "handler_initialization_unverified"});
+});

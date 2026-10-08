@@ -27,6 +27,7 @@ const cases = [
   ["configured-directory", 200, "custom"],
   ["directory-precedence", 200, "first"],
   ["initialization-fallback", 200, "second"],
+  ["single-initialization-failure", 500, undefined],
   ["missing-controller", 500, undefined],
   ["missing-export", 500, undefined],
   ["mock-mode", 200, "mock"],
@@ -50,6 +51,10 @@ for (const [scenario, status, marker] of cases) {
     }
     if (scenario === "operation-override") assert.equal(result.analysis.candidatePath, "api/controllers/alternate.js");
     if (scenario === "configured-directory") assert.equal(result.analysis.candidatePath, "custom/controllers/orders.js");
+    if (scenario === "single-initialization-failure") {
+      assert.equal(result.analysis.candidatePath, undefined);
+      assert.ok(result.analysis.diagnostics.includes("handler_initialization_unverified"));
+    }
     if (["directory-precedence", "initialization-fallback"].includes(scenario)) {
       assert.equal(result.analysis.candidatePath, undefined);
       assert.ok(result.analysis.diagnostics.includes("handler_source_ambiguous"));

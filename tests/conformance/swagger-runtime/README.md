@@ -48,7 +48,7 @@ or dependency patch is used to hide that failure.
 
 ## Behavior checked
 
-Eleven tests cover the default controller directory and basePath; operation-level
+Twelve tests cover the default controller directory and basePath; operation-level
 override of a path controller; a configured directory; first-directory
 precedence; fallback when a first controller throws during initialization;
 missing modules and exports; explicit mock mode; an environment override to
@@ -85,3 +85,6 @@ version/runtime range and reject or diagnose cases outside it.
 Upstream semantics references: [wrapper entrypoint](https://github.com/apigee-127/swagger-express/blob/v0.7.0/lib/index.js),
 [runner configuration and pipe selection](https://github.com/apigee-127/swagger-node-runner/blob/v0.7.0/index.js),
 [controller router](https://github.com/apigee-127/swagger-node-runner/blob/v0.7.0/fittings/swagger_router.js).
+
+A single controller that throws before exporting a valid handler returns a runtime failure;
+the analyzer preserves its documented route and withholds the source candidate.

@@ -126,6 +126,7 @@ function inspectModule(path: string, text: string):
       return ts.isPropertyAccessExpression(node) ? node.name.text
         : node.argumentExpression && ts.isStringLiteral(node.argumentExpression) ? node.argumentExpression.text : undefined;
     };
+    const exportStatements = new Set<ts.Statement>();
     const exportedValues = new Map<string, ts.Node>();
     let replacements = 0;
     let members = 0;
@@ -139,6 +140,7 @@ function inspectModule(path: string, text: string):
         || statement.expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken) continue;
       const { left, right } = statement.expression;
       if (exportsObject(left)) {
+        exportStatements.add(statement);
         replacements++;
         if (!ts.isObjectLiteralExpression(right)) { ambiguous = true; continue; }
         for (const property of right.properties) {
@@ -150,7 +152,7 @@ function inspectModule(path: string, text: string):
         }
       } else {
         const name = exportMember(left);
-        if (name !== undefined) { members++; addExport(name, right); }
+        if (name !== undefined) { exportStatements.add(statement); members++; addExport(name, right); }
       }
     }
     if (replacements > 1 || replacements && members || ambiguous)
@@ -178,6 +180,42 @@ function inspectModule(path: string, text: string):
         && ts.isIdentifier(node.operand)) written.add(node.operand.text);
       ts.forEachChild(node, child => { stack.push(child); });
     }
+    // Syntactic initialization subset only. Never execute a controller or import its dependencies.
+    const inert = (node: ts.Node, depth = 0): boolean => {
+      if (depth > 100) return false;
+      if (ts.isFunctionExpression(node) || ts.isArrowFunction(node)
+        || ts.isMethodDeclaration(node) && propertyName(node.name) !== undefined) return true;
+      if (ts.isStringLiteral(node) || ts.isNumericLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
+        || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)) return true;
+      if (ts.isParenthesizedExpression(node)) return inert(node.expression, depth + 1);
+      if (ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator))
+        return ts.isNumericLiteral(node.operand);
+      if (ts.isArrayLiteralExpression(node)) return node.elements.every(item => inert(item, depth + 1));
+      if (ts.isObjectLiteralExpression(node)) return node.properties.every(property =>
+        ts.isPropertyAssignment(property) && propertyName(property.name) !== undefined && inert(property.initializer, depth + 1)
+        || ts.isMethodDeclaration(property) && propertyName(property.name) !== undefined);
+      return false;
+    };
+    const referenceInitialized = (value: ts.Node): boolean => {
+      if (!ts.isIdentifier(value)) return inert(value);
+      const definitions = symbols.get(value.text);
+      if (definitions?.length !== 1) return false;
+      const definition = definitions[0]!;
+      return ts.isFunctionDeclaration(definition) || functionValue(definition) && definition.getStart() < value.getStart();
+    };
+    if ([...symbols.values()].some(definitions => definitions.length > 1))
+      return unresolved("handler_initialization_unverified");
+    for (const statement of source.statements) {
+      if (ts.isEmptyStatement(statement) || ts.isFunctionDeclaration(statement) && statement.body) continue;
+      if (ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression)) continue;
+      if (exportStatements.has(statement)) continue;
+      if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const
+        && statement.declarationList.declarations.every(declaration => ts.isIdentifier(declaration.name)
+          && declaration.initializer && inert(declaration.initializer))) continue;
+      return unresolved("handler_initialization_unverified");
+    }
+    if ([...exportedValues.values()].some(value => !referenceInitialized(value)))
+      return unresolved("handler_initialization_unverified");
     const exports = new Map<string, ts.Node>();
     for (const [name, value] of exportedValues) {
       if (functionValue(value)) exports.set(name, value);
