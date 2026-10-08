@@ -4,6 +4,7 @@ import {
   deriveEndpointIdentity, parseAnalyzerRequest, parseAnalyzerResult,
   type AnalyzerRequest, type AnalyzerResult, type ApiSchema, type Claim, type Endpoint, type Evidence,
 } from "../../../packages/ir/src/index.js";
+import type {RuntimeBindingResolution} from "./runtime-binding.js";
 import { declaredSchemaBounds, schemaBoundFields } from "./schema-bounds.js";
 import { declaredSchemaConstraints } from "./schema-constraints.js";
 import { readSelectedDocument } from "./source.js";
@@ -18,6 +19,7 @@ import type { FrameworkLockResolution } from "./framework-lock.js";
 import type { HandlerCandidateResolver } from "./handler-candidates.js";
 
 export type MiddlewareContext = {
+  runtimeBinding?: RuntimeBindingResolution;
   kind: "verified"; binding: MiddlewareBinding; routingConfiguration?: RoutingConfiguration;
   handlerResolver?: HandlerCandidateResolver; frameworkLock?: FrameworkLockResolution; startup?: StartupResolution;
 } | { kind: "unverified" };
@@ -69,7 +71,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-18", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-19", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -214,7 +216,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   if (raw.host !== undefined || raw.schemes !== undefined) diagnostic("server_exposure_not_analyzed", "/host");
   if (!middleware) diagnostic("middleware_binding_unverified", "");
   else {
-    diagnostic("handler_binding_unverified", "");
+    diagnostic(middleware.runtimeBinding?.kind === "verified" && middleware.runtimeBinding.bindings.length
+      ? "runtime_binding_scope_limited" : "handler_binding_unverified", "");
+    if (middleware.runtimeBinding?.kind === "unresolved") diagnostic("runtime_binding_receipt_unverified", "");
     diagnostic("startup_entrypoint_unverified", "");
     const framework = middleware.frameworkLock;
     const frameworkIds = frameworkEvidence();
@@ -393,7 +397,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     });
     if (bindingEv) result.dependencies.push({ from_endpoint_id: endpointId,
       to: { kind: "evidence", id: bindingEv }, evidence_ids: [bindingEv] });
-    if (middleware?.kind === "verified" && middleware.handlerResolver) addHandlerCandidate(endpoint, operation);
+    if (middleware?.kind === "verified" && !addRuntimeBinding(endpoint, operation) && middleware.handlerResolver) addHandlerCandidate(endpoint, operation);
     for (const parameter of operation.parameters) {
       if (!["path", "query", "header"].includes(parameter.in)) { diagnostic("parameter_location_unsupported", parameter.pointer, "warning", endpointId); continue; }
       const paramEv = evidence(parameter.pointer, endpointId);
@@ -526,6 +530,42 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         presence: {state: required.length ? "required" : "optional", evidence_ids: [mediaEv, ...fieldEvidence]}});
       claim(endpoint, "request.form.declaration", {media_type: mediaType, fields: forms.map(field => field.name)}, consumesPointer);
     }
+  }
+
+  function addRuntimeBinding(endpoint: Endpoint, operation: Swagger2Operation): boolean {
+    if (middleware?.kind !== "verified" || middleware.runtimeBinding?.kind !== "verified") return false;
+    const receipt = middleware.runtimeBinding;
+    const binding = receipt.bindings.find(item => item.method === endpoint.identity.method && item.application_path === endpoint.application_path);
+    if (!binding) return false;
+    const pathItem = (raw.paths as Record<string, Record<string, unknown>>)[operation.path]!;
+    const rawOperation = pathItem[operation.method] as Record<string, unknown>;
+    const controller = rawOperation["x-swagger-router-controller"] ?? pathItem["x-swagger-router-controller"];
+    if (binding.operation_id !== operation.operationId || binding.controller !== controller) {
+      diagnostic("runtime_binding_document_mismatch", operation.pointer, "warning", endpoint.endpoint_id);
+      return false;
+    }
+    const evId = `ev-${hash(`${receipt.receipt_digest}:${receipt.signer_digest}:${endpoint.endpoint_id}:runtime-binding`).slice(0, 24)}`;
+    const handlerId = `ev-${hash(`${binding.handler_path}:${binding.handler_digest}:${endpoint.endpoint_id}:bound-handler`).slice(0, 24)}`;
+    for (const [id, location, kind, method] of [
+      [evId, {path: receipt.path, pointer: "/payload", symbol: `decoded.bindings[${receipt.bindings.indexOf(binding)}]`}, "runtime_capture", "observation"],
+      [handlerId, {path: binding.handler_path, symbol: binding.export_name}, "source_code", "deterministic_analysis"],
+    ] as const) result.evidence.push({evidence_id: id, source: {kind, source_id: request.source.repository_id},
+      source_version: request.source.immutable_revision, location, method,
+      scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,
+        revision: request.source.immutable_revision, endpoint_id: endpoint.endpoint_id},
+      limitations: ["binding observed only for the signed runtime session and environment; future dispatch and deployment availability unverified",
+        "trusted signer attests the source snapshot; handler bytes matched to captured compilation"], access_label: request.source.access_label});
+    const ids = [evId, handlerId, evidence(operation.pointer, endpoint.endpoint_id), middlewareEvidence(endpoint.endpoint_id)];
+    endpoint.evidence_ids.push(...ids.filter(id => !endpoint.evidence_ids.includes(id)));
+    result.claims.push({claim_id: `claim-${hash(`${endpoint.endpoint_id}:handler.binding:${evId}`).slice(0, 24)}`,
+      subject: {service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id}, predicate: "handler.binding",
+      verification: "observed", evidence_ids: ids, value: {path: binding.handler_path, export_name: binding.export_name,
+        controller: binding.controller, operationId: binding.operation_id, environment: receipt.environment,
+        session_id: receipt.session_id, captured_at: receipt.captured_at, runtime_fingerprint: receipt.runtime_fingerprint,
+        signer_digest: receipt.signer_digest, policy: "signed-runtime-binding-1"}});
+    result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: handlerId}, evidence_ids: [evId, handlerId]});
+    result.dependencies.push({from_endpoint_id: endpoint.endpoint_id, to: {kind: "evidence", id: evId}, evidence_ids: [evId]});
+    return true;
   }
 
   function addHandlerCandidate(endpoint: Endpoint, operation: Swagger2Operation): void {

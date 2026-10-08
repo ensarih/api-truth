@@ -1,15 +1,17 @@
 {
   "name": "@api-truth/analyzer-nodejs-swagger2-document",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./middleware": "./src/middleware.ts"
+    "./middleware": "./src/middleware.ts",
+    "./runtime-binding-capture": "./src/runtime-binding-capture.cjs"
   },
   "dependencies": {
     "@api-truth/ir": "0.0.0",
     "typescript": "5.9.3",
-    "yaml": "2.9.1"
+    "yaml": "2.9.1",
+    "@sinclair/typebox": "0.34.41"
   }
 }

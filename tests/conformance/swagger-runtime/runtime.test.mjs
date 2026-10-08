@@ -42,6 +42,11 @@ const cases = [
   ["npm-environment-directories", 200, "production"],
   ["npm-router-mock", 200, "production-mock"],
   ["npm-router-mock-disabled", 200, "orders"],
+  ["runtime-binding", 200, "orders"],
+  ["runtime-binding-missing", 500, undefined],
+  ["runtime-binding-mock", 200, "mock"],
+  ["runtime-binding-stale", 200, "orders"],
+  ["runtime-binding-precedence", 200, "first"],
 ];
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
@@ -83,9 +88,19 @@ for (const [scenario, status, marker] of cases) {
       assert.equal(result.analysis.candidatePath, undefined);
       assert.ok(result.analysis.diagnostics.includes("handler_environment_unverified"));
     }
+    if (scenario === "runtime-binding-stale") assert.ok(result.analysis.diagnostics.includes("runtime_binding_receipt_unverified"));
     assert.equal(result.analysis.status, "partial");
-    assert.equal(result.analysis.bindingClaim, false);
-    assert.ok(result.analysis.diagnostics.includes("handler_binding_unverified"));
+    if (["runtime-binding", "runtime-binding-precedence"].includes(scenario)) {
+      assert.equal(result.analysis.bindingClaim, true);
+      assert.equal(result.analysis.binding.verification, "observed");
+      assert.equal(result.analysis.binding.value.path, scenario === "runtime-binding-precedence" ? "first/controllers/orders.js" : "api/controllers/orders.js");
+      assert.equal(result.analysis.binding.value.environment, "test");
+      assert.equal(result.analysis.binding.value.session_id, "runtime-fixture");
+      assert.ok(result.analysis.diagnostics.includes("runtime_binding_scope_limited"));
+    } else {
+      assert.equal(result.analysis.bindingClaim, false);
+      assert.ok(result.analysis.diagnostics.includes("handler_binding_unverified"));
+    }
   });
 }
 

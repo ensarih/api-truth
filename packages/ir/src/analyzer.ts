@@ -34,7 +34,7 @@ export const AnalyzerRequestSchema = Type.Object({
   source: AnalyzerSourceSchema,
   resolution_inputs: Type.Array(Type.Union([
     Type.Object({
-      kind: Type.Union([Type.Literal("source_tree"), Type.Literal("type_manifest"), Type.Literal("generated_sources")]),
+      kind: Type.Union([Type.Literal("source_tree"), Type.Literal("type_manifest"), Type.Literal("generated_sources"), Type.Literal("runtime_observation")]),
       path: NormalizedProjectPathSchema,
       digest: NonEmptyString(),
     }, { additionalProperties: false }),

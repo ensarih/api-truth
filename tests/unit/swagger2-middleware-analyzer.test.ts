@@ -1,3 +1,5 @@
+import {generateKeyPairSync, sign} from "node:crypto";
+import {sha256, supportedRouterDigest} from "../../analyzers/nodejs/src/runtime-binding.js";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -602,4 +604,50 @@ test("environment router mock toggles preserve endpoints and suppress normal can
   expect(second.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
   expect(second.claims.some(item => item.predicate === "handler.binding")).toBe(false);
   expect(second.diagnostics.map(item => item.code)).toContain("handler_configuration_unverified");
+});
+
+
+test("signed session bindings retain evidence dependencies, invalidate on edits and require caller trust", async () => {
+  const handler = "exports.getOrder = function () {};";
+  const {root, adapter} = await service({"app.js": entry,
+    "api/swagger/swagger.yaml": document.replace("    get:", "    x-swagger-router-controller: orders\n    get:"),
+    "package.json": '{"type":"commonjs"}', "api/controllers/orders.js": handler});
+  const baseline = await adapter.analyze(request());
+  const keys = generateKeyPairSync("ed25519");
+  const publicKey = keys.publicKey.export({type: "spki", format: "pem"}).toString();
+  const payload = {version: "1.0.0", repository_id: "example-repo", service_id: "example",
+    immutable_revision: request().source.immutable_revision, source_digest: baseline.source.source_digest,
+    environment: "test", session_id: "session-1", captured_at: "2026-10-08T16:00:00.000Z",
+    node_version: "22.19.0", router_digest: supportedRouterDigest, runtime_fingerprint: sha256("runtime"),
+    bindings: [{method: "GET", application_path: "/api/v1/orders/{id}", controller: "orders", operation_id: "getOrder",
+      handler_path: "api/controllers/orders.js", handler_digest: sha256(handler), export_name: "getOrder", mock_mode: false}]};
+  const bytes = Buffer.from(JSON.stringify(payload));
+  const text = JSON.stringify({payload: bytes.toString("base64"), signature: sign(null, bytes, keys.privateKey).toString("base64")});
+  await writeFile(join(root, "service/api-truth.runtime-binding.json"), text);
+  const input = request();
+  input.resolution_inputs.push({kind: "runtime_observation", path: "service/api-truth.runtime-binding.json", digest: sha256(text)});
+  await expect(adapter.analyze(input)).rejects.toThrow("Unsupported runtime binding input");
+  const trusted = createAnalyzer({projectRoot: root, trustedRuntimePublicKey: publicKey});
+  const first = await trusted.analyze(input);
+  expect(parseAnalyzerResult(first).ok).toBe(true);
+  expect(first.source.source_digest).toBe(baseline.source.source_digest);
+  expect(first.claims).toContainEqual(expect.objectContaining({predicate: "handler.binding", verification: "observed"}));
+  expect(first.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+  const handlerEvidence = first.evidence.find(item => item.location.path === "api/controllers/orders.js")!;
+  const receiptEvidence = first.evidence.find(item => item.source.kind === "runtime_capture")!;
+  for (const evidence of [handlerEvidence, receiptEvidence]) expect(first.dependencies).toContainEqual(expect.objectContaining({
+    from_endpoint_id: first.endpoints[0]!.endpoint_id, to: {kind: "evidence", id: evidence.evidence_id}}));
+  expect(first.status).toBe("partial");
+  expect((await trusted.analyze(input)).reproducibility_fingerprint).toBe(first.reproducibility_fingerprint);
+  const wrongKey = generateKeyPairSync("ed25519").publicKey.export({type: "spki", format: "pem"}).toString();
+  const untrusted = await createAnalyzer({projectRoot: root, trustedRuntimePublicKey: wrongKey}).analyze(input);
+  expect(untrusted.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  expect(untrusted.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  await writeFile(join(root, "service/api/controllers/orders.js"), handler + "\n// changed");
+  const stale = await trusted.analyze(input);
+  expect(stale.endpoints).toHaveLength(1);
+  expect(stale.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  expect(stale.diagnostics.map(item => item.code)).toContain("runtime_binding_receipt_unverified");
+  input.resolution_inputs[2]!.digest = sha256("wrong");
+  await expect(trusted.analyze(input)).rejects.toThrow("Runtime receipt digest mismatch");
 });

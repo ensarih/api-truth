@@ -1,3 +1,4 @@
+import {generateKeyPairSync} from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -28,7 +29,7 @@ try {
   const operation = doc.paths["/orders/{id}"].get;
   if (scenario === "operation-override") operation["x-swagger-router-controller"] = "alternate";
   if (scenario === "missing-controller") operation["x-swagger-router-controller"] = "missing";
-  if (scenario === "missing-export") operation.operationId = "missingExport";
+  if (["missing-export", "runtime-binding-missing"].includes(scenario)) operation.operationId = "missingExport";
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));
   if (scenario === "single-initialization-failure") await put("api/controllers/orders.js",
@@ -52,9 +53,9 @@ try {
   await put("package.json", JSON.stringify({type: "commonjs",
     ...(npmEnvironment ? {scripts: {start: "NODE_ENV=production node app.js"}, engines: {node: "22.19.0"}} : {}), dependencies: {"swagger-express-mw": "0.7.0"}}));
   await put("package-lock.json", await readFile(new URL("./package-lock.json", import.meta.url), "utf8"));
-  if (["configured-directory", "directory-precedence", "initialization-fallback", "mock-mode"].includes(scenario)) {
+  if (["configured-directory", "directory-precedence", "initialization-fallback", "mock-mode", "runtime-binding-precedence"].includes(scenario)) {
     const dirs = scenario === "configured-directory" ? ["custom/controllers"]
-      : ["directory-precedence", "initialization-fallback"].includes(scenario) ? ["first/controllers", "second/controllers"] : ["api/controllers"];
+      : ["directory-precedence", "initialization-fallback", "runtime-binding-precedence"].includes(scenario) ? ["first/controllers", "second/controllers"] : ["api/controllers"];
     const config = {swagger: {swaggerControllerPipe: "controllers", fittingsDirs: ["api/fittings"], bagpipes: {
       router: {name: "swagger_router", controllersDirs: dirs, mockControllersDirs: ["api/mocks"],
         controllersInterface: "middleware", mockMode: scenario === "mock-mode"},
@@ -102,10 +103,25 @@ try {
   const transitiveVersions = Object.fromEntries(["bagpipes", "config", "sway"].map(name => [name, runnerRequire(`${name}/package.json`).version]));
   const versions = {wrapper: require("swagger-express-mw/package.json").version,
     runner: wrapperRequire("swagger-node-runner/package.json").version, express: require("express/package.json").version};
+  const run = promisify(execFile);
+  const analyzerNode = process.env.API_TRUTH_ANALYZER_NODE;
+  if (!analyzerNode) throw new Error("Analyzer runtime missing");
+  const captureScenario = scenario.startsWith("runtime-binding");
+  const cliArgs = [fileURLToPath(new URL("../../../scripts/extract-swagger2-middleware.mjs", import.meta.url)),
+    "--source", root, "--service", "synthetic", "--revision", "a".repeat(40)];
+  const cliOptions = {timeout: 10000, maxBuffer: 1_000_000,
+    env: {PATH: process.env.PATH, NODE_ENV: "test", SUPPRESS_NO_CONFIG_WARNING: "true"}};
+  let capture;
+  if (captureScenario) {
+    const baseline = JSON.parse((await run(analyzerNode, cliArgs, cliOptions)).stdout);
+    const collector = require(fileURLToPath(new URL("../../../analyzers/nodejs/src/runtime-binding-capture.cjs", import.meta.url)));
+    capture = collector.installSwaggerRuntimeBindingCapture({serviceRoot: root, repository_id: "local", service_id: "synthetic",
+      immutable_revision: "a".repeat(40), source_digest: baseline.source.source_digest, environment: "test", session_id: "runtime-fixture"});
+  }
   const express = require("express");
   const wrapper = require("swagger-express-mw");
   const app = express();
-  const middleware = await new Promise((accept, reject) => wrapper.create({appRoot: root, ...createOptions}, (error, value) => error ? reject(error) : accept(value)));
+  const middleware = await new Promise((accept, reject) => wrapper.create({appRoot: root, ...createOptions, ...(scenario === "runtime-binding-mock" ? {mockMode: true} : {})}, (error, value) => error ? reject(error) : accept(value)));
   middleware.register(app);
   app.use((error, req, res, next) => { res.status(500).json({error: "synthetic-routing-failure"}); });
   server = await new Promise(accept => { const listener = app.listen(0, "127.0.0.1", () => accept(listener)); });
@@ -115,21 +131,31 @@ try {
   let body; try { body = JSON.parse(text); } catch { body = {nonJson: true}; }
   const withoutPrefix = await fetch(`${base}/orders/42`, {signal: AbortSignal.timeout(5000)});
   await withoutPrefix.arrayBuffer();
-  const run = promisify(execFile);
-  // Static analysis runs as a separate process and never imports this synthetic service's handlers.
-  const analyzerNode = process.env.API_TRUTH_ANALYZER_NODE;
-  if (!analyzerNode) throw new Error("Analyzer runtime missing");
   const {stdout: analyzerVersion} = await run(analyzerNode, ["--version"]);
-  const {stdout} = await run(analyzerNode, [fileURLToPath(new URL("../../../scripts/extract-swagger2-middleware.mjs", import.meta.url)),
-    "--source", root, "--service", "synthetic", "--revision", "a".repeat(40)], {
-      timeout: 10000, maxBuffer: 1_000_000,
-      env: {PATH: process.env.PATH, NODE_ENV: "test", SUPPRESS_NO_CONFIG_WARNING: "true"},
-    });
+  let keyDirectory;
+  if (capture) {
+    const payload = capture.receipt(); capture.stop();
+    const keys = generateKeyPairSync("ed25519");
+    keyDirectory = await mkdtemp(join(tmpdir(), "api-truth-runtime-key-"));
+    const keyPath = join(keyDirectory, "public.pem");
+    await writeFile(keyPath, keys.publicKey.export({format: "pem", type: "spki"}));
+    const privatePath = join(keyDirectory, "private.pem"), capturePath = join(keyDirectory, "capture.json");
+    await writeFile(privatePath, keys.privateKey.export({format: "pem", type: "pkcs8"}), {mode: 0o600});
+    await writeFile(capturePath, JSON.stringify(payload));
+    await run(analyzerNode, [fileURLToPath(new URL("../../../scripts/sign-runtime-binding.mjs", import.meta.url)),
+      "--capture", capturePath, "--private-key", privatePath, "--output", join(root, "api-truth.runtime-binding.json")], cliOptions);
+    if (scenario === "runtime-binding-stale") await put("api/controllers/orders.js", 'exports.getOrder = function() { return "private-stale-marker"; };');
+    cliArgs.push("--binding-receipt", "api-truth.runtime-binding.json", "--binding-public-key", keyPath);
+  }
+  let stdout;
+  try { ({stdout} = await run(analyzerNode, cliArgs, cliOptions)); }
+  finally { if (keyDirectory) await rm(keyDirectory, {recursive: true, force: true}); }
   const analysis = JSON.parse(stdout);
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
     analysis: {status: analysis.status, candidatePath: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.path,
       initializationSources: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.initialization_sources?.map(item => item.path),
-      bindingClaim: analysis.claims.some(item => item.predicate === "handler.binding"), diagnostics: analysis.diagnostics.map(item => item.code)}}));
+      bindingClaim: analysis.claims.some(item => item.predicate === "handler.binding"),
+      binding: analysis.claims.find(item => item.predicate === "handler.binding"), diagnostics: analysis.diagnostics.map(item => item.code)}}));
 } finally {
   if (server) { server.closeAllConnections(); await new Promise((accept, reject) => server.close(error => error ? reject(error) : accept())); }
   await rm(root, {recursive: true, force: true});

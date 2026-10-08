@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   parseAnalyzerRequest, parseAnalyzerResult, type AnalyzerRequest, type AnalyzerResult,
 } from "../../../packages/ir/src/index.js";
+import {verifyRuntimeBindings, runtimeBindingFilename, sha256} from "./runtime-binding.js";
 import { resolveSwaggerStartup } from "./startup.js";
 import { extractSwagger2Document } from "./index.js";
 import { resolveSwaggerFrameworkLock } from "./framework-lock.js";
@@ -11,13 +12,13 @@ import { resolveSwaggerRoutingConfiguration } from "./routing-config.js";
 import { createHandlerCandidateResolver } from "./handler-candidates.js";
 import { digestServiceTree, inside, readServiceTree } from "./source.js";
 
-/** Direct swagger-express-mw default-file registration; handler binding remains unresolved. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.18.0" };
+/** Direct swagger-express-mw default-file registration; optional signed observations establish session-scoped handler binding. */
+export const ANALYZER = { analyzer_id: "nodejs-swagger-express-mw", analyzer_version: "0.19.0" };
 const defaultDocument = "api/swagger/swagger.yaml";
 const digestDocument = (path: string, text: string): string =>
   `sha256:${createHash("sha256").update(path).update("\0").update(text).digest("hex")}`;
 
-export function createAnalyzer(options: { projectRoot: string }) {
+export function createAnalyzer(options: { projectRoot: string; trustedRuntimePublicKey?: string }) {
   return { async analyze(input: unknown): Promise<AnalyzerResult> {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
@@ -30,7 +31,12 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const expectedDocument = request.source.service_root === "." ? defaultDocument
       : `${request.source.service_root}/${defaultDocument}`;
     const selected = request.resolution_inputs[1];
-    if (request.resolution_inputs.length !== 2 || request.resolution_inputs[0]?.kind !== "source_tree"
+    const runtimeInput = request.resolution_inputs[2];
+    const expectedReceipt = request.source.service_root === "." ? runtimeBindingFilename : `${request.source.service_root}/${runtimeBindingFilename}`;
+    if (runtimeInput && (runtimeInput.kind !== "runtime_observation" || runtimeInput.path !== expectedReceipt
+      || !options.trustedRuntimePublicKey || !/^sha256:[a-f0-9]{64}$/.test(runtimeInput.digest)))
+      throw new Error("Unsupported runtime binding input");
+    if (request.resolution_inputs.length !== (runtimeInput ? 3 : 2) || request.resolution_inputs[0]?.kind !== "source_tree"
       || request.resolution_inputs[0].path !== request.source.service_root
       || selected?.kind !== "type_manifest" || selected.path !== expectedDocument
       || request.changed_paths.some(path => !inside(root, resolve(project, path))))
@@ -41,6 +47,11 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const documentPath = resolve(tree.root, defaultDocument);
     const text = tree.files.get(documentPath);
     if (text === undefined) throw new Error("Selected middleware document rejected");
+    const receiptText = runtimeInput ? tree.files.get(resolve(tree.root, runtimeBindingFilename)) : undefined;
+    if (runtimeInput) {
+      if (receiptText === undefined || sha256(receiptText) !== runtimeInput.digest) throw new Error("Runtime receipt digest mismatch");
+      tree.files.delete(resolve(tree.root, runtimeBindingFilename));
+    }
     const treeDigest = digestServiceTree(tree.files, tree.root, tree.opaqueConfiguration);
     const documentDigest = digestDocument(expectedDocument, text);
     const claimed: Array<[string, string]> = [
@@ -54,7 +65,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
       extraction_mode: request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode,
       source: { ...request.source, source_digest: treeDigest },
       resolution_inputs: [{ kind: "source_tree", path: request.source.service_root, digest: treeDigest },
-        { kind: "type_manifest", path: expectedDocument, digest: documentDigest }],
+        { kind: "type_manifest", path: expectedDocument, digest: documentDigest }, ...(runtimeInput ? [runtimeInput] : [])],
     };
     const binding = findSwaggerMiddlewareBinding(tree.files, tree.root);
     budget();
@@ -67,6 +78,9 @@ export function createAnalyzer(options: { projectRoot: string }) {
       binding ? { kind: "verified", binding, routingConfiguration,
         frameworkLock: resolveSwaggerFrameworkLock(tree.files, tree.root, tree.opaqueConfiguration),
         startup,
+        ...(runtimeInput && receiptText ? {runtimeBinding: verifyRuntimeBindings({text: receiptText,
+          publicKey: options.trustedRuntimePublicKey!, path: runtimeBindingFilename, source: request.source,
+          files: tree.files, root: tree.root})} : {}),
         handlerResolver: createHandlerCandidateResolver(tree.files, tree.root, routingConfiguration, budget) }
         : { kind: "unverified" });
     budget();

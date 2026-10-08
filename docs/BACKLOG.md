@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.18.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.19.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -352,3 +352,19 @@ cases verify environment-selected mocks and disabling a default router mock
 setting. Source edits invalidate extraction without changing endpoint identity.
 No mock handler binding, effective deployment configuration or authoritative
 normal-handler binding is asserted.
+
+
+### Controlled runtime handler binding (2026-10-08)
+
+Middleware `0.19.0` adds opt-in signed capture receipts. Matching actual normal
+handler invocations emit an `observed` binding scoped to the capture session and
+environment, with handler-source and receipt dependencies. Mocks, missing
+exports, untrusted signatures and stale sources do not bind. Static candidates
+remain inferred without a receipt. The offline analyzer never executes service
+code. A trusted producer must attest the running tree, revision and environment;
+the analyzer caller supplies an external public trust key. Signing alone does
+not prove capture origin. This completes the bounded observed-binding slice;
+NB4 still includes broader framework profiles, production startup/environment
+proof and handler-derived contract extraction.
+
+See [capture and trust contract](SWAGGER_RUNTIME_BINDING.md) for setup, limits and validation.

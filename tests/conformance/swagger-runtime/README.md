@@ -68,7 +68,7 @@ is a source input for analysis, not a production startup proof.
 
 The same synthetic tree is analyzed separately with Node 24. Analyzer assertions
 check candidate paths and diagnostics, incomplete coverage, and the absence of
-`handler.binding`. In particular, the runtime can choose the first of two
+`handler.binding` without explicitly supplied signed observations. In particular, the runtime can choose the first of two
 controllers while the analyzer conservatively reports ambiguity; environment
 configuration can select a mock while the source candidate remains a normal
 controller. Neither case is promoted to a verified binding.
@@ -105,3 +105,13 @@ controllersDirs array replaces the default array (19 total tests).
 
 Two router mock-mode scenarios verify environment-selected mock directories,
 router/global OR behavior, and disabling default router mocks (21 total tests).
+
+
+Five controlled-capture scenarios add actual normal dispatch, missing exports,
+mock routing, stale handler source and first-directory precedence (26 total
+tests including the Node 24 incompatibility). Only normal, fresh, explicitly
+trusted captures emit `handler.binding` with verification `observed`. The signer
+runs separately from the instrumented service; the private key is outside the
+service tree. These synthetic receipts attest the fixture's tree and session,
+not production startup or deployment. See the
+[capture trust contract](../../../docs/SWAGGER_RUNTIME_BINDING.md).

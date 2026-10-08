@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.18.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.19.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -506,3 +506,19 @@ cases verify environment-selected mocks and disabling a default router mock
 setting. Source edits invalidate extraction without changing endpoint identity.
 No mock handler binding, effective deployment configuration or authoritative
 normal-handler binding is asserted.
+
+
+### Controlled runtime handler binding (2026-10-08)
+
+Middleware `0.19.0` adds opt-in signed capture receipts. Matching actual normal
+handler invocations emit an `observed` binding scoped to the capture session and
+environment, with handler-source and receipt dependencies. Mocks, missing
+exports, untrusted signatures and stale sources do not bind. Static candidates
+remain inferred without a receipt. The offline analyzer never executes service
+code. A trusted producer must attest the running tree, revision and environment;
+the analyzer caller supplies an external public trust key. Signing alone does
+not prove capture origin. This completes the bounded observed-binding slice;
+NB4 still includes broader framework profiles, production startup/environment
+proof and handler-derived contract extraction.
+
+See [capture and trust contract](../../docs/SWAGGER_RUNTIME_BINDING.md) for setup, limits and validation.
