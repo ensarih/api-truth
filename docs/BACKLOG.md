@@ -125,12 +125,12 @@ it does not substitute for a protected enterprise pilot.
 | P5-DOCS | 5 | Permission-scoped read-only Confluence links and discrepancies. | Findings retain both sources, versions, scopes, and review state; revocation invalidates dependent views. |
 | P6-OPS | 6 | Capacity, backup/restore, access audits, operations, and public v1 release readiness. | The [Phase 6 exit gate](ROADMAP.md#exit-gate-6) passes with published measurements and honest supported ranges. |
 
-`nodejs-swagger2-document@0.7.0` reads a selected JSON or YAML document and emits
+`nodejs-swagger2-document@0.8.0` reads a selected JSON or YAML document and emits
 declared route facts, flat parameter serialization, and scalar/flat-array form and multipart-file
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.12.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.13.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -244,3 +244,24 @@ query/path/header declarations. Unsupported strict bounds are not converted to
 inclusive ones; conflicting/invalid limits and malformed required arrays stay
 diagnosed while preserving routes. Source edits invalidate extraction. Runtime
 validation, normative constraint export and form-field limits remain pending.
+
+
+### Declared patterns and enums (2026-10-08)
+
+Document `0.8.0` and middleware `0.13.0` preserve patterns on explicit string
+schemas, including query/path/header parameters. Patterns are limited to 4,096
+UTF-16 code units and checked with Unicode-mode JavaScript regex compilation,
+matching the catalog validator; they are never matched against request input.
+Missing/non-string types, malformed patterns and excessive patterns remain
+unresolved with pointer-scoped diagnostics. No type is invented.
+
+Enum declarations retain source order and JSON value types, including composite
+values. Empty/malformed enums, more than 1,024 members, duplicate JSON values,
+and values exceeding depth 32 or 10,000 visited nodes are diagnosed and omitted.
+Object key order does not affect duplicate equality; array order does. Duplicate
+scalar/form-item enums leave the form body unresolved. Rejected constraint
+values are not copied into diagnostics. Constraint edits invalidate extraction
+without changing endpoint identity.
+
+These are document declarations. Runtime enforcement and normative constraint
+export remain gated; form patterns remain outside the supported form subset.

@@ -198,3 +198,14 @@ test("file parts carry content type instead of URL-style serialization", () => {
   });
   expect(result.endpoints[0]?.request_bodies[0]?.encoding?.file?.style).toBeUndefined();
 });
+
+
+test("duplicate scalar and item enums keep form bodies unresolved", () => {
+  for (const field of [{name: "value", in: "formData", type: "string", enum: ["a", "a"]},
+    {name: "values", in: "formData", type: "array", items: {type: "string", enum: ["a", "a"]}}]) {
+    const result = analyze([field], {consumes: ["multipart/form-data"]});
+    expect(result.endpoints).toHaveLength(1);
+    expect(result.endpoints[0]!.request_bodies).toEqual([]);
+    expect(result.diagnostics.map(item => item.code)).toContain("form_field_unresolved");
+  }
+});

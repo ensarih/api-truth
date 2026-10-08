@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.7.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.8.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.12.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.13.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -398,3 +398,24 @@ partial coverage; runtime validation, normative constraint export, form-field
 limit support and other constraint keywords remain gated. Limit edits invalidate
 extraction without changing endpoint identity. No export eligibility or handler
 facts are promoted by this change.
+
+
+### Declared patterns and enums (2026-10-08)
+
+Document `0.8.0` and middleware `0.13.0` preserve patterns on explicit string
+schemas, including query/path/header parameters. Patterns are limited to 4,096
+UTF-16 code units and checked with Unicode-mode JavaScript regex compilation,
+matching the catalog validator; they are never matched against request input.
+Missing/non-string types, malformed patterns and excessive patterns remain
+unresolved with pointer-scoped diagnostics. No type is invented.
+
+Enum declarations retain source order and JSON value types, including composite
+values. Empty/malformed enums, more than 1,024 members, duplicate JSON values,
+and values exceeding depth 32 or 10,000 visited nodes are diagnosed and omitted.
+Object key order does not affect duplicate equality; array order does. Duplicate
+scalar/form-item enums leave the form body unresolved. Rejected constraint
+values are not copied into diagnostics. Constraint edits invalidate extraction
+without changing endpoint identity.
+
+These are document declarations. Runtime enforcement and normative constraint
+export remain gated; form patterns remain outside the supported form subset.

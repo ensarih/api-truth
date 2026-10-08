@@ -413,3 +413,76 @@ test("a declared limit edit invalidates extraction without changing endpoint ide
   expect(Object.values(second.schemas)[0]!.schema.maximum).toBe(8);
   expect(second.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(1);
 });
+
+
+test("patterns and distinct JSON enum values preserve their declarations and source order", async () => {
+  const values = [null, false, 0, "0", {a: 1, b: 2}, [1, 2], [2, 1]];
+  const {adapter} = await service({...document, definitions: {Order: {type: "object", properties: {
+    id: {type: "string", pattern: "^[a-z]+$", enum: ["a", "b"]}, value: {enum: values}, empty: {type: "string", pattern: ""},
+  }}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(Object.values(result.schemas)[0]!.schema.properties).toEqual({
+    id: {type: "string", pattern: "^[a-z]+$", enum: ["a", "b"]}, value: {enum: values}, empty: {type: "string", pattern: ""},
+  });
+  expect(result.diagnostics.map(item => item.code)).not.toContain("schema_keyword_unsupported");
+});
+
+test.each([null, 1, "[private-pattern-marker", "x".repeat(4097)].map(value => [value]))(
+  "invalid or excessive patterns preserve routes without retaining rejected values", async pattern => {
+    const {adapter} = await service({...document, definitions: {Order: {type: "string", pattern}}});
+    const result = await adapter.analyze(request());
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(result.endpoints).toHaveLength(1);
+    expect(Object.values(result.schemas)[0]!.schema.pattern).toBeUndefined();
+    const diag = result.diagnostics.find(item => item.code === "schema_pattern_unsupported")!;
+    expect(diag).toBeDefined();
+    expect(result.evidence.filter(item => diag.evidence_ids.includes(item.evidence_id)).map(item => item.location.pointer))
+      .toContain("/definitions/Order/pattern");
+    expect(JSON.stringify(result)).not.toContain("private-pattern-marker");
+  });
+
+test.each([[], null, "private-enum-marker", [1, 1], [{a: 1, b: 2}, {b: 2, a: 1}],
+  [[1, 2], [1, 2]], Array.from({length: 1025}, (_, i) => i)].map(value => [value]))(
+  "invalid or duplicate enums remain unknown without losing endpoints: %j", async enumeration => {
+    const {adapter} = await service({...document, definitions: {Order: {enum: enumeration}}});
+    const result = await adapter.analyze(request());
+    expect(parseAnalyzerResult(result).ok).toBe(true);
+    expect(result.endpoints).toHaveLength(1);
+    expect(Object.values(result.schemas)[0]!.schema.enum).toBeUndefined();
+    expect(result.diagnostics.some(item => item.code.startsWith("schema_enum_"))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("private-enum-marker");
+  });
+
+test("primitive parameter patterns use the shared conversion", async () => {
+  const {adapter} = await service({...document, paths: {"/orders/{id}": {get: {
+    parameters: [{name: "id", in: "path", required: true, type: "string", pattern: "^[a-z]+$", enum: ["a", "b"]}],
+    responses: {"200": {description: "ok"}},
+  }}}});
+  const result = await adapter.analyze(request());
+  expect(result.endpoints[0]!.parameters[0]!.schema).toEqual({type: "string", pattern: "^[a-z]+$", enum: ["a", "b"]});
+  expect(result.diagnostics.map(item => item.code)).not.toContain("parameter_keyword_unsupported");
+});
+
+
+test("patterns without an explicit string type stay unresolved", async () => {
+  const {adapter} = await service({...document, definitions: {Order: {pattern: "^[a-z]+$"}}});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(Object.values(result.schemas)[0]!.schema).toEqual({});
+  expect(result.diagnostics.map(item => item.code)).toContain("schema_pattern_unsupported");
+});
+
+
+test("pattern and enum edits invalidate extraction while retaining endpoint identity", async () => {
+  const spec = {...document, definitions: {Order: {type: "string", pattern: "^a$", enum: ["a"]}}};
+  const {root, adapter} = await service(spec);
+  const first = await adapter.analyze(request());
+  spec.definitions.Order.pattern = "^b$"; spec.definitions.Order.enum = ["b"];
+  await writeFile(join(root, "service/api/swagger/swagger.json"), JSON.stringify(spec));
+  const second = await adapter.analyze(request());
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.endpoints[0]!.endpoint_id).toBe(first.endpoints[0]!.endpoint_id);
+  expect(Object.values(second.schemas)[0]!.schema).toEqual({type: "string", pattern: "^b$", enum: ["b"]});
+  expect(second.dependencies.filter(item => item.to.kind === "schema")).toHaveLength(1);
+});

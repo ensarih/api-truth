@@ -474,3 +474,18 @@ test("middleware preserves declared bounds and diagnoses malformed required list
   expect(result.diagnostics.map(item => item.code)).toContain("schema_required_unsupported");
   expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
 });
+
+
+test("middleware shares pattern and enum validation for YAML declarations", async () => {
+  const spec = document.replace("'200': { description: ok }", "'200': { description: ok, schema: { $ref: '#/definitions/Order' } }")
+    + "\nproduces: [application/json]\ndefinitions:\n  Order:\n    type: object\n    properties:\n      id: { type: string, pattern: '^[a-z]+$', enum: [a, b] }\n      invalid: { enum: [a, a], pattern: '[' }\n";
+  const {adapter} = await service({"app.js": entry, "api/swagger/swagger.yaml": spec});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints).toHaveLength(1);
+  expect(Object.values(result.schemas)[0]!.schema.properties).toEqual({
+    id: {type: "string", pattern: "^[a-z]+$", enum: ["a", "b"]}, invalid: {},
+  });
+  expect(result.diagnostics.map(item => item.code)).toEqual(expect.arrayContaining(["schema_enum_duplicate", "schema_pattern_unsupported"]));
+  expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+});

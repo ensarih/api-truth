@@ -1,4 +1,5 @@
 import type { Endpoint } from "../../../packages/ir/src/index.js";
+import { declaredEnum } from "./schema-constraints.js";
 import type { Swagger2Parameter } from "./swagger2-document.js";
 
 export function declaredPresence(parameter: Swagger2Parameter): "required" | "optional" | "unknown" {
@@ -54,7 +55,7 @@ export function supportedFormField(parameter: Swagger2Parameter): boolean {
     || parameter.description !== undefined && typeof parameter.description !== "string") return false;
   if (parameter.type === "file") return parameter.enum === undefined && parameter.format === undefined;
   if (parameter.enum === undefined) return true;
-  return Array.isArray(parameter.enum) && parameter.enum.length > 0 && parameter.enum.every(value =>
+  return !declaredEnum(parameter.enum).error && Array.isArray(parameter.enum) && parameter.enum.length > 0 && parameter.enum.every(value =>
     parameter.type === "string" ? typeof value === "string" : parameter.type === "boolean" ? typeof value === "boolean"
       : typeof value === "number" && Number.isFinite(value) && (parameter.type !== "integer" || Number.isInteger(value)));
 }
