@@ -80,3 +80,21 @@ must have an encoding record; missing records emit `UNKNOWN_FORM_ENCODING`
 and omit the operation. Required fields and format
 constraints still need their independent eligibility; declaring form encoding
 does not qualify other schema constraints.
+
+
+## Inline form requiredness
+
+For multipart and URL-encoded request bodies, an unconditional eligible
+`field_presence` claim with value `required` can retain a field in the exported
+schema's `required` list. Its `schema_pointer` must identify the exact property
+in the input snapshot, for example
+`/endpoints/0/request_bodies/1/schema/properties/tags`. Array positions refer to
+the original snapshot, before export sorting; property names use JSON Pointer
+escaping. The claim and its qualifying evidence must cover that exact endpoint.
+
+Diagnostic paths use endpoint IDs and media types for readability; they are
+not accepted as field locations. Missing eligibility, conditional claims,
+limited evidence and mismatched locations remain `UNVERIFIED_SCHEMA_CONSTRAINT`
+gaps. Declaration-only Swagger facts do not acquire eligibility automatically.
+Format and other constraints retain their existing separate gates; this slice
+covers form-field requiredness only.

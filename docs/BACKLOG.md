@@ -128,7 +128,9 @@ it does not substitute for a protected enterprise pilot.
 `nodejs-swagger2-document@0.5.0` reads a selected JSON or YAML document and emits
 declared route facts, flat parameter serialization, and scalar/flat-array form and multipart-file
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
-inline constraint eligibility remain open. `nodejs-swagger-express-mw@0.5.0`
+inline format eligibility remain open. Exact eligible inline form requiredness
+now exports using original snapshot field pointers; source declarations alone
+remain non-normative. `nodejs-swagger-express-mw@0.5.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective

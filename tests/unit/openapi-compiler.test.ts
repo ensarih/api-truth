@@ -589,3 +589,92 @@ test("a missing field encoding cannot acquire OpenAPI defaults in a complete for
     expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
   }
 });
+
+
+const qualifyFormRequired = async (snapshot: Record<string, any>, field: string, bodyIndex = 0) => {
+  const full = await fixture();
+  const claimId = `claim-form-${bodyIndex}-${field}`;
+  snapshot.claims.push({ ...full.claims[0], claim_id: claimId,
+    subject: { service_id: "orders", endpoint_id: "ep-get",
+      schema_pointer: `/endpoints/0/request_bodies/${bodyIndex}/schema/properties/${field.replaceAll("~", "~0").replaceAll("/", "~1")}` },
+    evidence_ids: ["ev-proof"] });
+  snapshot.export_eligibility.push({ ...full.export_eligibility[0], claim_id: claimId,
+    scope: { service_id: "orders", snapshot_id: snapshot.snapshot_id, endpoint_ids: ["ep-get"] },
+    basis: { kind: "deterministic_analysis", evidence_ids: ["ev-proof"] } });
+};
+
+test("exact eligible inline form fields retain requiredness in strict export", async () => {
+  const snapshot = await formSnapshot();
+  snapshot.endpoints[0].request_bodies[0].schema.required = ["tags"];
+  await qualifyFormRequired(snapshot, "tags");
+  expect(parseContractSnapshot(snapshot).ok).toBe(true);
+  const result = compileOpenApiSnapshot(snapshot, "strict");
+  expect(result.ok).toBe(true);
+  expect((result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["multipart/form-data"].schema.required)
+    .toEqual(["tags"]);
+});
+
+
+test.each(["wrong-pointer", "conditional", "missing-eligibility", "limited-evidence"])(
+  "inline form requiredness remains unverified with %s", async failure => {
+    const snapshot = await formSnapshot();
+    snapshot.endpoints[0].request_bodies[0].schema.required = ["tags"];
+    await qualifyFormRequired(snapshot, "tags");
+    if (failure === "wrong-pointer") snapshot.claims[0].subject.schema_pointer =
+      "/endpoints/ep-get/request_bodies/multipart~1form-data/schema/properties/tags";
+    if (failure === "conditional") snapshot.claims[0].condition = (await fixture()).claims[1].condition;
+    if (failure === "missing-eligibility") snapshot.export_eligibility = [];
+    if (failure === "limited-evidence") snapshot.evidence.find((item: any) => item.evidence_id === "ev-proof")
+      .limitations = ["validation_scope_unverified"];
+    expect(parseContractSnapshot(snapshot).ok).toBe(true);
+    const result = compileOpenApiSnapshot(snapshot, "draft");
+    if (failure !== "limited-evidence") expect((result.document as any).paths["/api/orders/{orderId}"].get
+      .requestBody.content["multipart/form-data"].schema.required).toBeUndefined();
+    expect(result.diagnostics.map(item => item.code)).toContain("UNVERIFIED_SCHEMA_CONSTRAINT");
+    expect(compileOpenApiSnapshot(snapshot, "strict").ok).toBe(false);
+  });
+
+test("form eligibility follows original body positions despite media sorting", async () => {
+  const snapshot = await formSnapshot();
+  const first = snapshot.endpoints[0].request_bodies[0];
+  first.schema.required = ["tags"];
+  const second = structuredClone(first);
+  second.media_type = "application/x-www-form-urlencoded";
+  second.serialization.format = "urlencoded";
+  delete second.schema.properties.file;
+  delete second.encoding.file;
+  snapshot.endpoints[0].request_bodies.push(second);
+  await qualifyFormRequired(snapshot, "tags", 1);
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  const content = (result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content;
+  expect(content["multipart/form-data"].schema.required).toBeUndefined();
+  expect(content["application/x-www-form-urlencoded"].schema.required).toEqual(["tags"]);
+});
+
+test("inline form eligibility uses escaped property pointers", async () => {
+  const snapshot = await formSnapshot();
+  const body = snapshot.endpoints[0].request_bodies[0];
+  body.schema.properties["part/name~id"] = { type: "string" };
+  body.encoding["part/name~id"] = { style: "form", explode: false, evidence_ids: ["ev-proof"] };
+  body.schema.required = ["part/name~id"];
+  await qualifyFormRequired(snapshot, "part/name~id");
+  const result = compileOpenApiSnapshot(snapshot, "strict");
+  expect(result.ok).toBe(true);
+  expect((result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["multipart/form-data"].schema.required)
+    .toEqual(["part/name~id"]);
+});
+
+
+test("direct form eligibility does not widen nested inline requiredness", async () => {
+  const snapshot = await formSnapshot();
+  const body = snapshot.endpoints[0].request_bodies[0];
+  body.schema.properties.group = { type: "object", properties: { name: { type: "string" } }, required: ["name"] };
+  body.encoding.group = { content_type: "application/json", evidence_ids: ["ev-proof"] };
+  await qualifyFormRequired(snapshot, "group");
+  snapshot.claims[0].subject.schema_pointer += "/properties/name";
+  expect(parseContractSnapshot(snapshot).ok).toBe(true);
+  const result = compileOpenApiSnapshot(snapshot, "draft");
+  expect((result.document as any).paths["/api/orders/{orderId}"].get.requestBody.content["multipart/form-data"]
+    .schema.properties.group.required).toBeUndefined();
+  expect(result.diagnostics.map(item => item.code)).toContain("UNVERIFIED_SCHEMA_CONSTRAINT");
+});

@@ -84,8 +84,10 @@ evidence alone does not create a contract change.
 The compiler can export matched `urlencoded`/`multipart` bodies and their
 encoding when exact endpoint evidence qualifies. Declaration-only, limited,
 service-wide, or unrelated encoding evidence produces
-`UNVERIFIED_FORM_ENCODING` and omits the draft operation. Inline requiredness
-and format constraints retain their separate evidence gates. These Swagger
+`UNVERIFIED_FORM_ENCODING` and omits the draft operation. Inline form
+requiredness can export only with an unconditional eligible claim at the exact
+snapshot field pointer and qualifying endpoint evidence. Format constraints
+retain their separate evidence gates. These Swagger
 extractions remain partial declarations; this slice does not make them strictly
 publishable or establish runtime validation, handler binding, or file MIME
 acceptance.

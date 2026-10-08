@@ -97,8 +97,9 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
   const eligibleRequired = (endpointIds: readonly string[], fullPointer: string): boolean => {
     if (endpointIds.length !== 1) return false;
     const endpointId = endpointIds[0]!;
-    // Only component paths are exact snapshot schema locations in this slice.
-    if (!fullPointer.startsWith("/schemas/")) return false;
+    // Inline form claims use actual snapshot array positions, never diagnostic paths.
+    if (!fullPointer.startsWith("/schemas/")
+      && !/^\/endpoints\/\d+\/request_bodies\/\d+\/schema\/properties\/[^/]+$/.test(fullPointer)) return false;
     return snapshot.export_eligibility.some((eligibility) => {
       if (eligibility.status !== "eligible" || !eligibility.scope.endpoint_ids.includes(endpointId)) return false;
       const claim = snapshot.claims.find((item) => item.claim_id === eligibility.claim_id);
@@ -107,13 +108,13 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
         && claim.value === "required" && hasQualifyingEvidence(eligibility.basis.evidence_ids, endpointId, true);
     });
   };
-  const exportSchema = (schema: ApiSchema, path: string, endpointIds: readonly string[]): Record<string, unknown> => {
+  const exportSchema = (schema: ApiSchema, path: string, endpointIds: readonly string[], factPath = path): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
     for (const [key, value] of sorted(Object.entries(schema), (entry) => entry[0])) {
       const childPath = `${path}/${pointer(key)}`;
       if (key === "$ref") { out.$ref = `#/components/schemas/${pointer(String(value).slice(10))}`; continue; }
       if (key === "required" && Array.isArray(value)) {
-        const accepted = (value as string[]).filter((name) => eligibleRequired(endpointIds, `${path}/properties/${pointer(name)}`));
+        const accepted = (value as string[]).filter((name) => eligibleRequired(endpointIds, `${factPath}/properties/${pointer(name)}`));
         if (accepted.length > 0) out.required = [...accepted].sort(ascii);
         if (accepted.length !== value.length) add("UNVERIFIED_SCHEMA_CONSTRAINT", childPath, endpointIds);
         continue;
@@ -121,11 +122,11 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
       if (constraintKeys.has(key)) { add("UNVERIFIED_SCHEMA_CONSTRAINT", childPath, endpointIds); continue; }
       if (key === "properties" && value && typeof value === "object") {
         out.properties = Object.fromEntries(sorted(Object.entries(value), (entry) => entry[0]).map(([name, child]) =>
-          [name, exportSchema(child as ApiSchema, `${childPath}/${pointer(name)}`, endpointIds)]));
+          [name, exportSchema(child as ApiSchema, `${childPath}/${pointer(name)}`, endpointIds, `${factPath}/${pointer(key)}/${pointer(name)}`)]));
       } else if (key === "items" || key === "not") {
-        out[key] = exportSchema(value as unknown as ApiSchema, childPath, endpointIds);
+        out[key] = exportSchema(value as unknown as ApiSchema, childPath, endpointIds, `${factPath}/${pointer(key)}`);
       } else if (["prefixItems", "oneOf", "anyOf", "allOf"].includes(key) && Array.isArray(value)) {
-        out[key] = value.map((child, index) => exportSchema(child as ApiSchema, `${childPath}/${index}`, endpointIds));
+        out[key] = value.map((child, index) => exportSchema(child as ApiSchema, `${childPath}/${index}`, endpointIds, `${factPath}/${pointer(key)}/${index}`));
       } else out[key] = value;
     }
     return out;
@@ -133,7 +134,11 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
 
   const exportRequestMedia = (item: Endpoint["request_bodies"][number], path: string,
     endpointId: string): { media: Record<string, unknown>; safe: boolean } => {
-    const media: Record<string, unknown> = { schema: exportSchema(item.schema, `${path}/schema`, [endpointId]) };
+    const endpointIndex = snapshot.endpoints.findIndex(endpoint => endpoint.endpoint_id === endpointId);
+    const bodyIndex = snapshot.endpoints[endpointIndex]!.request_bodies.indexOf(item);
+    const isForm = item.media_type === "multipart/form-data" || item.media_type === "application/x-www-form-urlencoded";
+    const factPath = isForm ? `/endpoints/${endpointIndex}/request_bodies/${bodyIndex}/schema` : `${path}/schema`;
+    const media: Record<string, unknown> = { schema: exportSchema(item.schema, `${path}/schema`, [endpointId], factPath) };
     const format = item.serialization.format;
     const supportedFormat = format === undefined
       || format === "json" && (item.media_type === "application/json" || item.media_type.endsWith("+json"))

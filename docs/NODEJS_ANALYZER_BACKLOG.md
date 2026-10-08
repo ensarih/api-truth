@@ -5,7 +5,8 @@
 Express subset. `nodejs-swagger2-document@0.5.0` reads selected Swagger 2 JSON/YAML
 declarations with flat parameter serialization and scalar/flat-array form and multipart-file
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding and
-inline constraint eligibility remain open.
+inline format-constraint eligibility remain open; qualified inline form
+requiredness export is implemented.
 `nodejs-swagger-express-mw@0.5.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
@@ -153,8 +154,10 @@ referenced parameter entries, and conflicting payload declarations stay
 unresolved. Per-field encoding is retained in IR 1.1 and participates in contract
 differences without provenance-only noise. Qualified encoding exports to
 OpenAPI; declaration-only or limited evidence cannot enter normative output.
-Strict inline field-requiredness/format eligibility and runtime binding remain
-open. Legacy IR 1.0 snapshots remain readable; cross-version comparisons require
+Exact eligible inline form-field requiredness now exports using original
+snapshot field pointers, independent of media sorting. Declaration-only
+requiredness remains non-normative. Inline format eligibility and runtime
+binding remain open. Legacy IR 1.0 snapshots remain readable; cross-version comparisons require
 a new same-version baseline. The orchestrated Express profile remains pinned
 to IR 1.0 until explicit profile selection is implemented.
 
