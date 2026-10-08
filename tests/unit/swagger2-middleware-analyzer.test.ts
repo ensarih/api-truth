@@ -500,3 +500,48 @@ test("middleware preserves schema-like keys inside YAML enum literals", async ()
   expect(Object.values(result.schemas)[0]!.schema.enum).toEqual([{$ref: "https://example.invalid/value", enum: [1, 1]}]);
   expect(result.diagnostics.map(item => item.code)).not.toContain("external_ref");
 });
+
+test.each([true, false])("direct literal mockMode=%s preserves routes and records configuration evidence", async mockMode => {
+  const option = `mockMode: ${mockMode}`;
+  const appText = entry.replace("appRoot: __dirname", `appRoot: __dirname, ${option}`);
+  const {adapter} = await service({"app.js": appText,
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "package.json": '{"type":"commonjs"}', "api/controllers/orders.js": 'exports.getOrder = function() {};'});
+  const result = await adapter.analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints).toHaveLength(1);
+  expect(result.claims.some(item => item.predicate === "handler.candidate")).toBe(!mockMode);
+  expect(result.claims.some(item => item.predicate === "handler.binding")).toBe(false);
+  const start = appText.indexOf(option);
+  expect(result.evidence).toContainEqual(expect.objectContaining({source: {kind: "source_code", source_id: "example-repo"},
+    location: {path: "app.js", pointer: `span:${start}:${start + option.length}`}}));
+});
+
+test("create mockMode false overrides a static file declaration without asserting effective runtime config", async () => {
+  const {root, adapter} = await service({"app.js": entry.replace("appRoot: __dirname", "appRoot: __dirname, mockMode: false"),
+    "config/default.json": JSON.stringify({swagger: {mockMode: true}}),
+    "api/swagger/swagger.yaml": document.replace("    get:\n", "    x-swagger-router-controller: orders\n    get:\n"),
+    "package.json": '{"type":"commonjs"}', "api/controllers/orders.js": 'exports.getOrder = function() {};'});
+  const first = await adapter.analyze(request());
+  expect(first.endpoints).toHaveLength(1);
+  expect(first.claims.some(item => item.predicate === "handler.candidate")).toBe(true);
+  expect(first.diagnostics.map(item => item.code)).toContain("routing_runtime_overrides_unverified");
+  const declaration = first.claims.find(item => item.predicate === "routing.configuration.declaration")!;
+  expect(first.evidence.filter(item => declaration.evidence_ids.includes(item.evidence_id)).map(item => item.location.path))
+    .toEqual(expect.arrayContaining(["app.js", "config/default.json"]));
+  await writeFile(join(root, "service/app.js"), entry.replace("appRoot: __dirname", "appRoot: __dirname, mockMode: true"));
+  const second = await adapter.analyze(request());
+  expect(second.endpoints[0]!.endpoint_id).toBe(first.endpoints[0]!.endpoint_id);
+  expect(second.reproducibility_fingerprint).not.toBe(first.reproducibility_fingerprint);
+  expect(second.claims.some(item => item.predicate === "handler.candidate")).toBe(false);
+});
+
+
+test.each(["mockMode: process.env.MODE", "mockMode: 'false'", "mockMode: false, mockMode: true", "...options", "configDir: 'other'"])(
+  "unsupported create options stay unverified: %s", async option => {
+    const {adapter} = await service({"app.js": entry.replace("appRoot: __dirname", `appRoot: __dirname, ${option}`),
+      "api/swagger/swagger.yaml": document});
+    const result = await adapter.analyze(request());
+    expect(result.status).toBe("failed");
+    expect(result.diagnostics.map(item => item.code)).toContain("middleware_registration_unverified");
+  });

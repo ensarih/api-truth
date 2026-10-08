@@ -1,7 +1,7 @@
 import { dirname, relative } from "node:path";
 import ts from "typescript";
 
-export type MiddlewareBinding = { path: string; line: number; span: string };
+export type MiddlewareBinding = { path: string; line: number; span: string; mock_mode?: {value: boolean; pointer: string} };
 const literal = (node: ts.Node | undefined): string | undefined =>
   node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const topLevelRequire = (node: ts.Node | undefined, packageName: string): boolean =>
@@ -60,13 +60,18 @@ export function findSwaggerMiddlewareBinding(files: Map<string, string>, root: s
       if (create.arguments.length !== 2) continue;
       const config = create.arguments[0];
       const callback = create.arguments[1];
-      if (!config || !callback || !ts.isObjectLiteralExpression(config) || config.properties.length !== 1
-        || !ts.isPropertyAssignment(config.properties[0]!) || key(config.properties[0]!) !== "appRoot"
-        || !ts.isIdentifier(config.properties[0]!.initializer)
-        || config.properties[0]!.initializer.text !== "__dirname"
+      if (!config || !callback || !ts.isObjectLiteralExpression(config) || config.properties.length > 2
+        || config.properties.some(property => !ts.isPropertyAssignment(property))
         || !(ts.isFunctionExpression(callback) || ts.isArrowFunction(callback))
         || !ts.isBlock(callback.body) || callback.parameters.length < 2
         || !ts.isIdentifier(callback.parameters[1]!.name)) continue;
+      const properties = config.properties as ts.NodeArray<ts.PropertyAssignment>;
+      const keys = properties.map(key);
+      if (new Set(keys).size !== keys.length || keys.some(name => name !== "appRoot" && name !== "mockMode")) continue;
+      const appRoot = properties.find(property => key(property) === "appRoot")?.initializer;
+      if (!appRoot || !ts.isIdentifier(appRoot) || appRoot.text !== "__dirname") continue;
+      const mock = properties.find(property => key(property) === "mockMode");
+      if (mock && ![ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(mock.initializer.kind)) continue;
       const parameterNames = callback.parameters.map(item => ts.isIdentifier(item.name) ? item.name.text : undefined);
       if (parameterNames.some(name => name === undefined) || new Set(parameterNames).size !== parameterNames.length) continue;
       const middlewareName = callback.parameters[1]!.name.text;
@@ -102,7 +107,9 @@ export function findSwaggerMiddlewareBinding(files: Map<string, string>, root: s
         .some(item => !errorGuard(item))) continue;
       matches.push({ path: relative(root, path).replaceAll("\\", "/"),
         line: source.getLineAndCharacterOfPosition(create.getStart()).line + 1,
-        span: `span:${create.getStart()}:${create.getEnd()}` });
+        span: `span:${create.getStart()}:${create.getEnd()}`,
+        ...(mock ? {mock_mode: {value: mock.initializer.kind === ts.SyntaxKind.TrueKeyword,
+          pointer: `span:${mock.getStart()}:${mock.getEnd()}`}} : {}) });
     }
   }
   return matches.length === 1 && createSites === 1 ? matches[0] : undefined;

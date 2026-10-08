@@ -69,7 +69,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-7", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-14", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-15", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -147,7 +147,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     return [...new Set((middleware.routingConfiguration?.evidence_locations ?? []).map(location => {
       const id = `ev-${hash(`${location.path}:${location.pointer}:${endpointId ?? ""}:routing-configuration`).slice(0, 24)}`;
       if (!result.evidence.some(item => item.evidence_id === id)) result.evidence.push({
-        evidence_id: id, source: {kind: "configuration", source_id: request.source.repository_id},
+        evidence_id: id, source: {kind: location.pointer.startsWith("span:") ? "source_code" : "configuration", source_id: request.source.repository_id},
         source_version: request.source.immutable_revision, location,
         method: "deterministic_analysis",
         scope: {service_id: request.source.service_id, snapshot_id: result.snapshot_id,

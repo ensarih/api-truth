@@ -130,7 +130,7 @@ declared route facts, flat parameter serialization, and scalar/flat-array form a
 extraction with incomplete coverage. IR 1.1 encoding and qualified export are implemented; runtime binding and
 broader constraint eligibility remain open. Exact eligible inline form
 requiredness and direct scalar formats export using original snapshot field
-pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.14.0`
+pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.15.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
 static routing configuration declarations, but effective
@@ -277,3 +277,18 @@ references inside them. Reference checks and duplicate-enum checks recurse only
 through actual schema positions, including compositions and dictionary schemas.
 Properties named `enum` or `default` still receive normal schema validation.
 No reference is fetched and no runtime or export authority is promoted.
+
+
+### Direct middleware mock-mode declaration (2026-10-08)
+
+Middleware `0.15.0` accepts `create({appRoot: __dirname, mockMode: false}, callback)`
+with a literal boolean only. This declaration takes precedence over the static
+file's top-level `swagger.mockMode` setting, matching the pinned runner. Explicit
+true preserves document endpoints and withholds normal controller candidates.
+The create option carries exact source-span evidence; option edits invalidate
+extraction. Duplicate keys, spreads, dynamic values and additional create
+options remain unsupported. Nested router settings are still checked separately.
+Two isolated runtime cases verify mock routing and create-over-file precedence.
+
+This does not resolve environment overrides or startup execution. Controller
+candidates remain inferred, and no authoritative handler binding is emitted.

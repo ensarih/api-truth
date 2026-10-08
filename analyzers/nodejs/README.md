@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.14.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.15.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -431,3 +431,18 @@ references inside them. Reference checks and duplicate-enum checks recurse only
 through actual schema positions, including compositions and dictionary schemas.
 Properties named `enum` or `default` still receive normal schema validation.
 No reference is fetched and no runtime or export authority is promoted.
+
+
+### Direct middleware mock-mode declaration (2026-10-08)
+
+Middleware `0.15.0` accepts `create({appRoot: __dirname, mockMode: false}, callback)`
+with a literal boolean only. This declaration takes precedence over the static
+file's top-level `swagger.mockMode` setting, matching the pinned runner. Explicit
+true preserves document endpoints and withholds normal controller candidates.
+The create option carries exact source-span evidence; option edits invalidate
+extraction. Duplicate keys, spreads, dynamic values and additional create
+options remain unsupported. Nested router settings are still checked separately.
+Two isolated runtime cases verify mock routing and create-over-file precedence.
+
+This does not resolve environment overrides or startup execution. Controller
+candidates remain inferred, and no authoritative handler binding is emitted.

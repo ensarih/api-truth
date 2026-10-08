@@ -91,3 +91,7 @@ the analyzer preserves its documented route and withholds the source candidate.
 
 Working and throwing local helper imports validate the bounded source graph policy
 against the pinned framework while preserving inferred candidate authority.
+
+Two additional scenarios verify literal create-option `mockMode: true` and
+`mockMode: false` overriding a static file setting of true (16 total tests).
+These fixture results do not certify arbitrary application environments.

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 let server;
@@ -40,9 +40,12 @@ try {
   }
   await put("api/controllers/alternate.js", handler("alternate"));
   await put("api/mocks/orders.js", handler("mock"));
+  const createOptions = scenario === "create-mock-mode" ? {mockMode: true}
+    : scenario === "create-mock-override" ? {mockMode: false} : {};
+  const sourceOptions = Object.hasOwn(createOptions, "mockMode") ? `, mockMode: ${createOptions.mockMode}` : "";
   await put("app.js", `${scenario === "source-environment-override" ? 'process.env.swagger_mockMode = "true";\n' : ""}const express = require("express");
     const SwaggerExpress = require("swagger-express-mw"); const app = express();
-    SwaggerExpress.create({appRoot: __dirname}, function(error, middleware) {
+    SwaggerExpress.create({appRoot: __dirname${sourceOptions}}, function(error, middleware) {
       if (error) throw error; middleware.register(app);
     });`);
   await put("package.json", JSON.stringify({type: "commonjs", dependencies: {"swagger-express-mw": "0.7.0"}}));
@@ -61,6 +64,8 @@ try {
     await put("second/controllers/orders.js", handler("second"));
   } else await mkdir(join(root, "config"), {recursive: true});
 
+  if (scenario === "create-mock-override") await put("config/default.json", JSON.stringify({swagger: {mockMode: true}}));
+
   // Each scenario is a fresh process: config/module caches and environment cannot leak between fixtures.
   process.env.NODE_CONFIG_DIR = join(root, "config");
   if (["environment-override", "source-environment-override"].includes(scenario)) process.env.swagger_mockMode = "true";
@@ -73,7 +78,7 @@ try {
   const express = require("express");
   const wrapper = require("swagger-express-mw");
   const app = express();
-  const middleware = await new Promise((accept, reject) => wrapper.create({appRoot: root}, (error, value) => error ? reject(error) : accept(value)));
+  const middleware = await new Promise((accept, reject) => wrapper.create({appRoot: root, ...createOptions}, (error, value) => error ? reject(error) : accept(value)));
   middleware.register(app);
   app.use((error, req, res, next) => { res.status(500).json({error: "synthetic-routing-failure"}); });
   server = await new Promise(accept => { const listener = app.listen(0, "127.0.0.1", () => accept(listener)); });

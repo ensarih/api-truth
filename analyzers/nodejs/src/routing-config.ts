@@ -25,7 +25,8 @@ const knownFittings = new Set(["cors", "swagger_params_parser", "swagger_securit
 
 /** A static declaration profile. It never claims that environment/config layering is resolved. */
 export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, root: string,
-  opaqueConfiguration: Map<string, string> = new Map()): RoutingConfiguration {
+  opaqueConfiguration: Map<string, string> = new Map(),
+  createMockMode?: {value: boolean; location: ConfigurationLocation}): RoutingConfiguration {
   const configFiles = [...files.keys(), ...opaqueConfiguration.keys()]
     .map(path => ({absolute: path, path: relativePath(root, path)}))
     .filter(item => item.path.startsWith("config/")).sort((a, b) => a.path.localeCompare(b.path));
@@ -56,6 +57,10 @@ export function resolveSwaggerRoutingConfiguration(files: Map<string, string>, r
   const allowed = new Set(["bagpipes", "swaggerControllerPipe", "defaultPipe", "fittingsDirs", "mockMode",
     "mapErrorsToJson", "startWithErrors", "startWithWarnings", "enforceUniqueOperationId"]);
   if (Object.keys(swagger).some(key => !allowed.has(key))) return fail("unsupported_swagger_configuration");
+  if (createMockMode) {
+    swagger = {...swagger, mockMode: createMockMode.value};
+    locations.push(createMockMode.location);
+  }
   if (swagger.mockMode !== undefined && swagger.mockMode !== false) return fail("mock_routing_unverified");
   const fittingDirs = swagger.fittingsDirs ?? ["api/fittings"];
   if (!directories(fittingDirs, true)) return fail("fitting_directories_unsupported");
