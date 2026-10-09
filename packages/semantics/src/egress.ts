@@ -6,7 +6,7 @@ export const isSemanticDocumentTextSafe = (value: unknown, maximum: number): val
 
 /** Intent is untrusted free text; URLs and line breaks are withheld from model egress. */
 export const isSemanticIntentQuerySafe = (value: unknown): value is string =>
-  isSemanticDocumentTextSafe(value, 512) && !/[\r\n]|\b[A-Za-z][A-Za-z0-9+.-]*:\/\//i.test(value);
+  isSemanticDocumentTextSafe(value, 512) && !/[\r\n]|\b[A-Za-z][A-Za-z0-9+.-]*:(?:\/\/|\S)/i.test(value);
 
 
 const sourceIdentifier = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;

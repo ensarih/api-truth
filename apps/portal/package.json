@@ -5,6 +5,6 @@
   "type": "module",
   "dependencies": {
     "@api-truth/query": "0.0.0",
-    "@api-truth/semantics": "0.3.0"
+    "@api-truth/semantics": "0.3.1"
   }
 }

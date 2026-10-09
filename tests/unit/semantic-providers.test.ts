@@ -90,7 +90,7 @@ test("grounding v1 rejects an extra intent query and unsafe discovery query befo
     .rejects.toMatchObject({code:"SEMANTIC_PROVIDER_INVALID_REQUEST"});
   const discovery=discoveryRequest("openai") as Extract<SemanticProviderRequest,{promptVersion:"semantic-discovery-1"}>;
   for (const intentQuery of ["Bearer CANARY_SECRET_123", "https://api.example/orders",
-    "ftp://user:canary@internal.example/api", "Find an order\nthen archive"]) {
+    "ftp://user:canary@internal.example/api", "mailto:canary@example.test", "file:/private/sample", "Find an order\nthen archive"]) {
     await expect(port({...discovery,intentQuery}))
       .rejects.toMatchObject({code:"SEMANTIC_PROVIDER_INVALID_REQUEST"});
   }

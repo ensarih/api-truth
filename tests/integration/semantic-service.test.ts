@@ -316,7 +316,7 @@ test("discovery rejects secret-like intent before DB access and stays disabled w
   const provider = vi.fn(async () => answer());
   const semantic = service(provider);
   const connect = vi.spyOn(database!.pool, "connect");
-  for (const intentQuery of ["Use Bearer CANARY_SECRET_123", "ftp://user:canary@internal.example/api"]) {
+  for (const intentQuery of ["Use Bearer CANARY_SECRET_123", "ftp://user:canary@internal.example/api", "mailto:canary@example.test", "file:/private/sample"]) {
     await expect(semantic.discover(context(), selection(), ["ep-get"], intentQuery))
       .rejects.toMatchObject({code: "SEMANTIC_INVALID_REQUEST", message: "SEMANTIC_INVALID_REQUEST"});
   }
@@ -340,7 +340,7 @@ test("discovery discards a result if a grant is revoked during the provider call
 });
 
 
-test("portal and MCP discovery share actual authorized PostgreSQL selection and revoke safely", async () => {
+test("portal and MCP candidate search and discovery share actual PostgreSQL selection and revoke safely", async () => {
   await setup();
   const provider = vi.fn(async () => answer());
   const semantic = service(provider);
@@ -364,11 +364,24 @@ test("portal and MCP discovery share actual authorized PostgreSQL selection and 
     expect(httpResult).toMatchObject({status: "suggestions", review: "unreviewed", normative: false,
       provenance: {pin: selected}});
     expect(provider).toHaveBeenCalledTimes(2);
+    const candidateArgs = {repositoryId, serviceId, view: args.view, intentQuery: "stored order"};
+    const postCandidates = () => fetch(`http://127.0.0.1:${address.port}/api/candidates`, {method: "POST",
+      headers: {"content-type": "application/json"}, body: JSON.stringify(candidateArgs)});
+    const candidateHttp = await postCandidates(); expect(candidateHttp.status).toBe(200);
+    const candidateResult = await candidateHttp.json();
+    const candidateTool = await client.callTool({name: "api_truth_search_api_candidates", arguments: candidateArgs});
+    expect(candidateTool.structuredContent).toEqual({ok: true, data: candidateResult});
+    expect(candidateResult).toMatchObject({status: "candidates", matchMode: "keyword", pin: selected,
+      candidates: [{endpointId: "ep-get"}]});
+    expect(provider).toHaveBeenCalledTimes(2);
     await createAccessPolicyStore(database!.pool, {schema: database!.schema})
       .putGrant({tenantId}, {principalId, scopeId: scopes[4], active: false});
     expect((await post()).status).toBe(404);
     const denied = await client.callTool({name: "api_truth_discover_api", arguments: args});
     expect(denied.structuredContent).toEqual({ok: false, error: "NOT_FOUND_OR_DENIED"});
+    expect((await postCandidates()).status).toBe(404);
+    const deniedCandidates = await client.callTool({name: "api_truth_search_api_candidates", arguments: candidateArgs});
+    expect(deniedCandidates.structuredContent).toEqual({ok: false, error: "NOT_FOUND_OR_DENIED"});
     expect(provider).toHaveBeenCalledTimes(2);
   } finally {
     await Promise.allSettled([client.close(), mcp.close()]);

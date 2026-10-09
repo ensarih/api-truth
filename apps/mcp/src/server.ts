@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { McpServer, type CallToolResult, type ServerContext } from "@modelcontextprotocol/server";
-import type { QueryReader, QueryObservationReader, QuerySelection, QuerySelector } from "@api-truth/query";
+import type { QueryReader, QueryObservationReader, QueryOperationReader, QuerySelection, QuerySelector } from "@api-truth/query";
+import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
 import * as z from "zod/v4";
 
@@ -8,7 +9,7 @@ export type ApiTruthMcpPrincipal = Readonly<{ tenantId: string; principalId: str
 
 export type ApiTruthMcpOptions = Readonly<{
   query: Pick<QueryReader, "searchServices" | "readContract" | "readEndpoint" | "readSchema" | "compareContracts">
-    & Partial<QueryObservationReader>;
+    & Partial<QueryObservationReader & QueryOperationReader>;
   authenticate(context: ServerContext): Promise<ApiTruthMcpPrincipal | undefined>;
   maxOutputBytes?: number;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
@@ -76,10 +77,13 @@ const searchSchema = z.object({
 const discoverySchema = z.object({repositoryId: boundedIdentifier, serviceId: boundedIdentifier,
   view: discoveryViewSchema, endpointIds: z.array(boundedIdentifier).min(1).max(16)
     .refine((ids) => new Set(ids).size === ids.length), intentQuery: z.string().min(1).max(512)
-      .regex(/^[^\u0000-\u001f\u007f]+$/)}).strict();
+      .regex(/^[^\u0000-\u001f\u007f]+$/).refine(isSemanticIntentQuerySafe)}).strict();
 const observationSchema = z.object({repositoryId: boundedIdentifier, serviceId: boundedIdentifier,
   environment: boundedIdentifier, expectedCheckpointVersion: databaseVersion.optional(),
   endpointId: boundedIdentifier.optional(), maxResults: z.number().int().min(1).max(100).default(20)}).strict();
+const candidateSchema = z.object({repositoryId: boundedIdentifier, serviceId: boundedIdentifier,
+  view: discoveryEnvironmentView, intentQuery: z.string().min(1).max(512)
+    .regex(/^[^\u0000-\u001f\u007f]+$/), maxResults: z.number().int().min(1).max(20).default(20)}).strict();
 
 const successSchema = z.object({ ok: z.literal(true), data: z.unknown() }).strict();
 const failureSchema = z.object({ ok: z.literal(false), error: z.enum(publicErrors) }).strict();
@@ -123,6 +127,7 @@ const mapQueryError = (error: unknown): PublicError => {
     case "QUERY_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
     case "QUERY_STALE_SELECTION": return "STALE_SELECTION";
     case "QUERY_RESULT_LIMIT_EXCEEDED": return "RESULT_LIMIT_EXCEEDED";
+    case "INVALID_QUERY_SEARCH": return "INVALID_REQUEST";
     case "SEMANTIC_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
     case "SEMANTIC_STALE_CONTEXT": return "STALE_SELECTION";
     case "SEMANTIC_INVALID_REQUEST": return "INVALID_REQUEST";
@@ -259,6 +264,17 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
       discoverSemantic(principal,
         selection(principal, args.repositoryId, args.serviceId, args.view),
         args.endpointIds, args.intentQuery)));
+  }
+
+  if (typeof options.query.readOperationCandidates === "function") {
+    const readCandidates = options.query.readOperationCandidates.bind(options.query);
+    server.registerTool("api_truth_search_api_candidates", {
+      title: "Find API candidates by keywords",
+      description: "Search only the current authorized environment snapshot for keyword-overlapping operations. Results are deterministic candidates with citations and completeness flags; no inference provider is called.",
+      inputSchema: candidateSchema, outputSchema, annotations: readOnlyAnnotations,
+    }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
+      readCandidates(principal, selection(principal, args.repositoryId, args.serviceId, args.view),
+        {intentQuery: args.intentQuery, limit: args.maxResults})));
   }
 
   if (typeof options.query.readMetadataObservations === "function") {

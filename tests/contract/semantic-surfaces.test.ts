@@ -67,7 +67,8 @@ describe("optional semantic discovery surfaces", () => {
     await server.connect(serverTransport); await client.connect(clientTransport); opened.push({client, server});
     for (const args of [payload({view: {kind: "environment", environment: "uat"}}),
       payload({endpointIds: Array.from({length: 17}, (_, i) => `e-${i}`)}),
-      payload({tenantId: "tenant-other"})]) {
+      payload({tenantId: "tenant-other"}), payload({intentQuery: "Bearer CANARY_SECRET_123"}),
+      payload({intentQuery: "mailto:canary@example.test"})]) {
       const result = await client.callTool({name: "api_truth_discover_api", arguments: args});
       expect(result.isError).toBe(true);
     }
@@ -108,6 +109,8 @@ describe("optional semantic discovery surfaces", () => {
         post(JSON.stringify(payload({endpointIds: Array.from({length: 17}, (_, i) => `endpoint-${i}`)}))),
         post(JSON.stringify(payload({endpointIds: ["ep-get", "ep-get"]}))),
         post(JSON.stringify(payload({intentQuery: "x".repeat(513)}))),
+        post(JSON.stringify(payload({intentQuery: "Bearer CANARY_SECRET_123"}))),
+        post(JSON.stringify(payload({intentQuery: "mailto:canary@example.test"}))),
         post("{" + "\"x\":".repeat(12) + "0" + "}"),
         post("x".repeat(8193)),
         post("{}", "text/plain"),

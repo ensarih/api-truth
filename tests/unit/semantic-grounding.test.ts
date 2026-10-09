@@ -159,7 +159,7 @@ test("discovery returns scoped ambiguity and no-match as unreviewed inference", 
 test("discovery rejects secret-like, oversized, and accessor intent before provider use", async () => {
   const provider = vi.fn(async () => suggestion());
   for (const intentQuery of ["Use Bearer CANARY_SECRET_123", "See https://api.test/orders?token=canary",
-    "ftp://user:canary@internal.example/api", "ftp://internal.example/api", "Find an order\nthen archive", "x".repeat(513), ""]) {
+    "ftp://user:canary@internal.example/api", "mailto:canary@example.test", "file:/private/sample", "ftp://internal.example/api", "Find an order\nthen archive", "x".repeat(513), ""]) {
     await expect(runGroundedSemanticDiscovery({...input(), intentQuery}, provider))
       .rejects.toMatchObject({code: "SEMANTIC_INVALID_CONTEXT", message: "SEMANTIC_INVALID_CONTEXT"});
   }

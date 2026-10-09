@@ -20,6 +20,7 @@ const id = (value: unknown): value is string => typeof value === "string" && val
   && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
 const text = (value: unknown, max: number): value is string => typeof value === "string"
   && value.trim().length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
+const outputText = (value: unknown, max: number): value is string => text(value, max) && documentTextSafe(value, max);
 const plain = (value: unknown, keys: readonly string[]): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value) && !isProxy(value)
   && Object.getPrototypeOf(value) === Object.prototype
@@ -298,7 +299,7 @@ const validateOutput = (raw: unknown, request: SemanticProviderRequest): Record<
     for (const item of output.suggestions) {
       if (!plain(item, ["endpointId", "intent", "summary", "evidenceIds"])
         || !id(item.endpointId) || seen.has(item.endpointId)
-        || !text(item.intent, 120) || !text(item.summary, 600)
+        || !outputText(item.intent, 120) || !outputText(item.summary, 600)
         || !Array.isArray(item.evidenceIds) || item.evidenceIds.length < 1 || item.evidenceIds.length > 8
         || new Set(item.evidenceIds).size !== item.evidenceIds.length
         || !item.evidenceIds.every((evidenceId: unknown) => typeof evidenceId === "string"
@@ -312,9 +313,9 @@ const validateOutput = (raw: unknown, request: SemanticProviderRequest): Record<
       || output.candidateEndpointIds.length > request.endpoints.length
       || new Set(output.candidateEndpointIds).size !== output.candidateEndpointIds.length
       || !output.candidateEndpointIds.every((id: unknown) => typeof id === "string" && endpointMap.has(id))
-      || !text(output.reason, 300)) throw new SemanticAnalysisError("SEMANTIC_OUTPUT_REJECTED");
+      || !outputText(output.reason, 300)) throw new SemanticAnalysisError("SEMANTIC_OUTPUT_REJECTED");
   } else if (output.status === "no_match") {
-    if (!plain(output, ["status", "reason"]) || !text(output.reason, 300))
+    if (!plain(output, ["status", "reason"]) || !outputText(output.reason, 300))
       throw new SemanticAnalysisError("SEMANTIC_OUTPUT_REJECTED");
   } else throw new SemanticAnalysisError("SEMANTIC_OUTPUT_REJECTED");
   return output;

@@ -1,13 +1,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { QueryReader, QueryObservationReader, QuerySelection, QueryContractResult } from "@api-truth/query";
+import {validateOperationSearchOptions, type QueryReader, type QueryObservationReader,
+  type QueryOperationReader, type QuerySelection, type QueryContractResult} from "@api-truth/query";
 import { parseStrictJson } from "../../../packages/ir/src/strict-json.js";
+import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
 
 export type PortalPrincipal = Readonly<{ tenantId: string; principalId: string }>;
 export type PortalOptions = Readonly<{
   authenticate(request: IncomingMessage): Promise<PortalPrincipal | undefined>;
   query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">
-    & Partial<QueryObservationReader>;
+    & Partial<QueryObservationReader & QueryOperationReader>;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
 }>;
 
@@ -26,7 +28,7 @@ const page = `<!doctype html>
 <button type="submit">View contract</button></form><p id="contract-status" role="status"></p>
 <div id="contract-summary"></div><ul id="endpoints"></ul><ul id="schemas"></ul><ul id="evidence"></ul>
 <a id="download" hidden>Download this published OpenAPI version</a><pre id="detail"></pre></section>
-<section id="discovery" hidden><h2>Find an API for this task</h2><form id="discover"><p>Selected endpoint documentation, source route and handler identifiers, and your task text may be sent to the host-configured inference provider.</p><fieldset id="discovery-endpoints"><legend>Choose API operations</legend></fieldset><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Find an API for this task</button></form><p id="discovery-status" role="status"></p><ul id="discovery-results"></ul></section>
+<section id="discovery" hidden><h2>Find an API for this task</h2><form id="candidates" hidden><p>Find keyword candidates in the current authorized environment. This checks words in existing API context; it does not use an inference provider.</p><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Find candidate APIs</button></form><p id="candidate-status" role="status"></p><ul id="candidate-results"></ul><form id="discover"><p>Selected endpoint documentation, source route and handler identifiers, and your task text may be sent to the host-configured inference provider.</p><fieldset id="discovery-endpoints"><legend>Choose API operations</legend></fieldset><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Find an API for this task</button></form><p id="discovery-status" role="status"></p><ul id="discovery-results"></ul></section>
 <section><h2>Compare contracts</h2><form id="compare"><label>From
 <select name="fromKind"><option value="environment">Environment</option><option value="branch">Branch</option>
 <option value="revision">Revision</option></select></label><label>Name or revision <input name="fromValue" maxlength="512" required></label>
@@ -34,10 +36,12 @@ const page = `<!doctype html>
 <option value="revision">Revision</option></select></label><label>Name or revision <input name="toValue" maxlength="512" required></label>
 <button type="submit">Compare</button></form><p id="compare-status" role="status"></p><pre id="changes"></pre></section>
 </main><script src="/app.js" defer></script></body></html>`;
-const script = `const runtimeEnabled=__OBSERVATION_READER_ENABLED__,semanticEnabled=__SEMANTIC_ENABLED__;
+const script = `const runtimeEnabled=__OBSERVATION_READER_ENABLED__,semanticEnabled=__SEMANTIC_ENABLED__,candidateEnabled=__CANDIDATE_ENABLED__;
 const search=document.getElementById('search'),contract=document.getElementById('contract'),compare=document.getElementById('compare');
 const discovery=document.getElementById('discovery'),discover=document.getElementById('discover'),discoveryEndpoints=document.getElementById('discovery-endpoints'),discoveryStatus=document.getElementById('discovery-status'),discoveryResults=document.getElementById('discovery-results');
-if(semanticEnabled)discovery.hidden=false;let currentResolved=null,selectionGeneration=0,discoveryGeneration=0;discover.addEventListener('input',()=>{discoveryGeneration++;discoveryResults.replaceChildren();discoveryStatus.textContent='Discovery inputs changed. Submit again to update results.';});contract.addEventListener('input',()=>{selectionGeneration++;discoveryGeneration++;currentResolved=null;discoveryResults.replaceChildren();discoveryStatus.textContent='View the selected contract again before discovery.';});
+const candidates=document.getElementById('candidates'),candidateStatus=document.getElementById('candidate-status'),candidateResults=document.getElementById('candidate-results');
+if(semanticEnabled||candidateEnabled)discovery.hidden=false;discover.hidden=!semanticEnabled;candidates.hidden=!candidateEnabled;
+let currentResolved=null,selectionGeneration=0,discoveryGeneration=0,candidateGeneration=0;discover.addEventListener('input',()=>{discoveryGeneration++;discoveryResults.replaceChildren();discoveryStatus.textContent='Discovery inputs changed. Submit again to update results.';});candidates.addEventListener('input',()=>{candidateGeneration++;candidateResults.replaceChildren();candidateStatus.textContent='Candidate inputs changed. Submit again to update results.';});contract.addEventListener('input',()=>{selectionGeneration++;discoveryGeneration++;candidateGeneration++;currentResolved=null;discoveryResults.replaceChildren();candidateResults.replaceChildren();discoveryStatus.textContent='View the selected contract again before discovery.';candidateStatus.textContent='View the selected contract again before candidate search.';});
 const status=document.getElementById('search-status'),results=document.getElementById('results');
 const contractStatus=document.getElementById('contract-status'),summary=document.getElementById('contract-summary');
 const endpoints=document.getElementById('endpoints'),schemas=document.getElementById('schemas'),evidence=document.getElementById('evidence'),detail=document.getElementById('detail');
@@ -60,7 +64,7 @@ search.addEventListener('submit',async event=>{event.preventDefault();results.re
         contract.requestSubmit();});
       row.append(button);results.append(row);}}
   catch{status.textContent='The service list is unavailable.';}});
-contract.addEventListener('submit',async event=>{event.preventDefault();const generation=++selectionGeneration;discoveryGeneration++;currentResolved=null;discoveryResults.replaceChildren();discoveryStatus.textContent='';discoveryEndpoints.replaceChildren();summary.replaceChildren();endpoints.replaceChildren();
+contract.addEventListener('submit',async event=>{event.preventDefault();const generation=++selectionGeneration;discoveryGeneration++;candidateGeneration++;currentResolved=null;discoveryResults.replaceChildren();candidateResults.replaceChildren();candidateStatus.textContent='';discoveryStatus.textContent='';discoveryEndpoints.replaceChildren();summary.replaceChildren();endpoints.replaceChildren();
   schemas.replaceChildren();evidence.replaceChildren();detail.textContent='';download.hidden=true;contractStatus.textContent='Loading…';
   try{const params=selection(),body=await fetchJson('/api/contract?'+params);if(generation!==selectionGeneration)return;
     if(body.status!=='resolved'){contractStatus.textContent='Contract state: '+body.status+'. No contract is available here.';return;}
@@ -74,7 +78,7 @@ contract.addEventListener('submit',async event=>{event.preventDefault();const ge
     for(const item of body.endpoints){const row=document.createElement('li'),button=document.createElement('button');
       button.type='button';button.textContent=item.method+' '+item.path;
       button.addEventListener('click',()=>showDetail('/api/endpoint?'+params+'&endpointId='+encodeURIComponent(item.endpointId)));
-      row.append(button);endpoints.append(row);if(semanticEnabled){const label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.name='endpointId';check.value=item.endpointId;check.checked=body.endpoints.length<=16;label.append(check,document.createTextNode(item.method+' '+item.path));discoveryEndpoints.append(label);}}
+      row.append(button);endpoints.append(row);if(semanticEnabled){const label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.name='endpointId';check.value=item.endpointId;check.checked=!candidateEnabled&&body.endpoints.length<=16;label.append(check,document.createTextNode(item.method+' '+item.path));discoveryEndpoints.append(label);}}
     for(const id of body.schemas){const row=document.createElement('li'),button=document.createElement('button');
       button.type='button';button.textContent='Schema: '+id;
       button.addEventListener('click',()=>showDetail('/api/schema?'+params+'&schemaId='+encodeURIComponent(id)));
@@ -87,6 +91,7 @@ contract.addEventListener('submit',async event=>{event.preventDefault();const ge
       '?repositoryId='+encodeURIComponent(params.get('repositoryId'))+'&serviceId='+encodeURIComponent(params.get('serviceId'));
       download.hidden=false;download.textContent='Download published OpenAPI version '+body.publication.publicationId.slice(7,19);}}
   catch{if(generation===selectionGeneration)contractStatus.textContent='The contract is unavailable.';}});
+candidates.addEventListener('submit',async event=>{event.preventDefault();const generation=++candidateGeneration;candidateResults.replaceChildren();if(!currentResolved){candidateStatus.textContent='View a resolved, pinned contract first.';return;}const selected=currentResolved;if(selected.params.get('kind')!=='environment'||!selected.body.pin?.checkpointVersion){candidateStatus.textContent='Select a pinned environment to search candidates.';return;}const intentQuery=String(new FormData(candidates).get('intentQuery')||'');candidateStatus.textContent='Checking keyword candidates…';try{const body=await fetchJson('/api/candidates',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repositoryId:selected.params.get('repositoryId'),serviceId:selected.params.get('serviceId'),view:{kind:'environment',environment:selected.params.get('value'),expectedCheckpointVersion:selected.body.pin.checkpointVersion},intentQuery,limit:20})});if(generation!==candidateGeneration)return;if(body.status==='candidates'){candidateStatus.textContent=body.candidates.length+' keyword candidates in the selected contract.'+(body.complete?'':' Search context is incomplete.')+(body.truncated?' More candidates were omitted by the result limit.':'');for(const item of body.candidates){const row=document.createElement('li'),label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.value=item.endpointId;check.addEventListener('change',()=>{const target=[...discoveryEndpoints.querySelectorAll('input[name=endpointId]')].find(input=>input.value===item.endpointId);if(!target||!semanticEnabled)return;const count=discoveryEndpoints.querySelectorAll('input[name=endpointId]:checked').length;if(check.checked&&count>=16){check.checked=false;candidateStatus.textContent='Choose at most 16 operations for provider discovery.';return;}target.checked=check.checked;target.dispatchEvent(new Event('input',{bubbles:true}));});if(semanticEnabled)label.append(check);label.append(document.createTextNode(item.method+' '+item.path+' — '+item.label+' (keyword score '+item.score+', evidence '+item.evidenceIds.join(', ')+')'));row.append(label);candidateResults.append(row);}}else if(body.status==='no_match')candidateStatus.textContent='No keyword overlap was found in the selected contract. This does not rule out a semantic match.';else candidateStatus.textContent='Candidate search could not make a complete determination.';}catch{if(generation===candidateGeneration)candidateStatus.textContent='Candidate search is unavailable.';}});
 discover.addEventListener('submit',async event=>{event.preventDefault();const generation=++discoveryGeneration;discoveryResults.replaceChildren();if(!currentResolved){discoveryStatus.textContent='View a resolved, pinned contract first.';return;}const ids=[...discovery.querySelectorAll('input[name=endpointId]:checked')].map(input=>input.value);if(ids.length<1||ids.length>16){discoveryStatus.textContent='Choose between 1 and 16 API operations.';return;}const selected=currentResolved,kind=selected.params.get('kind'),value=selected.params.get('value'),view={kind};if(kind==='revision')view.revision=value;else if(kind==='branch'){view.branch=value;view.expectedPointerVersion=selected.body.pin.pointerVersion;}else{view.environment=value;view.expectedCheckpointVersion=selected.body.pin.checkpointVersion;}const intentQuery=String(new FormData(discover).get('intentQuery')||'');discoveryStatus.textContent='Checking selected operations…';try{const body=await fetchJson('/api/discover',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repositoryId:selected.params.get('repositoryId'),serviceId:selected.params.get('serviceId'),view,endpointIds:ids,intentQuery})});if(generation!==discoveryGeneration)return;const labels={disabled:'Semantic discovery is disabled for this service.',no_context:'No usable semantic context is available.',no_match:'No matching operation was found. Any inference is unreviewed and non-normative.',ambiguous:'Several operations may match. Inference is unreviewed and non-normative.',suggestions:'Suggestions are inferred, unreviewed, and non-normative.'};const coverage=body.contextCoverage;const partial=coverage?.status==='partial';const baseLabel=partial&&body.status==='no_match'?'No matching operation was found among the analyzed operations. Any inference is unreviewed and non-normative.':labels[body.status]||'Discovery returned no usable result.';const coverageLabel=partial?' Coverage: '+coverage.analyzedEndpointIds.length+' of '+coverage.requestedEndpointIds.length+' selected operations analyzed; omitted: '+coverage.omittedEndpointIds.join(', ')+'.':'';discoveryStatus.textContent=baseLabel+coverageLabel;const items=body.status==='suggestions'?body.suggestions:body.status==='ambiguous'?body.candidateEndpointIds.map(endpointId=>({endpointId,intent:'Ambiguous candidate',summary:body.reason,evidenceIds:[]})):[];for(const item of items){const row=document.createElement('li');row.textContent=item.endpointId+' — '+item.intent+': '+item.summary+' (evidence: '+item.evidenceIds.join(', ')+')';discoveryResults.append(row);}}catch{if(generation===discoveryGeneration)discoveryStatus.textContent='Discovery is unavailable.';}});
 compare.addEventListener('submit',async event=>{event.preventDefault();compareStatus.textContent='Loading…';changes.textContent='';
   const contractData=new FormData(contract),data=new FormData(compare),params=new URLSearchParams({
@@ -97,7 +102,7 @@ compare.addEventListener('submit',async event=>{event.preventDefault();compareSt
       'Comparison unavailable: '+body.beforeStatus+' / '+body.afterStatus+'.';
     if(body.status==='compared')changes.textContent=JSON.stringify(body.differences,null,2);}
   catch{compareStatus.textContent='The comparison is unavailable.';}});`;
-const style = `:root{font-family:system-ui,sans-serif;color:#17212b;background:#f7f9fb}main{max-width:54rem;margin:3rem auto;padding:1.5rem;background:white;border:1px solid #dce3e9;border-radius:.75rem}section{margin-top:2rem;border-top:1px solid #dce3e9;padding-top:1rem}form{display:flex;flex-wrap:wrap;gap:1rem;align-items:end}label{display:grid;gap:.35rem}input,select,button,textarea{font:inherit;padding:.55rem .7rem}button{cursor:pointer}li{padding:.45rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}#download{display:inline-block;margin:1rem 0}#download[hidden]{display:none}`;
+const style = `:root{font-family:system-ui,sans-serif;color:#17212b;background:#f7f9fb}main{max-width:54rem;margin:3rem auto;padding:1.5rem;background:white;border:1px solid #dce3e9;border-radius:.75rem}section{margin-top:2rem;border-top:1px solid #dce3e9;padding-top:1rem}form{display:flex;flex-wrap:wrap;gap:1rem;align-items:end}form[hidden]{display:none}label{display:grid;gap:.35rem}input,select,button,textarea{font:inherit;padding:.55rem .7rem}button{cursor:pointer}li{padding:.45rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}#download{display:inline-block;margin:1rem 0}#download[hidden]{display:none}`;
 
 const MAX_JSON_BYTES = 1_000_000;
 const MAX_OPENAPI_BYTES = 5_000_000;
@@ -228,8 +233,7 @@ const parseDiscoveryBody = (input: unknown, principal: PortalPrincipal): {select
   if (typeof body.repositoryId !== "string" || typeof body.serviceId !== "string"
     || !Array.isArray(body.endpointIds) || body.endpointIds.length < 1 || body.endpointIds.length > 16
     || !body.endpointIds.every(safeId) || new Set(body.endpointIds).size !== body.endpointIds.length
-    || typeof body.intentQuery !== "string" || body.intentQuery.length < 1 || body.intentQuery.length > 512
-    || /[\u0000-\u001f\u007f]/.test(body.intentQuery)) return undefined;
+    || !isSemanticIntentQuerySafe(body.intentQuery)) return undefined;
   const view = body.view;
   if (!view || typeof view !== "object" || Array.isArray(view) || Object.getPrototypeOf(view) !== Object.prototype) return undefined;
   const fields = view as Record<string, unknown>;
@@ -247,6 +251,28 @@ const parseDiscoveryBody = (input: unknown, principal: PortalPrincipal): {select
     typeof value === "string" ? value : "", typeof version === "string" ? version : undefined);
   return selected ? {selected, endpointIds: body.endpointIds as string[], intentQuery: body.intentQuery} : undefined;
 };
+const parseCandidateBody = (input: unknown, principal: PortalPrincipal):
+  {selected: QuerySelection; intentQuery: string; limit: number} | undefined => {
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || Object.getPrototypeOf(input) !== Object.prototype) return undefined;
+  const body = input as Record<string, unknown>;
+  const keys = Object.keys(body).sort().join(",");
+  if (keys !== "intentQuery,repositoryId,serviceId,view"
+    && keys !== "intentQuery,limit,repositoryId,serviceId,view") return undefined;
+  if (typeof body.repositoryId !== "string" || typeof body.serviceId !== "string") return undefined;
+  const view = body.view;
+  if (!view || typeof view !== "object" || Array.isArray(view)
+    || Object.getPrototypeOf(view) !== Object.prototype) return undefined;
+  const fields = view as Record<string, unknown>;
+  if (Object.keys(fields).sort().join(",") !== "environment,expectedCheckpointVersion,kind"
+    || fields.kind !== "environment" || typeof fields.environment !== "string"
+    || typeof fields.expectedCheckpointVersion !== "string") return undefined;
+  const selected = selection(principal, body.repositoryId, body.serviceId, "environment",
+    fields.environment, fields.expectedCheckpointVersion);
+  const options = validateOperationSearchOptions({intentQuery: body.intentQuery,
+    ...(Object.hasOwn(body, "limit") ? {limit: body.limit} : {})});
+  return selected && options ? {selected, intentQuery: options.intentQuery, limit: options.limit ?? 20} : undefined;
+};
 
 /** The host supplies authentication. No request header becomes a principal by itself. */
 export const createPortalServer = (options: PortalOptions): Server => {
@@ -262,7 +288,8 @@ export const createPortalServer = (options: PortalOptions): Server => {
     if (!principal || !safeId(principal.tenantId) || !safeId(principal.principalId)) {
       (request.method === "POST" ? jsonClose : json)(response, 401, { error: "NOT_AUTHORIZED" }); return;
     }
-    if (!request.url || request.url.length > 2048 || (request.method !== "GET" && !(request.method === "POST" && request.url.split("?", 1)[0] === "/api/discover"))) {
+    if (!request.url || request.url.length > 2048 || (request.method !== "GET"
+      && !(request.method === "POST" && ["/api/discover", "/api/candidates"].includes(request.url.split("?", 1)[0]!)))) {
       (request.method === "POST" ? jsonClose : json)(response, 400, { error: "INVALID_REQUEST" }); return;
     }
     let url: URL;
@@ -271,13 +298,18 @@ export const createPortalServer = (options: PortalOptions): Server => {
     }
     if (url.pathname === "/" && request.method === "GET") { send(response, 200, page, "text/html; charset=utf-8"); return; }
     if (url.pathname === "/app.js") { send(response, 200,
-      script.replace("__OBSERVATION_READER_ENABLED__", String(typeof options.query.readMetadataObservations === "function")).replace("__SEMANTIC_ENABLED__", String(semanticDiscover !== undefined)),
+      script.replace("__OBSERVATION_READER_ENABLED__", String(typeof options.query.readMetadataObservations === "function"))
+        .replace("__SEMANTIC_ENABLED__", String(semanticDiscover !== undefined))
+        .replace("__CANDIDATE_ENABLED__", String(typeof options.query.readOperationCandidates === "function")),
       "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {
-      if (url.pathname === "/api/discover") {
+      if (url.pathname === "/api/discover" || url.pathname === "/api/candidates") {
         if (url.search.length > 0) { jsonClose(response, 400, {error: "INVALID_REQUEST"}); return; }
-        if (request.method !== "POST" || semanticDiscover === undefined) {
+        const candidate = url.pathname === "/api/candidates";
+        if (request.method !== "POST" || (candidate
+          ? typeof options.query.readOperationCandidates !== "function"
+          : semanticDiscover === undefined)) {
           (request.method === "POST" ? jsonClose : json)(response, 404, {error: "NOT_FOUND"}); return;
         }
         const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
@@ -295,6 +327,25 @@ export const createPortalServer = (options: PortalOptions): Server => {
         let body: unknown;
         try { body = parseStrictJson(new TextDecoder("utf-8", {fatal: true}).decode(raw), {maxDepth: 8, maxNodes: 128}); }
         catch { json(response, 400, {error: "INVALID_REQUEST"}); return; }
+        if (candidate) {
+          const requestData = parseCandidateBody(body, principal);
+          if (!requestData) {json(response, 400, {error: "INVALID_REQUEST"}); return;}
+          const selectedContract = await options.query.readContract(principal, requestData.selected);
+          if (!selectedResult(selectedContract)) {json(response, 409, {error: "STALE_SELECTION"}); return;}
+          const candidates = await options.query.readOperationCandidates!(principal, requestData.selected,
+            {intentQuery: requestData.intentQuery, limit: requestData.limit});
+          if (candidates.status === "candidates" || candidates.status === "no_match"
+            || candidates.pin !== undefined || candidates.selector !== undefined) {
+            if (!candidates.pin || !candidates.selector || !samePin(candidates.pin, selectedContract.pin)
+              || candidates.selector.tenantId !== requestData.selected.tenantId
+              || candidates.selector.repositoryId !== requestData.selected.repositoryId
+              || candidates.selector.serviceId !== requestData.selected.serviceId
+              || !sameSelector(candidates.selector.selector, requestData.selected.selector)) {
+              json(response, 409, {error: "STALE_SELECTION"}); return;
+            }
+          }
+          json(response, 200, candidates); return;
+        }
         const requestData = parseDiscoveryBody(body, principal);
         if (!requestData) { json(response, 400, {error: "INVALID_REQUEST"}); return; }
         const selectedContract = await options.query.readContract(principal, requestData.selected);
@@ -302,7 +353,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
         if (requestData.endpointIds.some(id => !selectedContract.snapshot.endpoints.some(item => item.endpoint_id === id))) {
           json(response, 400, {error: "INVALID_REQUEST"}); return;
         }
-        const discovered = await semanticDiscover(principal, requestData.selected,
+        const discovered = await semanticDiscover!(principal, requestData.selected,
           requestData.endpointIds, requestData.intentQuery);
         if ("provenance" in discovered && (!samePin(discovered.provenance.pin, selectedContract.pin)
           || !sameSelector(discovered.provenance.selector, requestData.selected.selector))) {
