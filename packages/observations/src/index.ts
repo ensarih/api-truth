@@ -13,3 +13,8 @@ export {createFieldPresenceService, FieldPresenceServiceError} from "./field-pre
 export type {FieldPresenceSelectorPolicy, FieldPresencePolicyBinding, FieldPresenceSourcePin,
   FieldPresenceAttestation, FieldPresenceRead, FieldPresenceContext, FieldPresenceAuthorization,
   FieldPresenceReadPort} from "./field-presence-service.js";
+export {compileFieldPresenceStoragePolicy, buildFieldPresenceStorageProposal,
+  FieldPresenceStoragePolicyError} from "./field-presence-storage-policy.js";
+export type {FieldPresenceStoragePolicy, CompiledFieldPresenceStoragePolicy,
+  FieldPresenceStorageHostContext, FieldPresenceStorageProposal,
+  FieldPresenceStorageEligibility} from "./field-presence-storage-policy.js";

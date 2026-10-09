@@ -106,3 +106,32 @@ Denied, stale, invalid or failed reads use fixed error codes and never include
 raw bodies, record IDs or callback exception text. No raw source content is
 persisted, sent to a provider, or delivered to portal/MCP by this service. Durable
 body imports, reviewed samples and retention remain separate backlog gates.
+
+## Storage policy and value-free eligibility
+
+`compileFieldPresenceStoragePolicy(input)` compiles an explicit
+`field-presence-storage-1` opt-in policy. It binds tenant, repository, service,
+environment, active configuration fingerprint and activation checkpoint, a positive
+owner-policy revision, endpoint/direction/media type, exact response status when
+applicable, and at most 32 literal property paths. Retention must be explicitly
+60–2,592,000 seconds and the live-record budget 1–10,000. There are no defaults.
+Its fingerprint hashes only this static policy, never traffic or payload values.
+
+`buildFieldPresenceStorageProposal({queryResult, projected, policy, parent, host})`
+checks a resolved, untruncated environment metadata query, exact import/record
+UUIDv4 parent, confirmed metadata-only endpoint/status correspondence, and the
+projected scope and selected presence states. The trusted host separately supplies
+the expected source digest, active configuration epoch and policy fingerprint.
+Views carrying `selectedRevision` or `pointerVersion` currently withhold.
+Malformed dates, windows ending after import, duplicate record IDs, extra values,
+getters and proxies also withhold. Eligible proposals are detached and frozen,
+containing lineage, static paths, presence states, retention and budget only.
+
+This pure gate checks consistency of trusted inputs. It does not establish that a
+projection came from the selected record, authenticate the caller, approve an
+owner policy, enforce the live budget, or write rows. The host must independently
+prove source-to-record correspondence and revalidate authority and current state
+in a storage transaction. No expiry is computed from a caller clock. The next
+durable slice must use database time and source-window-end-based lifetime, so
+replay cannot restart retention. Opt-out, policy replacement, deletion and replay
+tombstones remain unimplemented here. Metadata imports remain append-only.

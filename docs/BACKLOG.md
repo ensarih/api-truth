@@ -1160,3 +1160,18 @@ Two failing tests showed revoked Proxy objects could escape configured-reader
 or source-attestation checks as generic JavaScript errors. The service now checks
 proxy identity before array/object operations and returns the fixed configuration
 or storage error. The source is not projected and no callback text is exposed.
+
+### Explicit field-presence storage policy — P3 prerequisite (2026-10-10)
+
+Observations 0.7.0 adds a pure versioned opt-in compiler and value-free storage
+proposal gate. Owner revision, configuration activation epoch, endpoint selector,
+selected paths, retention and budget are explicit and included in the static
+policy fingerprint. Proposals require a resolved, untruncated query result supplied by the trusted
+host, exact confirmed parent, independently supplied source digest and matching
+projection. Qualified revisions and pointer-version views withhold.
+
+Eleven focused tests cover strict policy limits, canonical fingerprints, malformed
+paths/dates, parent ambiguity, unrelated unresolved records and projection scope.
+Independent source review is complete. This is consistency checking, not database
+authorization or source-to-record attestation. PostgreSQL owner approval,
+DB-clock expiry, atomic quotas, opt-out and replay-safe deletion remain open.

@@ -6,6 +6,6 @@
   "dependencies": {
     "@api-truth/query": "0.1.0",
     "@api-truth/semantics": "0.6.0",
-    "@api-truth/observations": "0.6.1"
+    "@api-truth/observations": "0.7.0"
   }
 }
