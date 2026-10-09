@@ -29,10 +29,14 @@ export type ObservedCaptureVerificationOptions = {schema: string;
   /** Bounded DB-local grant check/lock using the SAME write transaction. No network I/O. */
   transactionAuthorize(client: PoolClient, scope: Readonly<ObservedCaptureScope>): Promise<boolean>;
   /** Host-installed, capture-bound byte verifier. A caller never supplies its result. */
-  verificationPort: {verify(): Promise<unknown>}};
-export type ObservedCaptureVerificationReceipt = {outcome: "inserted" | "existing";
+  verificationPort: {verify(): Promise<unknown>};
+  /** Optional bounded DB-local finalization on the SAME transaction, after exact row validation.
+   * No network I/O. False denies; a thrown error rolls back with a fixed storage error. */
+  transactionFinalize?(client: PoolClient, scope: Readonly<ObservedCaptureScope>,
+    receipt: Readonly<ObservedCaptureVerificationReceipt>): Promise<boolean>};
+export type ObservedCaptureVerificationReceipt = Readonly<{outcome: "inserted" | "existing";
   captureIdentityDigest: string; verifierProfileVersion: typeof PROFILE; serviceRoot: string;
-  resultDigest: string; handlerCount: number};
+  resultDigest: string; handlerCount: number}>;
 const MESSAGES = {INVALID_CAPTURE_VERIFICATION_REQUEST: "Invalid capture verification request",
   CAPTURE_VERIFICATION_UNAUTHORIZED: "Capture verification unauthorized",
   CAPTURE_VERIFICATION_UNVERIFIED: "Capture verification unverified",
@@ -43,15 +47,18 @@ export class ObservedCaptureVerificationError extends Error {
   constructor(code: keyof typeof MESSAGES) { super(MESSAGES[code]); this.code = code; }
 }
 
-function ownData(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {
+function ownData(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> | undefined {
   try {
     if (!value || typeof value !== "object" || isProxy(value) || Array.isArray(value)
       || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    if (Reflect.ownKeys(descriptors).length !== keys.length || keys.some(key => !Object.hasOwn(descriptors, key))) return undefined;
+    const names = Reflect.ownKeys(value);
+    if (names.length < keys.length || names.length > keys.length + optional.length
+      || keys.some(key => !names.includes(key))
+      || names.some(name => typeof name !== "string" || !keys.includes(name) && !optional.includes(name))) return undefined;
     const detached: Record<string, unknown> = Object.create(null);
-    for (const key of keys) {
-      const descriptor = descriptors[key];
+    for (const key of [...keys, ...optional]) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor && optional.includes(key)) continue;
       if (!descriptor || !Object.hasOwn(descriptor, "value")) return undefined;
       detached[key] = descriptor.value;
     }
@@ -145,17 +152,22 @@ type Stored = {tenant_id: string; capture_identity_digest: string; verifier_prof
 /** Append-only, capture-qualified summary of trusted handler-byte verification. No catalog/IR promotion. */
 export function createObservedCaptureVerificationStore(pool: Pool, options: ObservedCaptureVerificationOptions): {
   append(request: {scope: ObservedCaptureScope; captureIdentityDigest: string}): Promise<ObservedCaptureVerificationReceipt>} {
-  const raw = ownData(options, ["schema", "preflightAuthorize", "transactionAuthorize", "verificationPort"]);
+  const raw = ownData(options, ["schema", "preflightAuthorize", "transactionAuthorize", "verificationPort"],
+    ["transactionFinalize"]);
   const port = ownData(raw?.verificationPort, ["verify"]);
   let schema: string;
   try { schema = raw?.schema as string; quoteOrchestrationSchemaIdentifier(schema); }
   catch { throw new ObservedCaptureVerificationError("INVALID_CAPTURE_VERIFICATION_REQUEST"); }
   if (!raw || !port || typeof raw.preflightAuthorize !== "function" || isProxy(raw.preflightAuthorize)
     || typeof raw.transactionAuthorize !== "function" || isProxy(raw.transactionAuthorize)
-    || typeof port.verify !== "function" || isProxy(port.verify))
+    || typeof port.verify !== "function" || isProxy(port.verify)
+    || (Object.hasOwn(raw, "transactionFinalize")
+      && (typeof raw.transactionFinalize !== "function" || isProxy(raw.transactionFinalize))))
     throw new ObservedCaptureVerificationError("INVALID_CAPTURE_VERIFICATION_REQUEST");
   const preflightAuthorize = raw.preflightAuthorize as ObservedCaptureVerificationOptions["preflightAuthorize"];
   const transactionAuthorize = raw.transactionAuthorize as ObservedCaptureVerificationOptions["transactionAuthorize"];
+  const transactionFinalize = Object.hasOwn(raw, "transactionFinalize")
+    ? raw.transactionFinalize as NonNullable<ObservedCaptureVerificationOptions["transactionFinalize"]> : undefined;
   const verify = (port.verify as ObservedCaptureVerificationOptions["verificationPort"]["verify"]).bind(raw.verificationPort);
   return Object.freeze({async append(candidate: {scope: ObservedCaptureScope; captureIdentityDigest: string}): Promise<ObservedCaptureVerificationReceipt> {
     const input = ownData(candidate, REQUEST_KEYS), scope = safeScope(input?.scope);
@@ -212,10 +224,17 @@ export function createObservedCaptureVerificationStore(pool: Pool, options: Obse
         || row.receipt_digest !== parent.receipt_digest || row.signer_spki_digest !== parent.signer_spki_digest
         || row.result_digest !== verification.resultDigest || row.handler_count !== verification.handlerCount)
         throw new ObservedCaptureVerificationError("CAPTURE_VERIFICATION_CONFLICT");
-      await client.query("COMMIT");
-      return Object.freeze({outcome: insert.rowCount === 1 ? "inserted" : "existing",
+      const receipt: ObservedCaptureVerificationReceipt = Object.freeze({outcome: insert.rowCount === 1 ? "inserted" : "existing",
         captureIdentityDigest: identity, verifierProfileVersion: PROFILE, serviceRoot: verification.serviceRoot,
         resultDigest: verification.resultDigest, handlerCount: verification.handlerCount});
+      if (transactionFinalize) {
+        let finalized: boolean;
+        try { finalized = await transactionFinalize(client, scope, receipt) === true; }
+        catch { throw new ObservedCaptureVerificationError("CAPTURE_VERIFICATION_STORAGE_ERROR"); }
+        if (!finalized) throw new ObservedCaptureVerificationError("CAPTURE_VERIFICATION_UNAUTHORIZED");
+      }
+      await client.query("COMMIT");
+      return receipt;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       if (error instanceof ObservedCaptureVerificationError) throw error;

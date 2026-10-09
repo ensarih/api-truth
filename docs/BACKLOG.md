@@ -1002,3 +1002,10 @@ Migration 0009 preserves immutable admissions and adds a separate lifecycle tabl
 No-work results report partial coverage. Superseded epoch rows are unclaimable but remain until later cancellation/quota cleanup. This slice invokes no verifier and writes no 0007 summary or D08 catalog state. Atomic result insertion and successful completion remain the next execution boundary.
 
 Validation: independent review, a clean locked install/typecheck and all 1,537 offline tests passed. All 333 PostgreSQL tests passed, including eight new lease cases covering competing workers, capacity, token fencing, three-attempt expiry, terminal quota release, permission/configuration revocation and switchback, host clock skew, migration backfill, lock serialization and expiry during authorization.
+
+
+### Atomic capture verification finalization — NB1 execution persistence seam (2026-10-09)
+
+The trusted 0007 store may now invoke an optional DB-local finalizer on the same transaction after exact insert/replay validation and before commit. It receives frozen scope and the bounded verification receipt. A strict true commits; false or a thrown callback rolls back both the verification result and callback writes, with fixed errors. The public append request and no-callback behavior remain unchanged. This seam does not itself prove a live worker lease; runner permission/configuration fencing and actual Git execution remain separate integration work.
+
+Validation: independent review, a clean locked install/typecheck and all 1,537 offline tests passed. All 337 PostgreSQL tests passed, including four new atomic finalization cases covering successful combined writes, false/throw rollback, exact replay and failed replay rollback, and hostile callback configuration. Lease-aware runner integration remains open.

@@ -87,6 +87,14 @@ surface, runtime analysis job, catalog snapshot or serving pointer is created.
 Host callbacks and pool acquisition retain their own deadline responsibilities;
 write SQL uses the same local statement timeout as capture associations.
 
+An optional trusted `transactionFinalize` callback runs on the same transaction
+client after exact result insertion/replay and before commit. It receives frozen
+scope and result receipt; strict `true` commits, `false` denies, and a thrown
+error becomes a fixed storage error. Both the verification row and callback
+writes roll back together on failure. The callback must use bounded DB-local
+SQL only. This seam supplies atomic persistence; a runner must still enforce
+its live lease, configuration and permission checks before finalizing a job.
+
 `createCaptureVerificationAdmissionStore` adds an immutable queued admission
 intent for a previously associated 0006 capture. The request contains only its
 opaque capture identity. The host fixes tenant and principal at construction,
