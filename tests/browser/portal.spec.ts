@@ -113,3 +113,139 @@ test("search, service selection, UAT details, export, and unknown state work in 
     await once(server, "close");
   }
 });
+
+test("intent discovery requires explicit checked operations and preserves the displayed environment pin", async ({ page }) => {
+  const snapshot = await fixtureSnapshot();
+  const calls: unknown[] = []; let delayDiscovery = false;
+  const query: PortalOptions["query"] = {
+    searchServices: async () => ({services: [], truncated: false}),
+    readContract: async (_principal, selected) => ({status: "resolved", selector: selected as QuerySelection,
+      pin, publication, snapshot}),
+    compareContracts: async () => ({status: "unavailable", beforeStatus: "unknown", afterStatus: "unknown"}),
+    readPublication: async () => ({publicationId, contentSha256: publication.contentSha256,
+      bytes: openApiBytes, selector: publicationSelector, pin}),
+  };
+  const semantic: NonNullable<PortalOptions["semantic"]> = {discover: async (who, selected, ids, intent) => {
+    if(delayDiscovery){delayDiscovery=false;await new Promise(resolve=>setTimeout(resolve,200));}
+    calls.push({who, selected, ids: ids as readonly string[], intent});
+    return {status: "suggestions", suggestions: [{endpointId: (ids as readonly string[])[0]!, intent: "List orders",
+      summary: "<img src=x onerror=alert(1)> inferred result", evidenceIds: ["evidence-1"]}],
+      verification: "inferred", review: "unreviewed", normative: false,
+      provenance: {provider: "openai", model: "test-model", promptVersion: "semantic-discovery-1",
+        selector: (selected as QuerySelection).selector, pin}};
+  }};
+  const server = createPortalServer({authenticate: async request => request.headers.authorization === "Bearer browser-fixture" ? context : undefined,
+    query, semantic});
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("Missing portal port");
+  await page.setExtraHTTPHeaders({authorization: "Bearer browser-fixture"});
+  try {
+    await page.goto(`http://127.0.0.1:${address.port}/`);
+    await expect(page.locator("#discovery")).toBeVisible();
+    await expect(page.locator("#discovery")).toContainText("may be sent to the host-configured inference provider");
+    await page.locator("#contract input[name=repositoryId]").fill("commerce");
+    await page.locator("#contract input[name=serviceId]").fill("orders");
+    await page.locator("#contract input[name=value]").fill("uat");
+    await page.getByRole("button", {name: "View contract"}).click();
+    await expect(page.locator("#contract-status")).toContainText("Contract available.");
+    await expect(page.locator('#discovery input[name="endpointId"]')).toBeChecked();
+    await page.locator('#discover textarea[name="intentQuery"]').fill("Find orders for this task");
+    await page.getByRole("button", {name: "Find an API for this task"}).click();
+    await expect(page.locator("#discovery-status")).toContainText("inferred, unreviewed");
+    await expect(page.locator("#discovery-results")).toContainText("<img src=x onerror=alert(1)>");
+    await expect(page.locator("#discovery-results img")).toHaveCount(0);
+    expect(calls).toEqual([{who: context, selected: {version: "1", tenantId: context.tenantId,
+      repositoryId: "commerce", serviceId: "orders", selector: {kind: "environment", environment: "uat",
+        expectedCheckpointVersion: "7"}}, ids: [snapshot.endpoints[0]!.endpoint_id], intent: "Find orders for this task"}]);
+    delayDiscovery=true;
+    await page.getByRole("button", {name: "Find an API for this task"}).click();
+    await expect(page.locator("#discovery-status")).toHaveText("Checking selected operations…");
+    await page.locator('#discover textarea[name="intentQuery"]').fill("new intent while pending");
+    await expect(page.locator("#discovery-status")).toHaveText("Discovery inputs changed. Submit again to update results.");
+    await page.waitForTimeout(250);
+    await expect(page.locator("#discovery-results")).toBeEmpty();
+    await expect(page.locator("#discovery-status")).toHaveText("Discovery inputs changed. Submit again to update results.");
+    delayDiscovery=true;
+    await page.getByRole("button", {name: "Find an API for this task"}).click();
+    await expect(page.locator("#discovery-status")).toHaveText("Checking selected operations…");
+    await page.locator("#contract input[name=value]").fill("another-view");
+    await expect(page.locator("#discovery-status")).toHaveText("View the selected contract again before discovery.");
+    await page.waitForTimeout(250);
+    await expect(page.locator("#discovery-results")).toBeEmpty();
+    await expect(page.locator("#discovery-status")).toHaveText("View the selected contract again before discovery.");
+  } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
+});
+
+test("intent discovery does not preselect the first operations when a contract has more than sixteen", async ({ page }) => {
+  const snapshot = await fixtureSnapshot(); const source = snapshot.endpoints[0]!;
+  snapshot.endpoints = Array.from({length: 17}, (_, index) => ({...source, endpoint_id: `ep-${index}`}));
+  const calls: string[][] = [];
+  const query: PortalOptions["query"] = {
+    searchServices: async () => ({services: [], truncated: false}),
+    readContract: async (_principal, selected) => ({status: "resolved", selector: selected as QuerySelection,
+      pin, publication, snapshot}),
+    compareContracts: async () => ({status: "unavailable", beforeStatus: "unknown", afterStatus: "unknown"}),
+    readPublication: async () => ({publicationId, contentSha256: publication.contentSha256,
+      bytes: openApiBytes, selector: publicationSelector, pin}),
+  };
+  const semantic: NonNullable<PortalOptions["semantic"]> = {discover: async (_who, _selected, ids) => {
+    calls.push([...(ids as readonly string[])]);
+    return {status: "no_match", reason: "No match", verification: "inferred", review: "unreviewed", normative: false,
+      provenance: {provider: "openai", model: "test-model", promptVersion: "semantic-discovery-1",
+        selector: {kind: "environment", environment: "uat", expectedCheckpointVersion: "7"}, pin}};
+  }};
+  const server = createPortalServer({authenticate: async () => context, query, semantic});
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("Missing portal port");
+  try {
+    await page.goto(`http://127.0.0.1:${address.port}/`);
+    await page.locator("#contract input[name=repositoryId]").fill("commerce");
+    await page.locator("#contract input[name=serviceId]").fill("orders");
+    await page.locator("#contract input[name=value]").fill("uat");
+    await page.getByRole("button", {name: "View contract"}).click();
+    await expect(page.locator('#discovery input[name="endpointId"]')).toHaveCount(17);
+    await expect(page.locator('#discovery input[name="endpointId"]:checked')).toHaveCount(0);
+    await page.locator('#discover textarea[name="intentQuery"]').fill("find it");
+    await page.getByRole("button", {name: "Find an API for this task"}).click();
+    await expect(page.locator("#discovery-status")).toContainText("Choose between 1 and 16");
+    expect(calls).toEqual([]);
+    await page.locator('#discovery input[name="endpointId"][value="ep-16"]').check();
+    await page.getByRole("button", {name: "Find an API for this task"}).click();
+    await expect(page.locator("#discovery-status")).toContainText("No matching operation");
+    expect(calls).toEqual([["ep-16"]]);
+  } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
+});
+
+test("a late contract response cannot replace a newer selection", async ({ page }) => {
+  const source = (await fixtureSnapshot()).endpoints[0]!;
+  const query: PortalOptions["query"] = {
+    searchServices: async () => ({services: [], truncated: false}),
+    readContract: async (_principal, selected) => {
+      const view = selected as QuerySelection;
+      const value = view.selector.kind === "environment" ? view.selector.environment : "revision";
+      if (value === "uat") await new Promise(resolve => setTimeout(resolve, 250));
+      const endpoint = {...source, endpoint_id: value === "uat" ? "ep-old" : "ep-new",
+        application_path: value === "uat" ? "/old" : "/new"};
+      return {status: "resolved", selector: view, pin, publication,
+        snapshot: {...(await fixtureSnapshot()), endpoints: [endpoint]}};
+    },
+    compareContracts: async () => ({status: "unavailable", beforeStatus: "unknown", afterStatus: "unknown"}),
+    readPublication: async () => ({publicationId, contentSha256: publication.contentSha256,
+      bytes: openApiBytes, selector: publicationSelector, pin}),
+  };
+  const server = createPortalServer({authenticate: async () => context, query});
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("Missing portal port");
+  try {
+    await page.goto(`http://127.0.0.1:${address.port}/`);
+    await page.locator("#contract input[name=repositoryId]").fill("commerce");
+    await page.locator("#contract input[name=serviceId]").fill("orders");
+    const value = page.locator("#contract input[name=value]");
+    await value.fill("uat"); await page.getByRole("button", {name: "View contract"}).click();
+    await value.fill("staging"); await page.getByRole("button", {name: "View contract"}).click();
+    await expect(page.getByRole("button", {name: "GET /new"})).toBeVisible();
+    await page.waitForTimeout(300);
+    await expect(page.getByRole("button", {name: "GET /new"})).toBeVisible();
+    await expect(page.getByRole("button", {name: "GET /old"})).toHaveCount(0);
+  } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
+});

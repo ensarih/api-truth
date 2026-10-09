@@ -4,6 +4,8 @@ This package supplies bounded HTTP adapters for the semantic provider port. Each
 
 The adapters ask for a strict JSON object containing the port's result union. The semantics kernel still validates endpoint membership, citation provenance, and every output field; provider structured-output support is not treated as proof. Suggestions remain inferred and unreviewed.
 
+For `semantic-discovery-1`, the bounded (512 character) intent query is passed separately from endpoint documentation as untrusted user data. A version-specific fixed system instruction asks the model to match only documented selected endpoints. The older `semantic-grounding-1` request shape does not accept an intent query.
+
 Tests use mocked `fetch` responses only. They never contact provider services or read credentials.
 
 ## Provider request formats

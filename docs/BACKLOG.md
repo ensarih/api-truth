@@ -45,7 +45,7 @@ provider or enterprise pilot claim.
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Sanitization, unambiguous environment URL correlation and safe examples. |
-| P4-SEMANTICS | In progress | Grounded document-only suggestion kernel and authorized provider adapters; intent discovery, persistence/review and evaluation remain open. |
+| P4-SEMANTICS | In progress | Grounded selected-operation intent discovery and authorized provider adapters; undocumented code context, corpus retrieval, persistence/review and evaluation remain open. |
 | D12-S0/S2 | Open | Live provider facts, artifacts, ordering, authentication and environment wiring. |
 | P2-JAVA | Open | Spring analyzer, two-ecosystem conformance and downstream lifecycle. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
@@ -185,9 +185,7 @@ profile slice, not the completed NB5 conformance gate.
 
 The Node.js backlog is a detailed child backlog. Its NB1 contract and
 authority decisions are prerequisites for full document/decorator conformance; current
-`typescript-express@0.5.1` support does not imply broader adapter coverage. Java,
-logs, semantic providers, and Confluence are planned capabilities, not current
-implementation claims.
+`typescript-express@0.5.1` support does not imply broader adapter coverage. Java and Confluence remain planned. Runtime metadata imports and document-grounded semantic adapters have bounded implementations documented below; payload examples, broad retrieval and live-provider acceptance remain open.
 
 ## Backlog maintenance
 
@@ -757,3 +755,12 @@ The first Phase 4 kernel projects only selected OpenAPI declaration text and exi
 ### Standalone document lifecycle through D07/D08 (2026-10-09)
 
 The exact Swagger 2 document 0.14.0 and OpenAPI 3.0 document 0.1.1 profiles (IR 1.1) now support a single config-pinned, contained manifest through local Git materialization, baseline analysis and durable branch updates. Source-tree profiles keep their existing validation. Runtime receipts, extra inputs, wrong paths/digests/profiles and entrypoints are rejected. Document branch updates always reanalyze in full. Four actual Git/PostgreSQL cases prove both profiles advance for valid documents and preserve the last successful pointer when a selected document is malformed or deleted. These snapshots describe document declarations; they do not prove implementation registration or deployed availability.
+
+
+### Selected-operation intent discovery — P4-S1 (2026-10-09)
+
+The optional portal form and `api_truth_discover_api` MCP tool compare a bounded task with 1–16 explicitly selected operations from an authorized, pinned contract. The portal sends intent in a bounded POST body; caller identity comes from host authentication. Branch/environment versions are mandatory, and revoked permissions or changed pins discard results. Browser generations discard delayed responses after a new selection or request. Results remain inferred, unreviewed, non-normative and evidence-linked. Models neither run nor grade tests; provider tests use deterministic transport fixtures.
+
+Validation: clean installation with zero audited vulnerabilities, typecheck, 1,254 offline tests, 269 PostgreSQL tests, and four real-browser tests. Actual Swagger 2/OpenAPI 3 snapshots prove summary/description evidence reaches the provider.
+
+This slice does not search an entire enterprise corpus. Undocumented source context, bounded candidate retrieval, durable inference/review, revocation-aware caching, curated question evaluation and live model acceptance remain open. The actual PostgreSQL service is exercised through both HTTP and MCP, including evidence-grant revocation; no fixture-only semantic host substitutes for that boundary.

@@ -10,7 +10,7 @@ import {parseStrictJson, StrictJsonError} from "../../nodejs/src/strict-json.js"
 import {parseStrictYaml, StrictYamlError} from "../../nodejs/src/strict-yaml.js";
 
 /** A selected API document declares a contract; no server URL is treated as an in-process route. */
-export const ANALYZER = {analyzer_id: "openapi3-document", analyzer_version: "0.1.1"};
+export const ANALYZER = {analyzer_id: "openapi3-document", analyzer_version: "0.2.0"};
 type Obj = Record<string, unknown>;
 const obj = (value: unknown): value is Obj => value !== null && typeof value === "object" && !Array.isArray(value);
 const part = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
@@ -299,6 +299,16 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
         responses: [], security: {state: "unknown", alternatives: []}, evidence_ids: [evidence(opPointer, endpointId)]};
       claim("route.declaration", {method: identity.method, path,
         ...(typeof operation.operationId === "string" ? {operationId: operation.operationId} : {})}, opPointer, endpoint);
+      for (const field of ["summary", "description"] as const) {
+        const value = operation[field];
+        if (value === undefined) continue;
+        if (typeof value !== "string" || value.length > 2_048) {
+          diagnostic("operation_text_unsupported", `${opPointer}/${field}`, "warning", endpointId);
+          continue;
+        }
+        claim(field === "summary" ? "operation.summary" : "operation.description", value,
+          `${opPointer}/${field}`, endpoint);
+      }
       const effectiveServers = operation.servers !== undefined ? {value: operation.servers, pointer: `${opPointer}/servers`}
         : pathItem.servers !== undefined ? {value: pathItem.servers, pointer: `${pathPointer}/servers`}
           : document.servers !== undefined ? {value: document.servers, pointer: "/servers"} : undefined;

@@ -2,7 +2,7 @@
 
 **Status:** active analyzer priority, 2026-10-09
 **Current implementation:** `typescript-express@0.5.1` covers a bounded static
-Express subset. `nodejs-swagger2-document@0.14.0` reads selected Swagger 2 JSON/YAML
+Express subset. `nodejs-swagger2-document@0.15.0` reads selected Swagger 2 JSON/YAML
 declarations with flat parameter serialization and scalar/flat-array form and multipart-file
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
@@ -770,3 +770,8 @@ Analyzer selections can explicitly pin up to 16 ordered, unique `type_manifest` 
 All five compiled analyzer profiles canonicalize JSON object-key order for reproducible request fingerprints. Regression tests previously failed for every profile when the same request was reordered; they now produce identical snapshot/result fingerprints without sorting arrays or changing values. Current profiles are Express `0.5.1`, routing-controllers `0.8.0`, Swagger document `0.14.0`, Swagger middleware `0.33.0` and OpenAPI 3 document `0.1.1`.
 
 Routing's explicit `production_entrypoint` option follows a bounded contained literal runtime import graph and only considers direct top-level framework registration in reachable files. Disconnected registrations, type-only imports, shadowed/destructured require, conditional/try-catch/dynamic loads and unknown external imports cannot establish that graph. Static deployment startup remains unverified. CLI/config/host option selection and configuration-change invalidation are tested. Broader decorator semantics and wrapper/composite profiles remain open.
+
+
+### Document operation text for semantic discovery (2026-10-09)
+
+Standalone Swagger document `0.15.0` and OpenAPI 3.0 document `0.2.0` retain bounded operation summaries/descriptions as declared claims with exact document-pointer evidence. Invalid or oversized text is withheld with a scoped diagnostic. The Swagger middleware `0.33.0` profile remains unchanged. Semantic projection now checks actual `api_document` evidence, exact source version and snapshot provenance; actual analyzer-produced snapshots exercise the boundary. Document prose is untrusted context and does not establish runtime behavior or normative contract guarantees.

@@ -6,9 +6,9 @@ import type {AnalyzerRequest} from "../../packages/ir/src/index.js";
 const profiles=[
  {id:"typescript-express",version:"0.5.1",ir:"1.0.0",root:"fixtures/typescript/orders/baseline/src",inputs:[{kind:"source_tree",path:".",digest:"pending"}]},
  {id:"nodejs-routing-controllers",version:"0.8.0",ir:"1.0.0",root:"fixtures/nodejs/routing-controllers/orders/src",inputs:[{kind:"source_tree",path:".",digest:"pending"}]},
- {id:"nodejs-swagger2-document",version:"0.14.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/orders",inputs:[{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
+ {id:"nodejs-swagger2-document",version:"0.15.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/orders",inputs:[{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
  {id:"nodejs-swagger-express-mw",version:"0.33.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/middleware/src",inputs:[{kind:"source_tree",path:".",digest:"pending"},{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
- {id:"openapi3-document",version:"0.1.1",ir:"1.1.0",root:"fixtures/openapi3/orders",inputs:[{kind:"type_manifest",path:"openapi.yaml",digest:"pending"}]},
+ {id:"openapi3-document",version:"0.2.0",ir:"1.1.0",root:"fixtures/openapi3/orders",inputs:[{kind:"type_manifest",path:"openapi.yaml",digest:"pending"}]},
 ] as const;
 const request=(profile:typeof profiles[number]):AnalyzerRequest=>({exchange_version:"1.0.0",ir_version:profile.ir,request_id:"host-test",
  analyzer:{analyzer_id:profile.id,analyzer_version:profile.version},

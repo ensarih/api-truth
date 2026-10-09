@@ -161,7 +161,7 @@ const normalizedManifestPath = (path: string): boolean => path === "."
 const isContainedManifestPath = (serviceRoot: string, path: string): boolean =>
   normalizedManifestPath(path) && path !== "."
   && (serviceRoot === "." || path.startsWith(`${serviceRoot}/`));
-const documentProfiles = new Set(["nodejs-swagger2-document@0.14.0", "openapi3-document@0.1.1"]);
+const documentProfiles = new Set(["nodejs-swagger2-document@0.15.0", "openapi3-document@0.2.0"]);
 const isDocumentProfile = (request: AnalyzerRequest): boolean =>
   request.ir_version === "1.1.0"
     && documentProfiles.has(`${request.analyzer.analyzer_id}@${request.analyzer.analyzer_version}`);

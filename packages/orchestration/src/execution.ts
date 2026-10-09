@@ -71,8 +71,8 @@ function fail(code: "JOB_EXECUTION_FAILED" | "JOB_LEASE_CONFLICT" | "JOB_CANCELL
 const equal = (left: unknown, right: unknown): boolean => canonicalOrchestrationJson(left) === canonicalOrchestrationJson(right);
 const digest = /^sha256:[a-f0-9]{64}$/;
 const documentProfiles = new Set([
-  "nodejs-swagger2-document@0.14.0",
-  "openapi3-document@0.1.1",
+  "nodejs-swagger2-document@0.15.0",
+  "openapi3-document@0.2.0",
 ]);
 const isDocumentProfile = (analyzerId: string, version: string, irVersion: string): boolean =>
   irVersion === "1.1.0" && documentProfiles.has(`${analyzerId}@${version}`);

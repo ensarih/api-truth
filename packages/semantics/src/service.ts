@@ -5,7 +5,8 @@ import {canonicalOrchestrationHash} from "../../orchestration/src/canonical.js";
 import {quoteEnvironmentSchema} from "../../environment/src/migrations.js";
 import {parseQuerySelection, readQueryContractWithClient, QueryReadError,
   type QueryPin, type QuerySelection} from "../../query/src/index.js";
-import {runGroundedSemanticAnalysis} from "./kernel.js";
+import {runGroundedSemanticAnalysis, runGroundedSemanticDiscovery} from "./kernel.js";
+import {isSemanticIntentQuerySafe} from "./egress.js";
 import type {SemanticAnalysisResult, SemanticProviderId, SemanticProviderPort} from "./types.js";
 
 export class SemanticServiceError extends Error {
@@ -216,17 +217,29 @@ export const createSemanticService = (pool: Pool, options: {schema: string; prov
       throw new SemanticServiceError("SEMANTIC_STORAGE_ERROR");
     } finally {client.release();}
   };
-  return Object.freeze({analyze: async (rawContext: unknown, rawSelection: unknown,
-    rawEndpointIds: unknown): Promise<SemanticAnalysisResult> => {
+  const run = async (rawContext: unknown, rawSelection: unknown, rawEndpointIds: unknown,
+    discovery: boolean, rawIntentQuery?: unknown): Promise<SemanticAnalysisResult> => {
+    if (discovery && !isSemanticIntentQuerySafe(rawIntentQuery))
+      throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
     const {context, selection, endpointIds} = parseRequest(rawContext, rawSelection, rawEndpointIds);
     const before = await read(context, selection, endpointIds);
-    const result = await runGroundedSemanticAnalysis({snapshot: before.snapshot, pin: before.pin,
-      selection: before.selection, inference: before.inference, endpointIds}, providerPort);
+    const input = {snapshot: before.snapshot, pin: before.pin,
+      selection: before.selection, inference: before.inference, endpointIds};
+    const result = discovery
+      ? await runGroundedSemanticDiscovery({...input, intentQuery: rawIntentQuery as string}, providerPort)
+      : await runGroundedSemanticAnalysis(input, providerPort);
     if (result.status === "disabled" || result.status === "no_context") return result;
     let after: Authorized;
     try {after = await read(context, selection, endpointIds);}
     catch {throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");}
     if (!sameAuthorized(before, after)) throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");
     return result;
-  }});
+  };
+  return Object.freeze({
+    analyze: (context: unknown, selection: unknown, endpointIds: unknown): Promise<SemanticAnalysisResult> =>
+      run(context, selection, endpointIds, false),
+    discover: (context: unknown, selection: unknown, endpointIds: unknown,
+      intentQuery: unknown): Promise<SemanticAnalysisResult> =>
+      run(context, selection, endpointIds, true, intentQuery),
+  });
 };

@@ -5,8 +5,7 @@ import type {QuerySelection} from "../../query/src/selector.js";
 export type SemanticProviderId = "openai" | "gemini" | "claude";
 export type SemanticDocumentKind = "operation_summary" | "operation_description"
   | "response_description" | "operation_id";
-export type SemanticProviderRequest = Readonly<{
-  promptVersion: "semantic-grounding-1";
+type SemanticProviderContext = Readonly<{
   provider: SemanticProviderId;
   model: string;
   source: Readonly<{repositoryId: string; serviceId: string; selector: QuerySelection["selector"];
@@ -15,6 +14,9 @@ export type SemanticProviderRequest = Readonly<{
     documents: readonly Readonly<{kind: SemanticDocumentKind; text: string;
       evidenceIds: readonly string[]}>[]}>[];
 }>;
+export type SemanticProviderRequest =
+  | Readonly<SemanticProviderContext & {promptVersion: "semantic-grounding-1"}>
+  | Readonly<SemanticProviderContext & {promptVersion: "semantic-discovery-1"; intentQuery: string}>;
 export type SemanticProviderPort = (request: SemanticProviderRequest) => Promise<unknown>;
 export type SemanticAnalysisInput = Readonly<{
   snapshot: ContractSnapshot;
@@ -23,10 +25,11 @@ export type SemanticAnalysisInput = Readonly<{
   inference: Readonly<{enabled: boolean; provider?: SemanticProviderId; model?: string}>;
   endpointIds: readonly string[];
 }>;
+export type SemanticDiscoveryInput = Readonly<SemanticAnalysisInput & {intentQuery: string}>;
 export type SemanticSuggestion = Readonly<{endpointId: string; intent: string; summary: string;
   evidenceIds: readonly string[]}>;
 export type SemanticProvenance = Readonly<{provider: SemanticProviderId; model: string;
-  promptVersion: "semantic-grounding-1"; selector: QuerySelection["selector"]; pin: QueryPin}>;
+  promptVersion: SemanticProviderRequest["promptVersion"]; selector: QuerySelection["selector"]; pin: QueryPin}>;
 export type SemanticAnalysisResult =
   | Readonly<{status: "disabled" | "no_context"}>
   | Readonly<{status: "suggestions"; suggestions: readonly SemanticSuggestion[];

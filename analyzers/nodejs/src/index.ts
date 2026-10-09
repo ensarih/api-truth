@@ -29,7 +29,7 @@ export type MiddlewareContext = {
 } | { kind: "unverified" };
 
 /** Document facts only. Middleware mounting and handler binding require a separate profile. */
-export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.14.0" };
+export const ANALYZER = { analyzer_id: "nodejs-swagger2-document", analyzer_version: "0.15.0" };
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
@@ -196,6 +196,9 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     if (middleware?.kind === "verified" && item.code === "unsupported_construct" && item.pointer === "/basePath") continue;
     diagnostic(item.code, item.pointer, item.severity);
   }
+  if (middleware === undefined) for (const operation of parsed.operations)
+    for (const field of operation.unsupportedTextFields ?? [])
+      diagnostic("unsupported_construct", `${operation.pointer}/${field}`);
   if (parsed.status === "failed") return failed(result, documentPath);
 
   const raw = document as Record<string, unknown>;
@@ -397,6 +400,10 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     };
     claim(endpoint, "route.declaration", { method: identity.method, path: operation.path,
       ...(operation.operationId ? { operationId: operation.operationId } : {}) }, operation.pointer);
+    if (middleware === undefined) {
+      if (operation.summary !== undefined) claim(endpoint, "operation.summary", operation.summary, `${operation.pointer}/summary`);
+      if (operation.description !== undefined) claim(endpoint, "operation.description", operation.description, `${operation.pointer}/description`);
+    }
     if (bindingEv) result.claims.push({
       claim_id: `claim-${hash(`${endpointId}:route.binding:${bindingEv}:${applicationPath}`).slice(0, 24)}`,
       subject: { service_id: request.source.service_id, endpoint_id: endpointId }, predicate: "route.binding",

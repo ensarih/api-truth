@@ -29,12 +29,12 @@ const supportedAdapters = new Set([
   "typescript-express@0.5.1",
   "nodejs-routing-controllers@0.8.0",
   "nodejs-swagger-express-mw@0.33.0",
-  "nodejs-swagger2-document@0.14.0",
-  "openapi3-document@0.1.1",
+  "nodejs-swagger2-document@0.15.0",
+  "openapi3-document@0.2.0",
 ]);
 const standaloneDocumentAdapters = new Set([
-  "nodejs-swagger2-document@0.14.0",
-  "openapi3-document@0.1.1",
+  "nodejs-swagger2-document@0.15.0",
+  "openapi3-document@0.2.0",
 ]);
 
 function boundedLimits(value: Limits): boolean {

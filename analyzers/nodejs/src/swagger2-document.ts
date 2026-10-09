@@ -29,6 +29,9 @@ export type Swagger2Operation = {
   method: Swagger2Method;
   path: string;
   operationId?: string;
+  summary?: string;
+  description?: string;
+  unsupportedTextFields?: Array<"summary" | "description">;
   pointer: string;
   evidencePointer: string;
   parameters: Swagger2Parameter[];
@@ -172,6 +175,8 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
           add("unsupported_construct", "warning", "Operation ID is repeated in this document.", `${pointer}/operationId`);
         else operationIds.add(rawOperation.operationId);
       }
+      const unsupportedTextFields = (["summary", "description"] as const).filter(field => rawOperation[field] !== undefined
+        && (typeof rawOperation[field] !== "string" || rawOperation[field].length > 2_048));
       const merged = new Map<string, Swagger2Parameter>();
       let duplicateBodyDeclaration = false;
       let requestBodyUnresolved = false;
@@ -251,6 +256,9 @@ export function parseSwagger2Document(input: unknown): Swagger2ParseResult {
       if (!responses.length) add("unsupported_construct", "warning", "Operation has no supported response selectors.", `${pointer}/responses`);
       const operation: Swagger2Operation = {
         method: method as Swagger2Method, path, ...(typeof rawOperation.operationId === "string" ? { operationId: rawOperation.operationId } : {}),
+        ...(typeof rawOperation.summary === "string" && rawOperation.summary.length <= 2_048 ? {summary: rawOperation.summary} : {}),
+        ...(typeof rawOperation.description === "string" && rawOperation.description.length <= 2_048 ? {description: rawOperation.description} : {}),
+        ...(unsupportedTextFields.length ? {unsupportedTextFields: [...unsupportedTextFields]} : {}),
         pointer, evidencePointer: pointer, parameters: parameters.filter((item) => item.in !== "body" && item.in !== "formData"), requestBodies, responses,
         requestBodyUnresolved,
         requestBodyConflict: duplicateBodyDeclaration || requestBodies.filter(item => item.in === "body").length > 1

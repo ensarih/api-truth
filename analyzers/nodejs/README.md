@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.14.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.15.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -847,3 +847,8 @@ Independent review found no blocker.
 
 
 Document `0.14.0` and middleware `0.33.0` use canonical JSON key ordering in request/result identity fingerprints. Reordering request object properties does not change the result identity; ordered arrays and changed values still do. Earlier dated profile notes describe historical versions.
+
+
+### Document operation text for semantic discovery (2026-10-09)
+
+Standalone Swagger document `0.15.0` and OpenAPI 3.0 document `0.2.0` retain bounded operation summaries/descriptions as declared claims with exact document-pointer evidence. Invalid or oversized text is withheld with a scoped diagnostic. The Swagger middleware `0.33.0` profile remains unchanged. Semantic projection now checks actual `api_document` evidence, exact source version and snapshot provenance; actual analyzer-produced snapshots exercise the boundary. Document prose is untrusted context and does not establish runtime behavior or normative contract guarantees.

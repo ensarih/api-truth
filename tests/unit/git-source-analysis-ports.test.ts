@@ -151,7 +151,7 @@ test("normalizes Swagger middleware source and default-document digests from one
 test.each([
   {
     name: "standalone Swagger 2",
-    selection: { adapter_id: "nodejs-swagger2-document", adapter_version: "0.14.0", ir_version: "1.1.0" as const,
+    selection: { adapter_id: "nodejs-swagger2-document", adapter_version: "0.15.0", ir_version: "1.1.0" as const,
       resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/contracts/swagger.yaml" }] },
     path: "services/api/contracts/swagger.yaml",
     document: `swagger: '2.0'\ninfo: { title: Example, version: '1' }\npaths:\n  /health:\n    get:\n      responses:\n        '200': { description: ok }\n`,
@@ -159,7 +159,7 @@ test.each([
   },
   {
     name: "standalone OpenAPI 3.0",
-    selection: { adapter_id: "openapi3-document", adapter_version: "0.1.1", ir_version: "1.1.0" as const,
+    selection: { adapter_id: "openapi3-document", adapter_version: "0.2.0", ir_version: "1.1.0" as const,
       resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/contracts/openapi.yaml" }] },
     path: "services/api/contracts/openapi.yaml",
     document: `openapi: 3.0.3\ninfo: { title: Example, version: '1' }\npaths:\n  /orders:\n    post:\n      responses:\n        '201': { description: created }\n`,
@@ -183,7 +183,7 @@ test.each([
 test("standalone document profiles require one contained manifest and explicit IR 1.1", async () => {
   const repo = await repository({ "services/api/docs/openapi.yaml": "openapi: 3.0.3\ninfo: { title: Example, version: '1' }\npaths: {}\n" });
   const ports = createLocalGitAnalysisPorts({ repositories: [{ tenantId: "tenant-a", repositoryId: "repo-a", repoPath: repo.root }], limits });
-  const base = { adapter_id: "openapi3-document", adapter_version: "0.1.1", ir_version: "1.1.0" as const };
+  const base = { adapter_id: "openapi3-document", adapter_version: "0.2.0", ir_version: "1.1.0" as const };
   for (const invalid of [
     { ...base, resolution_inputs: [] },
     { ...base, resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/docs/openapi.yaml" },

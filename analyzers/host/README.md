@@ -11,8 +11,8 @@ network request or branch enumeration is performed.
 |---|---|---|
 | typescript-express | 0.5.1 | 1.0.0 |
 | nodejs-routing-controllers | 0.8.0 | 1.0.0 |
-| openapi3-document | 0.1.1 | 1.1.0 |
-| nodejs-swagger2-document | 0.14.0 | 1.1.0 |
+| openapi3-document | 0.2.0 | 1.1.0 |
+| nodejs-swagger2-document | 0.15.0 | 1.1.0 |
 | nodejs-swagger-express-mw | 0.33.0 | 1.1.0 |
 
 These are bounded profiles; listing one does not certify the whole framework.

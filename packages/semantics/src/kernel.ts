@@ -1,11 +1,12 @@
 import {isProxy} from "node:util/types";
 import {parseContractSnapshot, type Claim, type ContractSnapshot, type Evidence} from "../../ir/src/index.js";
 import {parseQuerySelection} from "../../query/src/selector.js";
-import {isSemanticDocumentTextSafe as documentTextSafe} from "./egress.js";
-import type {SemanticAnalysisInput, SemanticAnalysisResult, SemanticDocumentKind,
+import {isSemanticDocumentTextSafe as documentTextSafe, isSemanticIntentQuerySafe} from "./egress.js";
+import type {SemanticAnalysisInput, SemanticAnalysisResult, SemanticDiscoveryInput, SemanticDocumentKind,
   SemanticProviderId, SemanticProviderPort, SemanticProviderRequest, SemanticProvenance} from "./types.js";
 
 export const SEMANTIC_PROMPT_VERSION = "semantic-grounding-1" as const;
+export const SEMANTIC_DISCOVERY_PROMPT_VERSION = "semantic-discovery-1" as const;
 
 export class SemanticAnalysisError extends Error {
   readonly code: "SEMANTIC_INVALID_CONTEXT" | "SEMANTIC_PROVIDER_ERROR" | "SEMANTIC_OUTPUT_REJECTED";
@@ -59,8 +60,10 @@ const detachedJson = (value: unknown, maxBytes: number, maxNodes: number, maxDep
         if (entries[index]?.[0] !== String(index)) throw new Error();
         values.push(entries[index]![1]);
       }
+      seen.delete(item);
       return values;
     }
+    seen.delete(item);
     return Object.fromEntries(entries);
   };
   return walk(value, 0);
@@ -127,11 +130,13 @@ const documentText = (claim: Claim): {kind: SemanticDocumentKind; text: string} 
 };
 
 const evidenceFor = (evidence: Evidence | undefined, snapshot: ContractSnapshot,
-  endpointId: string): boolean => !!evidence && evidence.source.kind === "openapi_document"
+  endpointId: string): boolean => !!evidence && evidence.source.kind === "api_document"
+  && evidence.source.source_id === snapshot.source.repository_id
+  && evidence.source_version === snapshot.source.immutable_revision
   && evidence.method === "type_declaration" && evidence.scope.service_id === snapshot.service.service_id
-  && (evidence.scope.snapshot_id === undefined || evidence.scope.snapshot_id === snapshot.snapshot_id)
+  && evidence.scope.snapshot_id === snapshot.snapshot_id
   && (evidence.scope.endpoint_id === undefined || evidence.scope.endpoint_id === endpointId)
-  && (evidence.scope.revision === undefined || evidence.scope.revision === snapshot.source.immutable_revision);
+  && evidence.scope.revision === snapshot.source.immutable_revision;
 
 const projection = (input: SemanticAnalysisInput): SemanticProviderRequest["endpoints"] => {
   const evidence = new Map(input.snapshot.evidence.map(item => [item.evidence_id, item]));
@@ -200,15 +205,20 @@ const validateOutput = (raw: unknown, request: SemanticProviderRequest): Record<
 };
 
 /** Pure, opt-in semantic suggestion boundary; no output mutates or authorizes a contract fact. */
-export const runGroundedSemanticAnalysis = async (raw: SemanticAnalysisInput,
-  providerPort: SemanticProviderPort): Promise<SemanticAnalysisResult> => {
-  let input: SemanticAnalysisInput;
-  try {input = detachedJson(raw, 2_097_152, 20_000, 64) as SemanticAnalysisInput;}
+const runSemantic = async (raw: SemanticAnalysisInput | SemanticDiscoveryInput,
+  providerPort: SemanticProviderPort, discovery: boolean): Promise<SemanticAnalysisResult> => {
+  let input: SemanticAnalysisInput | SemanticDiscoveryInput;
+  try {input = detachedJson(raw, 2_097_152, 20_000, 64) as SemanticAnalysisInput | SemanticDiscoveryInput;}
   catch {throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");}
-  if (!plain(input, ["snapshot", "pin", "selection", "inference", "endpointIds"])
+  if (!plain(input, discovery
+    ? ["snapshot", "pin", "selection", "inference", "endpointIds", "intentQuery"]
+    : ["snapshot", "pin", "selection", "inference", "endpointIds"])
     || typeof input.inference?.enabled !== "boolean"
     || !plain(input.inference, input.inference.enabled === false ? ["enabled"]
       : ["enabled", "provider", "model"]))
+    throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+  const intentQuery = discovery ? (input as SemanticDiscoveryInput).intentQuery : undefined;
+  if (discovery && !isSemanticIntentQuerySafe(intentQuery))
     throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
   if (!input.inference.enabled) return Object.freeze({status: "disabled"});
   if (!["openai", "gemini", "claude"].includes(String(input.inference.provider))
@@ -228,13 +238,13 @@ export const runGroundedSemanticAnalysis = async (raw: SemanticAnalysisInput,
   const provider = input.inference.provider as SemanticProviderId;
   const source = {repositoryId: input.selection.repositoryId, serviceId: input.selection.serviceId,
     selector: input.selection.selector, pin: input.pin};
-  const request = freezeDeep({promptVersion: SEMANTIC_PROMPT_VERSION, provider, model,
-    source, endpoints}) as SemanticProviderRequest;
+  const request = freezeDeep({promptVersion: discovery ? SEMANTIC_DISCOVERY_PROMPT_VERSION : SEMANTIC_PROMPT_VERSION,
+    ...(discovery ? {intentQuery} : {}), provider, model, source, endpoints}) as SemanticProviderRequest;
   let rawOutput: unknown;
   try {rawOutput = await providerPort(request);} catch {throw new SemanticAnalysisError("SEMANTIC_PROVIDER_ERROR");}
   const output = validateOutput(rawOutput, request);
   const provenance: SemanticProvenance = freezeDeep({provider, model,
-    promptVersion: SEMANTIC_PROMPT_VERSION, selector: input.selection.selector, pin: input.pin});
+    promptVersion: request.promptVersion, selector: input.selection.selector, pin: input.pin});
   if (output.status === "suggestions") return freezeDeep({status: "suggestions",
     suggestions: output.suggestions, verification: "inferred", review: "unreviewed", normative: false,
     provenance}) as SemanticAnalysisResult;
@@ -244,3 +254,12 @@ export const runGroundedSemanticAnalysis = async (raw: SemanticAnalysisInput,
   return freezeDeep({status: "no_match", reason: output.reason,
     verification: "inferred", review: "unreviewed", normative: false, provenance}) as SemanticAnalysisResult;
 };
+
+export const runGroundedSemanticAnalysis = (raw: SemanticAnalysisInput,
+  providerPort: SemanticProviderPort): Promise<SemanticAnalysisResult> =>
+  runSemantic(raw, providerPort, false);
+
+/** Compares one bounded user intent with explicitly selected documented endpoints. */
+export const runGroundedSemanticDiscovery = (raw: SemanticDiscoveryInput,
+  providerPort: SemanticProviderPort): Promise<SemanticAnalysisResult> =>
+  runSemantic(raw, providerPort, true);

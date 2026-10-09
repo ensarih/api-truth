@@ -23,3 +23,9 @@ PostgreSQL-backed cross-surface integration test is in
 ## Runtime metadata
 
 When the host supplies `readMetadataObservations`, the server registers the read-only `api_truth_get_observations` tool. Reads require an explicit environment, optionally its expected checkpoint version, a limit of 1–100 and an optional existing endpoint ID. The shared reader rechecks grants and returns only sanitized metadata with the exact current serving pin. Logs do not establish request/response schemas, required fields or authentication. No import/write tool is exposed.
+
+## Semantic intent discovery
+
+A host may pass `semantic: { discover }` to conditionally register the read-only `api_truth_discover_api` tool. Its input requires repository, service, an explicit revision/branch/environment view, 1–16 unique endpoint IDs, and intent text no longer than 512 characters. Branch and environment views must include the expected pointer/checkpoint version. The host authentication callback supplies identity; tool input has no tenant or principal fields. The tool sends selected endpoint documentation and intent text to the configured inference provider; consumers receive the provider-backed inference as a non-idempotent, open-world read. The semantic service rechecks access and the selected pin around provider inference.
+
+Results remain advisory: suggestions are inferred, unreviewed and non-normative, with evidence IDs. Discovery does not choose an analyzer, edit a contract, or create deployment evidence. The tool is absent unless the host explicitly enables the semantic capability.

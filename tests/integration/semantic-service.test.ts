@@ -1,3 +1,7 @@
+import {once} from "node:events";
+import {Client, InMemoryTransport} from "@modelcontextprotocol/client";
+import {createApiTruthMcpServer} from "../../apps/mcp/src/server.js";
+import {createPortalServer} from "../../apps/portal/src/server.js";
 import {readFile} from "node:fs/promises";
 import {afterEach, expect, test, vi} from "vitest";
 import {snapshotContentSha256, snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
@@ -65,10 +69,12 @@ const setup = async (enabled = true): Promise<void> => {
   await orchestration.registerConfiguration(admin, configuration(enabled));
   await orchestration.activateInitialConfiguration(admin, {fingerprint: "sha256:config-a"});
   snapshot = JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json", import.meta.url), "utf8")) as ContractSnapshot;
-  snapshot.evidence.push({evidence_id: "ev-doc-get", source: {kind: "openapi_document", source_id: "selected-doc"},
+  snapshot.evidence.push({evidence_id: "ev-doc-get", source: {kind: "api_document",
+    source_id: snapshot.source.repository_id},
     source_version: snapshot.source.immutable_revision, location: {pointer: "/paths/~1api~1orders/get/summary"},
     method: "type_declaration", scope: {service_id: serviceId, snapshot_id: snapshot.snapshot_id,
-      endpoint_id: "ep-get"}, limitations: [], access_label: scopes[4]});
+      endpoint_id: "ep-get", revision: snapshot.source.immutable_revision},
+    limitations: [], access_label: scopes[4]});
   snapshot.claims.push({claim_id: "claim-get-summary", subject: {service_id: serviceId, endpoint_id: "ep-get"},
     predicate: "operation.summary", value: "Read a stored order by identifier.",
     verification: "declared", evidence_ids: ["ev-doc-get"]});
@@ -219,4 +225,84 @@ test("host options are captured at construction and cannot redirect provider or 
   expect(substitutedProvider).not.toHaveBeenCalled();
   expect(() => createSemanticService(database!.pool, {schema: "unsafe-schema",
     providerPort: originalProvider})).toThrowError("SEMANTIC_INVALID_REQUEST");
+});
+
+test("authorized discovery compares a bounded intent with selected documented endpoints", async () => {
+  await setup();
+  const provider = vi.fn(async request => {
+    expect(request).toMatchObject({promptVersion: "semantic-discovery-1",
+      intentQuery: "Find a stored order", endpoints: [{endpointId: "ep-get",
+        documents: [{evidenceIds: ["ev-doc-get"]}]}]});
+    return answer();
+  });
+  await expect(service(provider).discover(context(), selection(), ["ep-get"], "Find a stored order"))
+    .resolves.toMatchObject({status: "suggestions", verification: "inferred",
+      review: "unreviewed", normative: false,
+      provenance: {promptVersion: "semantic-discovery-1", pin: selected}});
+  expect(provider).toHaveBeenCalledTimes(1);
+});
+
+test("discovery rejects secret-like intent before DB access and stays disabled without egress", async () => {
+  await setup(false);
+  const provider = vi.fn(async () => answer());
+  const semantic = service(provider);
+  const connect = vi.spyOn(database!.pool, "connect");
+  for (const intentQuery of ["Use Bearer CANARY_SECRET_123", "ftp://user:canary@internal.example/api"]) {
+    await expect(semantic.discover(context(), selection(), ["ep-get"], intentQuery))
+      .rejects.toMatchObject({code: "SEMANTIC_INVALID_REQUEST", message: "SEMANTIC_INVALID_REQUEST"});
+  }
+  expect(connect).not.toHaveBeenCalled();
+  connect.mockRestore();
+  await expect(semantic.discover(context(), selection(), ["ep-get"], "Find a stored order"))
+    .resolves.toEqual({status: "disabled"});
+  expect(provider).not.toHaveBeenCalled();
+});
+
+test("discovery discards a result if a grant is revoked during the provider call", async () => {
+  await setup();
+  const provider = vi.fn(async () => {
+    await createAccessPolicyStore(database!.pool, {schema: database!.schema}).putGrant({tenantId},
+      {principalId, scopeId: scopes[4], active: false});
+    return answer();
+  });
+  await expect(service(provider).discover(context(), selection(), ["ep-get"], "Find a stored order"))
+    .rejects.toMatchObject({code: "SEMANTIC_STALE_CONTEXT"});
+  expect(provider).toHaveBeenCalledTimes(1);
+});
+
+
+test("portal and MCP discovery share actual authorized PostgreSQL selection and revoke safely", async () => {
+  await setup();
+  const provider = vi.fn(async () => answer());
+  const semantic = service(provider);
+  const query = createQueryReader(database!.pool, {schema: database!.schema});
+  const portal = createPortalServer({authenticate: async () => context(), query, semantic});
+  const mcp = createApiTruthMcpServer({authenticate: async () => context(), query, semantic});
+  const client = new Client({name: "semantic-pg", version: "1.0"});
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const args = {repositoryId, serviceId, view: {kind: "environment", environment,
+    expectedCheckpointVersion: selected.checkpointVersion}, endpointIds: ["ep-get"], intentQuery: "Find a stored order"};
+  portal.listen(0, "127.0.0.1"); await once(portal, "listening");
+  const address = portal.address(); if (!address || typeof address === "string") throw new Error("fixture port");
+  const post = () => fetch(`http://127.0.0.1:${address.port}/api/discover`, {method: "POST",
+    headers: {"content-type": "application/json"}, body: JSON.stringify(args)});
+  try {
+    await mcp.connect(serverTransport); await client.connect(clientTransport);
+    const http = await post(); expect(http.status).toBe(200);
+    const httpResult = await http.json();
+    const tool = await client.callTool({name: "api_truth_discover_api", arguments: args});
+    expect(tool.structuredContent).toEqual({ok: true, data: httpResult});
+    expect(httpResult).toMatchObject({status: "suggestions", review: "unreviewed", normative: false,
+      provenance: {pin: selected}});
+    expect(provider).toHaveBeenCalledTimes(2);
+    await createAccessPolicyStore(database!.pool, {schema: database!.schema})
+      .putGrant({tenantId}, {principalId, scopeId: scopes[4], active: false});
+    expect((await post()).status).toBe(404);
+    const denied = await client.callTool({name: "api_truth_discover_api", arguments: args});
+    expect(denied.structuredContent).toEqual({ok: false, error: "NOT_FOUND_OR_DENIED"});
+    expect(provider).toHaveBeenCalledTimes(2);
+  } finally {
+    await Promise.allSettled([client.close(), mcp.close()]);
+    portal.closeAllConnections(); await new Promise<void>(resolve => portal.close(() => resolve()));
+  }
 });

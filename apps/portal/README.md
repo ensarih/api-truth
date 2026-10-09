@@ -23,3 +23,9 @@ publication and revocation coverage.
 ## Runtime metadata
 
 When the host supplies `readMetadataObservations`, the portal exposes `GET /api/observations` and an environment-only runtime activity button. Reads require an explicit environment, optionally its expected checkpoint version, a limit of 1–100 and an optional existing endpoint ID. The shared reader rechecks grants and returns only sanitized metadata with the exact current serving pin. Logs do not establish request/response schemas, required fields or authentication. No import/write tool is exposed.
+
+## Semantic intent discovery
+
+A host may pass `semantic: { discover }` to enable the **Find an API for this task** form and `POST /api/discover`. The browser starts from the resolved contract currently on screen. It asks the user to check 1–16 endpoint boxes (contracts with 16 or fewer operations start fully selected), then submits the task text and explicit revision, branch, or environment view. Branch and environment requests carry the displayed pointer/checkpoint version; the service rechecks authorization and the exact pin before and after provider inference.
+
+The form tells users that selected endpoint documentation and task text may be sent to the host-configured inference provider. The route accepts only `application/json`, at most 8 KiB, with duplicate-key/depth/field checks. Identity always comes from `authenticate`; the request cannot supply a tenant or principal. It does not use a snapshot identifier from the browser to authorize access. Responses label suggestions as inferred, unreviewed and non-normative, and include evidence IDs. This read-only feature does not choose an analyzer profile, change a contract, or establish a deployment fact. The host must configure the semantic service and its provider separately.

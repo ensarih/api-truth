@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@api-truth/query": "0.0.0"
+    "@api-truth/query": "0.0.0",
+    "@api-truth/semantics": "0.2.0"
   }
 }

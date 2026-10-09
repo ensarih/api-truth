@@ -42,14 +42,14 @@ const documents = [
   {
     name: "standalone Swagger 2",
     adapter_id: "nodejs-swagger2-document",
-    adapter_version: "0.14.0",
+    adapter_version: "0.15.0",
     first: `swagger: '2.0'\ninfo: { title: Example, version: '1' }\npaths:\n  /health:\n    get:\n      responses:\n        '200': { description: ok }\n`,
     second: `swagger: '2.0'\ninfo: { title: Example, version: '1' }\npaths:\n  /health:\n    get:\n      responses:\n        '200': { description: ok }\n  /orders:\n    post:\n      responses:\n        '201': { description: created }\n`,
   },
   {
     name: "standalone OpenAPI 3.0",
     adapter_id: "openapi3-document",
-    adapter_version: "0.1.1",
+    adapter_version: "0.2.0",
     first: `openapi: 3.0.3\ninfo: { title: Example, version: '1' }\npaths:\n  /health:\n    get:\n      responses:\n        '200': { description: ok }\n`,
     second: `openapi: 3.0.3\ninfo: { title: Example, version: '1' }\npaths:\n  /health:\n    get:\n      responses:\n        '200': { description: ok }\n  /orders:\n    post:\n      responses:\n        '201': { description: created }\n`,
   },
