@@ -14,12 +14,12 @@ security/release audit. The September clone audit remains historical.
 |---|---|---|
 | License and distribution authority | [Apache-2.0 text](../LICENSE) is tracked. `package.json` remains `private: true`, version `0.0.0`. Copyright ownership and authority to publish under that license need owner confirmation. | **Open** |
 | Contributions and governance | [CONTRIBUTING.md](../CONTRIBUTING.md) describes local setup, tests, and contribution checks. No tracked governance/maintainer-contact policy or code of conduct was found. The owner must designate maintainers and decision/response paths before public release. | **Open** |
-| Vulnerability reporting | No tracked `SECURITY.md` or equivalent private-reporting route was found. Publish a reporting contact/process and response expectations before inviting security reports. | **Open** |
+| Vulnerability reporting | [SECURITY.md](../SECURITY.md) defines the private GitHub route; the repository setting was enabled and verified on 2026-10-09. No response-time or supported-release commitment is published. Operational ownership and disclosure handling remain release gates. | **Partial** |
 | Public fixtures and workflow data | [Fixture policy](../fixtures/README.md) identifies fictional orders, revisions, and environments; the [reference workflow](../.github/workflows/reference-synthetic.yml) is read-only and formats synthetic envelopes only. The scan below is historical; repeat a full fixture/artifact and provenance review before publication. | **Partial** |
 | Fresh checkout | A separate clean local clone was checked on the September tip with Node 24.6.0 / npm 11.5.1. At `2ac62e4`, an isolated tracked-tree export passed clean `npm ci` with zero audited vulnerabilities; a separate Git-clone release audit remains open. [Local setup](LOCAL_SETUP.md) records the disposable PostgreSQL procedure and synthetic demos. | **Open for current tip** |
 | Offline and protocol tests | At `2ac62e4`, the isolated tracked-tree export passed typecheck and 92 files / 1,345 offline tests. | **Pass for the recorded implemented scope** |
 | PostgreSQL tests | At `2ac62e4`, the isolated export passed 32 files / 280 PostgreSQL tests against the loopback-only disposable service. | **Pass for the recorded implemented scope** |
-| Browser test | At `2ac62e4`, six Chrome tests passed, including selected-service and cross-service keyword search, exact pinned contract loading, separate inference selection and delayed-response rejection. The [check workflow](../.github/workflows/check.yml) still does not run the browser gate. | **Partial** |
+| Browser test | At `2ac62e4`, six Chrome tests passed, including selected-service and cross-service keyword search, exact pinned contract loading, separate inference selection and delayed-response rejection. The [check workflow](../.github/workflows/check.yml) now includes an isolated Playwright Chromium job; its first CI execution must pass before closing this hygiene slice. | **Partial** |
 | Full Phase 1 lifecycle | The [backlog](BACKLOG.md#d13-slices) leaves D13-S1 open: all nine steps and same-pin portal/MCP/export reads must pass together, including denied and revoked access. D12 live provider lookup, ordered facts, artifact provenance, and publication/query agreement remain open. | **Open** |
 | Public release mechanics | No release tag or artifact has been established. Branch synchronization alone does not close the lifecycle, security, governance, and owner-approval gates. | **Open** |
 
@@ -63,8 +63,7 @@ before publication. Do not paste suspicious matches into issues or logs.
 
 The bounded GitHub signature verifier does not remove the larger provider and
 authentication gaps. Also review
-the unpinned actions in `check.yml`, browser-test CI coverage, dependency/license
-inventory, and release artifact contents as explicit hygiene work.
+the pinned-action and browser CI results, dependency/license inventory, and release artifact contents as explicit hygiene work.
 
 The recorded counts apply only to `2ac62e4`. Rerun checks against the eventual
 release candidate. These passes do not close the nine-step gate or protected

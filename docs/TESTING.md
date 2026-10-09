@@ -75,7 +75,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:unit -- <file>` | **Available:** focus the unit project; missing selections fail |
 | `npm run test:watch` | **Available:** rerun relevant offline tests during development |
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity and linked read-only MCP protocol behavior |
-| `npm run test:browser` | **Available:** require an installed Chrome/Chromium executable and exercise portal search, contract selection, detail, download, unknown state, keyword candidates, and exact pinned cross-service loading in a real browser; no silent skip |
+| `npm run test:browser` | **Available:** require an installed Chrome/Chromium executable and exercise portal search, contract selection, detail, download, unknown state, keyword candidates, and exact pinned cross-service loading in a real browser; no silent skip. CI installs locked dependencies and Playwright Chromium, then runs this suite. |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
 | `npm run inventory:nodejs -- --project-root <root> --service-root <path> --entrypoint <path>` | **Available:** print an advisory bounded inventory for an explicit service root and production entrypoint; use `--document <path>` for an explicitly selected API document. It executes no source and selects no analyzer automatically. |
 | `npm run --silent extract:openapi3 -- --source <service-tree> --service <id> --revision <immutable-hex-revision> --document <contained-path>` | **Available:** run the bounded OpenAPI 3.0 document-only profile on one selected document; it does not verify runtime registration. |
@@ -191,7 +191,7 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Confirm test selection and watch configuration; default tests make no external requests and require no provider keys.
 - Start the isolated database, verify readiness/connectivity and test isolation, and stop it without touching unrelated resources.
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
-- Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
+- Keep offline, browser, and container-backed checks available in CI as their suites are introduced.
 
 The current tree also contains bounded Swagger 2/OpenAPI 3.0 document and middleware profiles, a routing-controllers declaration profile, a Node.js onboarding inventory, selected Git-to-D08 source/document materialization, metadata-only current-environment observations, and keyword/semantic search surfaces. These profiles do not establish deployed startup or general framework support. Query keyword search makes no model call; semantic suggestions require an explicit user action and a configured provider, and remain inferred/unreviewed. Live Git/provider wiring, OpenAPI 3.1 analyzer input, broader framework conformance, Java executable conformance, durable semantic review, and the protected D13 pilot remain open. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance is pending. Exact commands and construct-level support are documented in the relevant analyzer and package READMEs.
 

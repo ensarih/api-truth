@@ -811,3 +811,10 @@ Routing-controllers `0.9.0` preserves required and optional properties of suppor
 ### Tenant-scoped configured provider binding — P4-S6 (2026-10-09)
 
 An optional lazy provider factory binds tenant, provider, model and credential reference from the authorized active installation configuration. Credential references remain private to the trusted host factory and secret resolver; neither references nor values enter model context, responses or history. Disabled, denied and unusable-context calls do not resolve credentials. The connector enforces the exact selected provider/model before key resolution or HTTP, uses fixed official origins and bounded transport, and caches no keys across tenants. Current configuration, source grants and the exact pin are rechecked after model I/O. Hostile getters/coercion, wrong models, tenant isolation and reference rotation are covered by deterministic transport and PostgreSQL tests. Live credential/provider acceptance, data-policy approval, durable guidance/review and semantic-quality evaluation remain open.
+
+
+### Project-local Java prerequisite and release hygiene (2026-10-09)
+
+The explicit Java setup prepares checksum-pinned Temurin `21.0.12.1+1` under the project cache on macOS/Linux x64/arm64. Offline verification compares the retained verified archive and complete runtime tree before an environment-isolated JVM version probe. Partial caches, symlink paths, oversized metadata and redirected downloads fail closed. Eleven deterministic tests and an actual macOS arm64 offline verification pass. This prerequisite does not execute service code or establish Java analyzer coverage.
+
+GitHub private vulnerability reporting is enabled and verified; `SECURITY.md` documents its route without a response-time promise. The main check workflow pins action commits and adds a read-only Playwright Chromium job. Governance designation, license/distribution authority, full fixture/artifact review and protected lifecycle/release gates remain open.

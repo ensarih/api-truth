@@ -1,0 +1,30 @@
+export const JAVA_VERSION: string;
+export const RELEASE_TAG: string;
+export const MAX_ARCHIVE_BYTES: number;
+export const MAX_EXTRACTED_BYTES: number;
+export const MAX_ARCHIVE_ENTRIES: number;
+export const MAX_METADATA_BYTES: number;
+export const DOWNLOAD_TIMEOUT_MS: number;
+export const MAX_REDIRECTS: number;
+export const RELEASES: Readonly<Record<string, Readonly<{ name: string; url: string; sha256: string }>>>;
+export function selectPlatform(platform?: string, arch?: string): string;
+export function javaHomePath(runtimeRoot: string, platformKey: string): string;
+export function isExpectedJavaVersion(output: string): boolean;
+export function javaProbeEnvironment(): Readonly<Record<string, never>>;
+export function validateArchiveEntries(entries: string[]): string;
+export function validateSha256(value: string): string;
+export function digestFile(path: string, maxBytes?: number): Promise<{ sha256: string; bytes: number }>;
+export function downloadPinnedAsset(release: Readonly<{ name: string; url: string; sha256: string }>, destination: string,
+  fetcher?: typeof globalThis.fetch): Promise<void>;
+export function readBoundedRuntimeMetadata(path: string): Promise<unknown>;
+export function createTreeManifest(root: string): Promise<Array<{ path: string; kind: "file"; sha256: string; bytes: number } | { path: string; kind: "symlink"; target: string }>>;
+export function matchesTreeManifest(root: string, expected: unknown): Promise<boolean>;
+export function runtimePaths(repoRoot: string, platformKey: string): Readonly<{
+  release: Readonly<{ name: string; url: string; sha256: string }>;
+  cache: string;
+  root: string;
+  archive: string;
+  metadata: string;
+}>;
+export function installPinnedJava(options: { repoRoot: string; platform?: string; arch?: string; fetch?: typeof globalThis.fetch }): Promise<{ platform: string; version: string; installed: true }>;
+export function checkPinnedJava(options: { repoRoot: string; platform?: string; arch?: string }): Promise<{ platform: string; version: string; ready: true }>;

@@ -36,7 +36,9 @@
     "check": "npm run typecheck && npm test",
     "test:swagger:runtime": "node tests/conformance/swagger-runtime/run.mjs",
     "extract:openapi3": "node scripts/extract-openapi3.mjs",
-    "inventory:nodejs": "node scripts/inventory-nodejs.mjs"
+    "inventory:nodejs": "node scripts/inventory-nodejs.mjs",
+    "java:env:up": "node scripts/java-test-environment.mjs up",
+    "java:env:ready": "node scripts/java-test-environment.mjs ready"
   },
   "engines": {
     "node": "24.6.0",
