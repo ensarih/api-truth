@@ -4,6 +4,7 @@ import {snapshotContentSha256, snapshotIdentitySha256} from "../../packages/cata
 import {createAccessPolicyStore} from "../../packages/catalog/src/index.js";
 import {applyEnvironmentMigrations, createEnvironmentRepository} from "../../packages/environment/src/index.js";
 import type {ContractSnapshot} from "../../packages/ir/src/index.js";
+import {withAuthorizedObservationPin} from "../../packages/observations/src/store.js";
 import {applyObservationMigrations, createObservationStore} from "../../packages/observations/src/index.js";
 import {applyOpenApiMigrations} from "../../packages/openapi/src/index.js";
 import {applyOrchestrationMigrations, createOrchestrationRepository} from "../../packages/orchestration/src/index.js";
@@ -312,4 +313,59 @@ test("observation rows are immutable and migration checksum drift fails closed",
     SET checksum_sha256=$1 WHERE version='0001_metadata_imports'`, [`sha256:${"0".repeat(64)}`]);
   await expect(applyObservationMigrations(database.pool, {schema: database.schema}))
     .rejects.toMatchObject({code: "OBSERVATION_STORAGE_ERROR"});
+});
+
+
+test("pinned policy transactions require their exact activation epoch and independent owner grant", async () => {
+  const schema = quoteCatalogTestSchema(database.schema);
+  const row = await database.pool.query(`SELECT checkpoint_version::text AS epoch FROM ${schema}.orchestration_active_configurations WHERE tenant_id=$1`, [tenantId]);
+  const epoch = row.rows[0].epoch as string;
+  const identity = {tenantId, principalId, capabilities: ["observations.policy.manage"]};
+  let invoked = 0;
+  const run = (configActivationCheckpoint = epoch) => withAuthorizedObservationPin(database.pool, schema,
+    database.schema, identity, pin, async () => {invoked += 1; return "approved";},
+    {configActivationCheckpoint, additionalScopeIds: ["owner-policy-read"]});
+  const access = createAccessPolicyStore(database.pool, {schema: database.schema});
+  await access.putScope({tenantId}, {scopeId: "owner-policy-read", active: true});
+  await expect(run()).rejects.toMatchObject({code: "OBSERVATION_NOT_AUTHORIZED"});
+  expect(invoked).toBe(0);
+  await access.putGrant({tenantId}, {principalId, scopeId: "owner-policy-read", active: true});
+  await expect(run()).resolves.toBe("approved");
+  await expect(run(String(BigInt(epoch) + 1n))).rejects.toMatchObject({code: "OBSERVATION_STALE_PIN"});
+  expect(invoked).toBe(1);
+  await access.putGrant({tenantId}, {principalId, scopeId: "owner-policy-read", active: false});
+  await expect(run()).rejects.toMatchObject({code: "OBSERVATION_NOT_AUTHORIZED"});
+  expect(invoked).toBe(1);
+});
+
+test("owner grant revocation waits for the pinned transaction and takes effect on the next read", async () => {
+  const schema = quoteCatalogTestSchema(database.schema);
+  const access = createAccessPolicyStore(database.pool, {schema: database.schema});
+  await access.putScope({tenantId}, {scopeId: "owner-policy-read", active: true});
+  await access.putGrant({tenantId}, {principalId, scopeId: "owner-policy-read", active: true});
+  let release!: () => void, entered!: () => void;
+  const hold = new Promise<void>(resolve => {release = resolve;});
+  const started = new Promise<void>(resolve => {entered = resolve;});
+  const transaction = withAuthorizedObservationPin(database.pool, schema, database.schema,
+    {tenantId, principalId, capabilities: ["observations.policy.manage"]}, pin,
+    async () => {entered(); await hold; return "approved";}, {additionalScopeIds: ["owner-policy-read"]});
+  await started;
+  let revoked = false;
+  const revocation = access.putGrant({tenantId}, {principalId, scopeId: "owner-policy-read", active: false})
+    .then(() => {revoked = true;});
+  // A separate connection proves the row is already locked, without timing assertions.
+  const contender = await database.pool.connect();
+  try {
+    await contender.query("BEGIN");
+    await contender.query(`SELECT 1 FROM ${schema}.principal_scope_grants WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id=$3 FOR UPDATE NOWAIT`,
+      [tenantId, principalId, "owner-policy-read"]).then(() => {throw new Error("Expected locked owner grant");},
+      error => {expect(error.code).toBe("55P03");});
+    await contender.query("ROLLBACK");
+    expect(revoked).toBe(false);
+  } finally {await contender.query("ROLLBACK").catch(() => undefined);contender.release(); release();}
+  await expect(transaction).resolves.toBe("approved");
+  await revocation;
+  await expect(withAuthorizedObservationPin(database.pool, schema, database.schema,
+    {tenantId, principalId, capabilities: ["observations.policy.manage"]}, pin, async () => "unexpected",
+    {additionalScopeIds: ["owner-policy-read"]})).rejects.toMatchObject({code: "OBSERVATION_NOT_AUTHORIZED"});
 });

@@ -135,3 +135,25 @@ in a storage transaction. No expiry is computed from a caller clock. The next
 durable slice must use database time and source-window-end-based lifetime, so
 replay cannot restart retention. Opt-out, policy replacement, deletion and replay
 tombstones remain unimplemented here. Metadata imports remain append-only.
+
+## Owner-policy journal (database prerequisite)
+
+Observation migration `0002_field_presence_owner_policies` adds separate static
+owner-policy revisions and current heads. Revisions carry exact scope, policy
+fingerprint, configuration activation epoch, selector, bounded property paths,
+retention/budget and an independent owner access scope. Revisions cannot be
+updated or deleted. A head can advance monotonically or disable its current
+revision; a disabled revision cannot be re-enabled without advancing. Heads
+cannot be deleted or moved to another scope. Composite foreign keys bind a head
+to its exact immutable revision, configuration and owner access scope.
+
+The internal pinned transaction helper can additionally require the exact active
+configuration epoch and owner scope grants. It locks these grants with existing
+catalog/source grants before the transaction callback, so concurrent revocation
+waits and subsequent calls deny. This helper is not a public policy-management
+API and assumes the host independently authenticated the required capability.
+
+These tables store static policy only. They do not yet approve policies through a
+host service, persist presence results, enforce TTL/budgets or delete derived
+rows. Those lifecycle operations remain separate implementation gates; adding a
+schema does not establish traffic provenance or owner authorization.

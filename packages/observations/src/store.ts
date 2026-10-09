@@ -13,9 +13,9 @@ export class ObservationImportError extends Error {
   constructor(code: ObservationImportError["code"]) {super(code); this.name = "ObservationImportError"; this.code = code;}
 }
 
-type ExpectedPin = Readonly<{tenantId: string; repositoryId: string; serviceId: string; environment: string;
+export type ExpectedObservationPin = Readonly<{tenantId: string; repositoryId: string; serviceId: string; environment: string;
   snapshotId: string; revision: string; configFingerprint: string; checkpointVersion: string}>;
-type SafeImportRef = Readonly<{importId: string; expectedPin: ExpectedPin}>;
+type SafeImportRef = Readonly<{importId: string; expectedPin: ExpectedObservationPin}>;
 type AuthenticatedImporter = Readonly<{tenantId: string; principalId: string;
   capabilities: readonly string[]}>;
 type SourceBatch = Readonly<{attestation: ObservationContext["attestation"];
@@ -73,10 +73,10 @@ const parseImportRef = (input: unknown): SafeImportRef => {
   if (!outer || typeof outer.importId !== "string" || !opaqueId.test(outer.importId) || !pin ||
     pinKeys.slice(0, -1).some(key => !identifier(pin[key])) || !version(pin.checkpointVersion))
     throw new ObservationImportError("INVALID_OBSERVATION_IMPORT");
-  return Object.freeze({importId: outer.importId as string, expectedPin: Object.freeze(pin) as ExpectedPin});
+  return Object.freeze({importId: outer.importId as string, expectedPin: Object.freeze(pin) as ExpectedObservationPin});
 };
 
-const parseImporter = (value: unknown, pin: ExpectedPin): AuthenticatedImporter => {
+const parseImporter = (value: unknown, pin: ExpectedObservationPin): AuthenticatedImporter => {
   const record = fields(value, ["tenantId", "principalId", "capabilities"]);
   const capabilities = arrayValues(record?.capabilities, 1, 16);
   if (!record || record.tenantId !== pin.tenantId || !identifier(record.principalId)
@@ -119,10 +119,10 @@ const parseSourceBatch = (input: unknown): SourceBatch => {
     mappings: Object.freeze(safeMappings), records: Object.freeze(records)});
 };
 
-type ConfiguredScope = {configFingerprint: string; requiredScopes: string[]; logAdapterId: string};
-const loadConfiguredScopes = async (client: PoolClient, pin: ExpectedPin): Promise<ConfiguredScope> => {
-  const active = await client.query<{config_fingerprint: string; document_sha256: string; document: unknown}>(
-    `SELECT active.config_fingerprint,configuration.document_sha256,configuration.document
+type ConfiguredScope = {configFingerprint: string; configActivationCheckpoint: string; requiredScopes: string[]; logAdapterId: string};
+const loadConfiguredScopes = async (client: PoolClient, pin: ExpectedObservationPin): Promise<ConfiguredScope> => {
+  const active = await client.query<{config_fingerprint: string; checkpoint_version: string; document_sha256: string; document: unknown}>(
+    `SELECT active.config_fingerprint,active.checkpoint_version::text,configuration.document_sha256,configuration.document
      FROM orchestration_active_configurations active
      JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
        AND configuration.config_fingerprint=active.config_fingerprint
@@ -149,11 +149,11 @@ const loadConfiguredScopes = async (client: PoolClient, pin: ExpectedPin): Promi
     environment.deployment_authority.access_scope_id, ...scopes])].sort();
   if (unique.length > 1024 || unique.some(scope => !identifier(scope)))
     throw new ObservationImportError("OBSERVATION_STORAGE_ERROR");
-  return {configFingerprint: row.config_fingerprint, requiredScopes: unique,
+  return {configFingerprint: row.config_fingerprint, configActivationCheckpoint: row.checkpoint_version, requiredScopes: unique,
     logAdapterId: parsed.value.logs.adapter_id};
 };
 
-const lockAuthorizedScopes = async (client: PoolClient, pin: ExpectedPin, principalId: string,
+const lockAuthorizedScopes = async (client: PoolClient, pin: ExpectedObservationPin, principalId: string,
   required: string[]): Promise<void> => {
   const scopes = await client.query<{access_scope_id: string; active: boolean}>(
     `SELECT access_scope_id,active FROM access_scopes WHERE tenant_id=$1
@@ -168,7 +168,7 @@ const lockAuthorizedScopes = async (client: PoolClient, pin: ExpectedPin, princi
     throw new ObservationImportError("OBSERVATION_NOT_AUTHORIZED");
 };
 
-const lockCheckpoint = async (client: PoolClient, pin: ExpectedPin): Promise<string | undefined> => {
+const lockCheckpoint = async (client: PoolClient, pin: ExpectedObservationPin): Promise<string | undefined> => {
   const checkpoint = await client.query<{version: string; reconciliation_required: boolean;
     source_access_label: string | null}>(
     `SELECT checkpoint.version::text,checkpoint.reconciliation_required,
@@ -191,14 +191,17 @@ const lockCheckpoint = async (client: PoolClient, pin: ExpectedPin): Promise<str
 
 type AuthorizedPin = Readonly<{snapshot: ContractSnapshot; logAdapterId: string}>;
 const authorizePinned = async (client: PoolClient, schema: string, identity: AuthenticatedImporter,
-  pin: ExpectedPin): Promise<AuthorizedPin> => {
+  pin: ExpectedObservationPin, constraints: ObservationPinConstraints): Promise<AuthorizedPin> => {
   await client.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1,0))",
     [JSON.stringify(["api-truth:environment-serving", pin.tenantId, pin.repositoryId,
       pin.serviceId, pin.environment])]);
   const configured = await loadConfiguredScopes(client, pin);
+  if (constraints.configActivationCheckpoint !== undefined
+    && configured.configActivationCheckpoint !== constraints.configActivationCheckpoint)
+    throw new ObservationImportError("OBSERVATION_STALE_PIN");
   const sourceScope = await lockCheckpoint(client, pin);
-  const required = sourceScope === undefined ? configured.requiredScopes
-    : [...new Set([...configured.requiredScopes, sourceScope])].sort();
+  const required = [...new Set([...configured.requiredScopes, ...(sourceScope === undefined ? [] : [sourceScope]),
+    ...(constraints.additionalScopeIds ?? [])])].sort();
   if (required.length > 1024 || required.some(scope => !identifier(scope)))
     throw new ObservationImportError("OBSERVATION_STORAGE_ERROR");
   await lockAuthorizedScopes(client, pin, identity.principalId, required);
@@ -214,14 +217,18 @@ const authorizePinned = async (client: PoolClient, schema: string, identity: Aut
   return Object.freeze({snapshot: selected.snapshot, logAdapterId: configured.logAdapterId});
 };
 
-const withAuthorizedPin = async <T>(pool: Pool, schemaSql: string, schemaName: string,
-  identity: AuthenticatedImporter, pin: ExpectedPin,
-  operation: (client: PoolClient, authorized: AuthorizedPin) => Promise<T>): Promise<T> => {
+export type ObservationPinConstraints = Readonly<{configActivationCheckpoint?: string; additionalScopeIds?: readonly string[]}>;
+
+/** Internal transaction boundary; callers must independently authenticate their capability first. */
+export const withAuthorizedObservationPin = async <T>(pool: Pool, schemaSql: string, schemaName: string,
+  identity: AuthenticatedImporter, pin: ExpectedObservationPin,
+  operation: (client: PoolClient, authorized: AuthorizedPin) => Promise<T>,
+  constraints: ObservationPinConstraints = {}): Promise<T> => {
   const client = await pool.connect().catch(() => {throw new ObservationImportError("OBSERVATION_STORAGE_ERROR");});
   try {
     await client.query("BEGIN");
     await client.query(`SET LOCAL search_path TO ${schemaSql}, pg_catalog`);
-    const authorized = await authorizePinned(client, schemaName, identity, pin);
+    const authorized = await authorizePinned(client, schemaName, identity, pin, constraints);
     const result = await operation(client, authorized);
     await client.query("COMMIT");
     return result;
@@ -292,12 +299,12 @@ export const createObservationStore = (pool: Pool, options: {schema: string;
       let identity: AuthenticatedImporter;
       try {identity = parseImporter(await options.authorizeImporter(credential), ref.expectedPin);}
       catch {throw new ObservationImportError("OBSERVATION_NOT_AUTHORIZED");}
-      await withAuthorizedPin(pool, schema, options.schema, identity, ref.expectedPin,
+      await withAuthorizedObservationPin(pool, schema, options.schema, identity, ref.expectedPin,
         async () => undefined);
       let batch: SourceBatch;
       try {batch = parseSourceBatch(await options.readBatch(identity, ref));}
       catch {throw new ObservationImportError("INVALID_SOURCE_BATCH");}
-      return withAuthorizedPin(pool, schema, options.schema, identity, ref.expectedPin,
+      return withAuthorizedObservationPin(pool, schema, options.schema, identity, ref.expectedPin,
         async (client, authorized) => {
         const pin = ref.expectedPin;
         if (authorized.logAdapterId !== batch.attestation.sourceId)

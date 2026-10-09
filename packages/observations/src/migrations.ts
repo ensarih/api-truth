@@ -3,7 +3,7 @@ import {readFile} from "node:fs/promises";
 import type {Pool} from "pg";
 import {quoteEnvironmentSchema} from "../../environment/src/migrations.js";
 
-const version = "0001_metadata_imports";
+const versions = ["0001_metadata_imports", "0002_field_presence_owner_policies"] as const;
 
 export class ObservationStorageError extends Error {
   readonly code: "OBSERVATION_STORAGE_ERROR";
@@ -14,9 +14,11 @@ export class ObservationStorageError extends Error {
 export const applyObservationMigrations = async (pool: Pool, options: {schema: string}): Promise<void> => {
   let schema: string;
   try {schema = quoteEnvironmentSchema(options.schema);} catch {throw new ObservationStorageError();}
-  const body = await readFile(new URL(`../migrations/${version}.sql`, import.meta.url), "utf8")
-    .catch(() => {throw new ObservationStorageError();});
-  const checksum = `sha256:${createHash("sha256").update(body).digest("hex")}`;
+  const migrations = await Promise.all(versions.map(async version => {
+    const body = await readFile(new URL(`../migrations/${version}.sql`, import.meta.url), "utf8")
+      .catch(() => {throw new ObservationStorageError();});
+    return {version,body,checksum:`sha256:${createHash("sha256").update(body).digest("hex")}`};
+  }));
   const client = await pool.connect().catch(() => {throw new ObservationStorageError();});
   try {
     await client.query("BEGIN");
@@ -34,13 +36,15 @@ export const applyObservationMigrations = async (pool: Pool, options: {schema: s
       version text PRIMARY KEY, checksum_sha256 text NOT NULL
         CHECK (checksum_sha256 ~ '^sha256:[0-9a-f]{64}$'),
       applied_at timestamptz NOT NULL DEFAULT clock_timestamp())`);
-    const stored = await client.query<{checksum_sha256: string}>(
-      "SELECT checksum_sha256 FROM observation_schema_migrations WHERE version=$1", [version]);
-    if (!stored.rows.length) {
-      await client.query(body);
-      await client.query("INSERT INTO observation_schema_migrations(version,checksum_sha256) VALUES($1,$2)",
-        [version, checksum]);
-    } else if (stored.rows[0]?.checksum_sha256 !== checksum) throw new ObservationStorageError();
+    for (const migration of migrations) {
+      const stored = await client.query<{checksum_sha256: string}>(
+        "SELECT checksum_sha256 FROM observation_schema_migrations WHERE version=$1", [migration.version]);
+      if (!stored.rows.length) {
+        await client.query(migration.body);
+        await client.query("INSERT INTO observation_schema_migrations(version,checksum_sha256) VALUES($1,$2)",
+          [migration.version, migration.checksum]);
+      } else if (stored.rows[0]?.checksum_sha256 !== migration.checksum) throw new ObservationStorageError();
+    }
     await client.query("COMMIT");
   } catch {
     await client.query("ROLLBACK").catch(() => undefined);

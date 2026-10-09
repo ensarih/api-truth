@@ -1175,3 +1175,20 @@ paths/dates, parent ambiguity, unrelated unresolved records and projection scope
 Independent source review is complete. This is consistency checking, not database
 authorization or source-to-record attestation. PostgreSQL owner approval,
 DB-clock expiry, atomic quotas, opt-out and replay-safe deletion remain open.
+
+### Owner-policy journal and pinned authority prerequisites — P3 (2026-10-10)
+
+Observations 0.8.0 adds checksum-locked migration 0002 for immutable scoped owner
+policy revisions and current heads. Policy heads cannot regress, change identity,
+be deleted or re-enable a disabled generation. Configuration and owner access
+scope references are explicit; no traffic or presence rows are stored here.
+
+The internal observation transaction helper now accepts an exact activation epoch
+and additional owner grants. Two PostgreSQL tests failed against the historical
+helper (owner grant omitted and not locked), then passed with the extension.
+These checks reuse the existing serving/configuration/catalog/source authority
+transaction; importer behavior keeps its original default scope requirements.
+
+Host-authenticated policy approval/CAS, derived presence storage, database-clock
+retention, quotas and replay-safe deletion remain open. Schema constraints alone
+are not an owner approval service.
