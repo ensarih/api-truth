@@ -81,6 +81,37 @@ const cases = [
   ["runtime-binding-body-schema-missing-precedence", 201, "orders"],
   ["runtime-binding-body-schema-missing-example", 201, "orders"],
 ];
+for (const scenario of ["document-load-observed", "document-load-bom-crlf", "document-load-mutated", "document-load-object", "document-load-alternate", "document-load-reference", "document-load-module-mismatch"]) {
+  test(`controlled document load: ${scenario}`, {timeout: 20000}, async () => {
+    const {stdout} = await isolated(runtimeNode, scenario);
+    const result = JSON.parse(stdout);
+    if (["document-load-object", "document-load-alternate", "document-load-reference", "document-load-module-mismatch"].includes(scenario)) {
+      assert.equal(result.startupRejected, true);
+      if (scenario === "document-load-module-mismatch") assert.equal(result.moduleExecuted, false);
+      assert.deepEqual(result.documentLoadObservation,
+        {kind:"unresolved", diagnostic:"runtime_document_load_unverified"});
+      return;
+    }
+    assert.equal(result.status, 200);
+    assert.equal(result.body.controller, "orders");
+    if (scenario === "document-load-mutated") {
+      assert.deepEqual(result.documentLoadObservation,
+        {kind:"unresolved", diagnostic:"runtime_document_load_unverified"});
+      return;
+    }
+    const observed = result.documentLoadObservation;
+    assert.equal(observed.kind, "unsigned_runtime_document_load");
+    assert.equal(observed.profileVersion, "swagger-document-load-capture-1");
+    assert.equal(observed.document.path, "api/swagger/swagger.yaml");
+    assert.equal(observed.document.rawSha256, result.documentRawSha256);
+    assert.match(observed.document.canonicalValueSha256, /^sha256:[a-f0-9]{64}$/);
+    assert.equal(observed.bindings.length, 1);
+    assert.equal(observed.bindings[0].handler_path, "api/controllers/orders.js");
+    assert.equal(observed.framework.nodeVersion, "22.19.0");
+    assert.equal("signature" in observed, false);
+    assert.equal("claims" in observed, false);
+  });
+}
 for (const [scenario, status, marker] of cases) {
   test(`pinned routing behavior: ${scenario}`, {timeout: 20000}, async () => {
     const {stdout} = await isolated(runtimeNode, scenario);

@@ -852,3 +852,19 @@ Document `0.14.0` and middleware `0.33.0` use canonical JSON key ordering in req
 ### Document operation text for semantic discovery (2026-10-09)
 
 Standalone Swagger document `0.15.0` and OpenAPI 3.0 document `0.2.0` retain bounded operation summaries/descriptions as declared claims with exact document-pointer evidence. Invalid or oversized text is withheld with a scoped diagnostic. The Swagger middleware `0.33.0` profile remains unchanged. Semantic projection now checks actual `api_document` evidence, exact source version and snapshot provenance; actual analyzer-produced snapshots exercise the boundary. Document prose is untrusted context and does not establish runtime behavior or normative contract guarantees.
+
+### Controlled document-load observation (2026-10-10)
+
+The internal `runtime-document-load-capture.cjs` collector can be installed before
+loading the pinned Swagger framework in a disposable, trusted Node 22.19.0 process.
+It supplies bounded, exact UTF-8 bytes from `api/swagger/swagger.yaml` to the pinned
+parser, preserving BOM and CRLF. It records raw and canonical parsed-value digests
+only after observing a normal handler invocation and rechecking the parsed value.
+Framework file identities are checked before loading. Alternate paths, object
+definitions, references, multiple loads and changed parsed values remain unresolved.
+
+The result is explicitly unsigned and contains no payload values or IR claims.
+This is trusted-process instrumentation, not isolation from hostile application
+code or proof of deployment. Existing signed receipts, protected verification,
+durable capture results and catalog publication are unchanged; integrating this
+observation with those authorities requires a separate versioned gate.

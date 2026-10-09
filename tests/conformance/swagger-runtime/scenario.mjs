@@ -9,10 +9,13 @@ import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
 const supported = new Set(["default", "protected-capture", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
-  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match", "runtime-binding-body-additional-match", "runtime-binding-body-additional-extra", "runtime-binding-body-additional-reference", "runtime-binding-body-shorthand-match", "runtime-binding-body-shorthand-type", "runtime-binding-body-shorthand-required", "runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-precedence", "runtime-binding-body-schema-missing-example"]);
+  "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match", "runtime-binding-body-additional-match", "runtime-binding-body-additional-extra", "runtime-binding-body-additional-reference", "runtime-binding-body-shorthand-match", "runtime-binding-body-shorthand-type", "runtime-binding-body-shorthand-required", "runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-precedence", "runtime-binding-body-schema-missing-example", "document-load-observed", "document-load-bom-crlf", "document-load-object", "document-load-alternate", "document-load-mutated"]);
+supported.add("document-load-reference");
+supported.add("document-load-module-mismatch");
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 const protectedScenario = scenario === "protected-capture";
+const documentLoadScenario = scenario.startsWith("document-load-");
 const executionMarker = join(tmpdir(), "protected-capture-execution-marker");
 const sha256 = value => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const canonical = value => JSON.stringify(JSON.parse(JSON.stringify(value)), (_key, item) =>
@@ -33,6 +36,7 @@ try {
         parameters: [{name: "id", in: "path", required: true, type: "string"}],
         responses: {"200": {description: "Synthetic marker"}}}}}};
   const operation = doc.paths["/orders/{id}"].get;
+  if (scenario === "document-load-reference") operation.responses["200"].schema = {$ref:"https://example.invalid/schema"};
   if (scenario === "runtime-binding") doc.security = [];
   if (scenario === "runtime-binding-response-match") {
     doc.securityDefinitions = {basic:{type:"basic"}};
@@ -92,7 +96,10 @@ try {
   if (scenario === "runtime-binding-body-schema-missing-precedence") {
     operation.responses = {"201":{description:"Explicit body",schema:{type:"object",properties:{controller:{type:"string"}}}},default:{description:"No content"}};
   }
-  await put("api/swagger/swagger.yaml", JSON.stringify(doc));
+  const documentBytes = scenario === "document-load-bom-crlf"
+    ? Buffer.from(`\uFEFF${JSON.stringify(doc, null, 2).replaceAll("\n", "\r\n")}`) : Buffer.from(JSON.stringify(doc));
+  await put("api/swagger/swagger.yaml", documentBytes);
+  if (scenario === "document-load-alternate") await put("api/swagger/other.yaml", documentBytes);
   await put("api/controllers/orders.js", handler("orders"));
   if (protectedScenario) await put("api/controllers/orders.js", `exports.getOrder = function(req, res) {
       require("node:fs").appendFileSync(${JSON.stringify(executionMarker)}, "x");
@@ -119,6 +126,8 @@ try {
   await put("api/mocks/orders.js", handler("mock"));
   const createOptions = scenario === "create-mock-mode" ? {mockMode: true}
     : ["create-mock-override", "npm-router-mock"].includes(scenario) ? {mockMode: false} : {};
+  if (scenario === "document-load-object") createOptions.swagger = doc;
+  if (scenario === "document-load-alternate") createOptions.swaggerFile = join(root, "api/swagger/other.yaml");
   const sourceOptions = Object.hasOwn(createOptions, "mockMode") ? `, mockMode: ${createOptions.mockMode}` : "";
   await put("app.js", `${scenario === "source-environment-override" ? 'process.env.swagger_mockMode = "true";\n' : ""}const express = require("express");
     const SwaggerExpress = require("swagger-express-mw"); const app = express();
@@ -197,18 +206,43 @@ try {
     env: {PATH: process.env.PATH, NODE_ENV: "test", SUPPRESS_NO_CONFIG_WARNING: "true",
       TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP}};
   let capture;
+  let documentLoadCapture;
   let baseline;
-  if (captureScenario) {
+  if (captureScenario || documentLoadScenario) {
     baseline = JSON.parse((await run(analyzerNode, cliArgs, cliOptions)).stdout);
-    const collector = require(fileURLToPath(new URL("../../../analyzers/nodejs/src/runtime-binding-capture.cjs", import.meta.url)));
-    capture = collector.installSwaggerRuntimeBindingCapture({serviceRoot: root, repository_id: "local", service_id: "synthetic",
-      immutable_revision: revision, source_digest: baseline.source.source_digest, environment: "test", session_id: "runtime-fixture"});
+    const collector = require(fileURLToPath(new URL(documentLoadScenario
+      ? "../../../analyzers/nodejs/src/runtime-document-load-capture.cjs"
+      : "../../../analyzers/nodejs/src/runtime-binding-capture.cjs", import.meta.url)));
+    const captureOptions = {serviceRoot: root, repository_id: "local", service_id: "synthetic",
+      immutable_revision: revision, source_digest: baseline.source.source_digest, environment: "test", session_id: "runtime-fixture"};
+    if (documentLoadScenario) documentLoadCapture = collector.installSwaggerRuntimeDocumentLoadCapture(captureOptions);
+    else capture = collector.installSwaggerRuntimeBindingCapture(captureOptions);
   }
+  if (scenario === "document-load-module-mismatch") {
+    const fake = join(root, "unsupported", "path-loader", "index.js");
+    await put("unsupported/path-loader/index.js", "global.__captureModuleExecuted = true; module.exports = {}; ");
+    let rejected = false;
+    try {require(fake);} catch {rejected = true;}
+    const documentLoadObservation = documentLoadCapture.observation();
+    documentLoadCapture.stop();
+    process.stdout.write(JSON.stringify({startupRejected:rejected,
+      moduleExecuted:global.__captureModuleExecuted === true, documentLoadObservation}));
+  } else {
   const express = require("express");
   const wrapper = require("swagger-express-mw");
   const app = express();
-  const middleware = await new Promise((accept, reject) => wrapper.create({appRoot: root, ...createOptions, ...(scenario === "runtime-binding-mock" ? {mockMode: true} : {})}, (error, value) => error ? reject(error) : accept(value)));
+  const middleware = await new Promise((accept, reject) => wrapper.create({appRoot: root, ...createOptions, ...(scenario === "runtime-binding-mock" ? {mockMode: true} : {})}, (error, value) => error ? reject(error) : accept(value)))
+    .catch(error => {
+      if (["document-load-object", "document-load-alternate", "document-load-reference"].includes(scenario)) return undefined;
+      throw error;
+    });
+  if (!middleware) {
+    const documentLoadObservation = documentLoadCapture.observation();
+    documentLoadCapture.stop();
+    process.stdout.write(JSON.stringify({documentLoadObservation, startupRejected:true}));
+  } else {
   middleware.register(app);
+  if (scenario === "document-load-mutated") middleware.runner.api.definition.info.title = "mutated-after-registration";
   app.use((error, req, res, next) => { res.status(500).json({error: "synthetic-routing-failure"}); });
   server = await new Promise(accept => { const listener = app.listen(0, "127.0.0.1", () => accept(listener)); });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -217,6 +251,8 @@ try {
   let body; try { body = JSON.parse(text); } catch { body = {nonJson: true}; }
   const withoutPrefix = await fetch(`${base}/orders/42`, {signal: AbortSignal.timeout(5000)});
   await withoutPrefix.arrayBuffer();
+  const documentLoadObservation = documentLoadCapture?.observation();
+  documentLoadCapture?.stop();
   const {stdout: analyzerVersion} = await run(analyzerNode, ["--version"]);
   let keyDirectory;
   let protectedCapture;
@@ -266,6 +302,7 @@ try {
   finally { if (keyDirectory) await rm(keyDirectory, {recursive: true, force: true}); }
   const analysis = JSON.parse(stdout);
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
+    ...(documentLoadScenario ? {documentLoadObservation, documentRawSha256: sha256(documentBytes)} : {}),
     ...(protectedCapture ? {protectedCapture} : {}),
     analysis: {status: analysis.status,
       securityState: analysis.endpoints[0]?.security.state,
@@ -304,6 +341,8 @@ try {
       initializationSources: analysis.claims.find(item => item.predicate === "handler.candidate")?.value.initialization_sources?.map(item => item.path),
       bindingClaim: analysis.claims.some(item => item.predicate === "handler.binding"),
       binding: analysis.claims.find(item => item.predicate === "handler.binding"), diagnostics: analysis.diagnostics.map(item => item.code)}}));
+  }
+  }
 } finally {
   if (server) { server.closeAllConnections(); await new Promise((accept, reject) => server.close(error => error ? reject(error) : accept())); }
   await rm(root, {recursive: true, force: true});

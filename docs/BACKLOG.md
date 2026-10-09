@@ -1090,3 +1090,17 @@ Selected-operation and cross-service keyword matching now retain a qualified sou
 Portal candidate reloads and server-side candidate/discovery result checks compare the selected revision as part of the exact pin. Corpus output accepts only the expected environment pin fields, with the optional selected revision constrained to the shared immutable-revision format. The portal shows the selected revision alongside the evidence revision, and the MCP transport preserves both fields. Semantic services, observation imports, metadata samples and current OpenAPI publication for these qualified selections remain withheld until their own contracts adopt both revisions.
 
 Validation: TDD reproduced a dropped selected-revision field being accepted by the browser and server, then verified rejection. Unit and HTTP tests cover malformed, missing and swapped qualification; real Git/D08 PostgreSQL tests cover per-service and cross-service candidates; browser cases cover original and qualified pins; an MCP protocol test preserves both revisions. Independent review and a clean locked install/typecheck passed all 1,589 offline, 368 PostgreSQL and nine browser tests. The preceding `8645fe8` main CI passed all gates.
+
+### Unsigned controlled document-load gate — NB1 prerequisite (2026-10-10)
+
+A separate internal collector supplies the exact bounded default Swagger document
+bytes to the pinned parser and observes the canonical parsed definition through
+handler dispatch. It rejects unsupported sources and references, withholds changed
+values, and checks pinned framework files before loading them. Raw BOM/CRLF bytes
+remain distinct from the parsed-value digest. The emitted metadata is unsigned;
+signing, protected verification, durable admission and catalog promotion remain
+open. Trusted-process instrumentation does not isolate hostile application code.
+
+Validation: independent review resolved a pre-load integrity ordering defect.
+A clean locked install/typecheck passed 1,592 offline tests; all 67 pinned framework
+cases passed, including a modified-module sentinel that must never execute.
