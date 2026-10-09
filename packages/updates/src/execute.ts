@@ -155,6 +155,42 @@ const agrees = (left: unknown, right: unknown): boolean => {
   }
 };
 
+const normalizedManifestPath = (path: string): boolean => path === "."
+  || /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9_@+.-]+(?:\/[A-Za-z0-9_@+.-]+)*$/.test(path);
+
+const isContainedManifestPath = (serviceRoot: string, path: string): boolean =>
+  normalizedManifestPath(path) && path !== "."
+  && (serviceRoot === "." || path.startsWith(`${serviceRoot}/`));
+
+const validateResolutionInputs = (input: ParsedExecutionInput): void => {
+  const { plan, request } = input;
+  const inputs = request.resolution_inputs;
+  const sourceTree = inputs[0];
+  if (!sourceTree || !("path" in sourceTree) || sourceTree.kind !== "source_tree"
+    || sourceTree.path !== plan.service.service_root || sourceTree.digest !== plan.service.target_source_digest) {
+    mismatch("UPDATE_SCOPE_MISMATCH", "/request/resolution_inputs", "semantic.scope_mismatch");
+  }
+  if (inputs.length === 1) return;
+  if (inputs.length > 17 || plan.action !== "analyze_full_service"
+    || plan.extraction_mode !== "fallback_full_service"
+    || request.extraction_mode !== "fallback_full_service") {
+    mismatch("UPDATE_SCOPE_MISMATCH", "/request/resolution_inputs", "semantic.scope_mismatch");
+  }
+  const seen = new Set<string>([`source_tree\0${plan.service.service_root}`]);
+  for (let index = 1; index < inputs.length; index++) {
+    const candidate = inputs[index];
+    if (!candidate || !("path" in candidate) || candidate.kind !== "type_manifest"
+      || !isContainedManifestPath(plan.service.service_root, candidate.path)
+      || !/^sha256:[a-f0-9]{64}$/.test(candidate.digest)) {
+      mismatch("UPDATE_SCOPE_MISMATCH", `/request/resolution_inputs/${index}`, "semantic.scope_mismatch");
+    }
+    const manifest = candidate as {kind: "type_manifest"; path: string; digest: string};
+    const key = `${manifest.kind}\0${manifest.path}`;
+    if (seen.has(key)) mismatch("UPDATE_SCOPE_MISMATCH", `/request/resolution_inputs/${index}`, "semantic.scope_mismatch");
+    seen.add(key);
+  }
+};
+
 const validateBaseAgreement = (input: ParsedExecutionInput): void => {
   const { plan, baseSnapshot } = input;
   const service = plan.service;
@@ -214,13 +250,7 @@ const validateRequestAgreement = (input: ParsedExecutionInput): void => {
   if (!agrees(actualSource, expectedSource)) {
     mismatch("UPDATE_SCOPE_MISMATCH", "/request/source", "semantic.scope_mismatch");
   }
-  const resolutionInput = request.resolution_inputs[0];
-  if (request.resolution_inputs.length !== 1
-    || resolutionInput?.kind !== "source_tree"
-    || resolutionInput.path !== plan.service.service_root
-    || resolutionInput.digest !== plan.service.target_source_digest) {
-    mismatch("UPDATE_SCOPE_MISMATCH", "/request/resolution_inputs", "semantic.scope_mismatch");
-  }
+  validateResolutionInputs(input);
   if (!agrees(request.analyzer, plan.analysis.target.analyzer)
     || request.exchange_version !== plan.analysis.target.analyzer_exchange_version
     || request.ir_version !== plan.analysis.target.ir_version

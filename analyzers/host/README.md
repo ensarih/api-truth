@@ -48,3 +48,6 @@ an external trusted public key. D08 currently rejects runtime observations:
 receipts can change output independently of immutable source bytes and need a
 separately pinned job input before they can participate in durable reuse.
 This prevents an unpinned receipt from silently changing a cached contract.
+
+
+An installation may pin an ordered `resolution_inputs` array of `{ "kind": "type_manifest", "path": "api/swagger/swagger.yaml" }` in the analyzer selection. Paths are normalized, project-relative and contained within the configured service; at most 16 unique manifests are allowed. The host rejects selected-input substitution before reading source. Standalone calls that omit this optional selection retain adapter-specific validation. Durable D08 workers require explicit configuration for every extra manifest, require actual SHA-256 digests, and conservatively reanalyze the service on branch updates with extra inputs. Runtime observations remain rejected until their independent identity and trust metadata are pinned. Document-only orchestration is still unsupported; its local CLI is available.

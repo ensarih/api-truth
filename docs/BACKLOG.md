@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for five bounded profiles; options/resolution input pinning and multi-input update/reuse gates remain. Runtime observations are rejected by D08 until separately pinned. |
+| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for five bounded profiles; configured source-manifest paths are pinned and multi-input full-service branch updates pass through D07/D08. Independent runtime receipt/key identity, document-only orchestration and safe multi-input reuse remain open. Runtime observations are rejected by D08 until separately pinned. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | Open | Cross-adapter hostile-input/invalidation matrix and complete bounded Swagger profile gate. |
 | NB5 | Open | Decorator framework conformance and source-to-downstream update gate. |

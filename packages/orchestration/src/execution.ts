@@ -147,6 +147,11 @@ const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
     const parsed = parseAnalyzerRequest(raw?.request);
     if (!parsed.ok) fail("JOB_EXECUTION_FAILED");
     const request = parsed.value;
+    const configuredInputs=service.analyzer.resolution_inputs ?? [];
+    const extraInputs=request.resolution_inputs.slice(1);
+    if(!equal(extraInputs.map(input=>({kind:input.kind,path:"path" in input ? input.path : undefined})),configuredInputs)
+      || extraInputs.some(input=>input.kind!=="type_manifest" || !digest.test(input.digest)
+        || !(service.root==="." || input.path.startsWith(`${service.root}/`)))) fail("JOB_EXECUTION_FAILED");
     if (request.exchange_version !== job.exchange_version || request.ir_version !== job.ir_version
       || request.analyzer.analyzer_id !== job.analyzer_adapter_id
       || request.analyzer.analyzer_version !== job.analyzer_adapter_version
@@ -157,8 +162,9 @@ const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
       // They need a separately pinned job input before orchestration may accept them.
       || request.resolution_inputs.some(input => input.kind === "runtime_observation")
       || request.resolution_inputs.length === 0
-      || !request.resolution_inputs.some((input) => input.kind === "source_tree"
-        && input.path === job.service_root && input.digest === request.source.source_digest)
+      || request.resolution_inputs[0]?.kind !== "source_tree"
+      || request.resolution_inputs[0].path !== job.service_root
+      || request.resolution_inputs[0].digest !== request.source.source_digest
       || request.execution_policy.network_access !== false || request.execution_policy.side_effects !== "none"
       || !Array.isArray(raw.changedPaths) || typeof raw.changedPathsComplete !== "boolean") fail("JOB_EXECUTION_FAILED");
     const paths = [...raw.changedPaths];
@@ -321,7 +327,8 @@ const materialize = async (prepared: Prepared,
       target: { repository_id: job.repository_id, service_id: job.service_id, service_root: job.service_root,
         immutable_revision: job.target_revision!, source_digest: resolved.request.source.source_digest,
         analysis_key: targetKey }, changed_paths: resolved.changedPaths,
-      changed_paths_complete: resolved.changedPathsComplete });
+      // Extra manifests are analyzed in full until their reuse identity has a separate conformance gate.
+      changed_paths_complete: resolved.changedPathsComplete && resolved.request.resolution_inputs.length===1 });
     parsedPlan = parseUpdatePlan(plan);
     if (!parsedPlan.ok) fail("JOB_EXECUTION_FAILED");
   } catch { fail("JOB_EXECUTION_FAILED"); }

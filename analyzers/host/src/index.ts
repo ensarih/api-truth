@@ -22,7 +22,7 @@ export function createConfiguredAnalyzer(options:{projectRoot:string;selection:u
   let parsed:ReturnType<typeof parseAnalyzerSelection>;
   try{parsed=parseAnalyzerSelection(structuredClone(options.selection));}catch{throw new Error("UNSUPPORTED_ANALYZER_SELECTION");}
   if(!parsed.ok)throw new Error("UNSUPPORTED_ANALYZER_SELECTION");
-  const selection={...parsed.value};
+  const selection=structuredClone(parsed.value);
   const ir=configuredAnalyzerIrVersion(selection);
   const profile=registrations.find(item=>item.identity.analyzer_id===selection.adapter_id
     && item.identity.analyzer_version===selection.adapter_version && item.ir===ir);
@@ -35,6 +35,11 @@ export function createConfiguredAnalyzer(options:{projectRoot:string;selection:u
     try{request=parseAnalyzerRequest(structuredClone(input));}catch{throw new Error("ANALYZER_REQUEST_MISMATCH");}
     if(!request.ok||request.value.ir_version!==ir||request.value.analyzer.analyzer_id!==identity.analyzer_id
       ||request.value.analyzer.analyzer_version!==identity.analyzer_version)throw new Error("ANALYZER_REQUEST_MISMATCH");
+    if(selection.resolution_inputs !== undefined) {
+      const extras=request.value.resolution_inputs.filter(item=>item.kind!=="source_tree")
+        .map(item=>({kind:item.kind,path:"path" in item ? item.path : undefined}));
+      if(JSON.stringify(extras)!==JSON.stringify(selection.resolution_inputs))throw new Error("ANALYZER_REQUEST_MISMATCH");
+    }
     let raw:unknown;
     try{raw=await adapter.analyze(structuredClone(request.value));}catch{throw new Error("ANALYZER_EXECUTION_FAILED");}
     let result:ReturnType<typeof parseAnalyzerResult>;

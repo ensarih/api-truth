@@ -70,3 +70,17 @@ test("mutating an adapter export cannot change the compiled host registry",()=>{
   expect(configuredAnalyzerProfiles[0]?.adapter_version).toBe(original);
  }finally{expressIdentity.analyzer_version=original;}
 });
+
+
+test("explicit configured inputs are detached and reject document substitution",async()=>{
+ const selection={adapter_id:profiles[3].id,adapter_version:profiles[3].version,ir_version:profiles[3].ir,
+  resolution_inputs:[{kind:"type_manifest" as const,path:"api/swagger/swagger.yaml"}]};
+ const analyzer=createConfiguredAnalyzer({projectRoot:"/does-not-exist",selection});
+ selection.resolution_inputs[0]!.path="other.yaml";
+ const input=request(profiles[3]);
+ input.resolution_inputs[1]={kind:"type_manifest",path:"other.yaml",digest:"pending"};
+ await expect(analyzer.analyze(input)).rejects.toThrow("ANALYZER_REQUEST_MISMATCH");
+ await expect(analyzer.analyze({...input,resolution_inputs:[input.resolution_inputs[0]!]})).rejects.toThrow("ANALYZER_REQUEST_MISMATCH");
+ await expect(analyzer.analyze({...input,resolution_inputs:[input.resolution_inputs[0]!,
+  {kind:"classpath",locator:{scheme:"maven",coordinate:"private:value"},digest:"pending"}]})).rejects.toThrow("ANALYZER_REQUEST_MISMATCH");
+});

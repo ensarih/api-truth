@@ -1203,7 +1203,7 @@ test("configured Swagger IR 1.1 reaches durable catalog and rejects resolver wir
    {kind:"source_tree",path:".",digest:first.source.source_digest},
    {kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:documentDigest}]};
   const config=structuredClone(configuration);
-  Object.assign(config.document.repositories[0]!.services[0]!.analyzer,{adapter_id:SWAGGER_ANALYZER.analyzer_id,adapter_version:SWAGGER_ANALYZER.analyzer_version,ir_version:"1.1.0"});
+  Object.assign(config.document.repositories[0]!.services[0]!.analyzer,{adapter_id:SWAGGER_ANALYZER.analyzer_id,adapter_version:SWAGGER_ANALYZER.analyzer_version,ir_version:"1.1.0",resolution_inputs:[{kind:"type_manifest",path:"api/swagger/swagger.yaml"}]});
   await applyOrchestrationMigrations(database.pool,{schema:database.schema});
   const repository=createOrchestrationRepository(database.pool,{schema:database.schema});
   await repository.registerConfiguration(admin,config);
@@ -1225,10 +1225,39 @@ test("configured Swagger IR 1.1 reaches durable catalog and rejects resolver wir
   })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
   expect(calls).toBe(0);
   await expect(worker.runJob(workerIdentity,claim!.lease,{
+   resolver:{resolve:async()=>({request:{...request,resolution_inputs:[request.resolution_inputs[0]!,
+    {...request.resolution_inputs[1]!,path:"api/other.yaml"}]},changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
+  })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
+  expect(calls).toBe(0);
+  await expect(worker.runJob(workerIdentity,claim!.lease,{
    resolver:{resolve:async()=>({request,changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
   })).resolves.toMatchObject({state:"succeeded"});
   const sql=quoteCatalogTestSchema(database.schema);
   const stored=await database.pool.query(`SELECT job.ir_version,association.snapshot_id FROM ${sql}.orchestration_jobs job JOIN ${sql}.orchestration_revision_snapshots association ON association.producing_job_id=job.job_id AND association.tenant_id=job.tenant_id WHERE job.job_id=$1`,[claim!.jobId]);
   expect(stored.rows[0]).toMatchObject({ir_version:"1.1.0",snapshot_id:expect.any(String)});
+  const branchRevision="e".repeat(40);
+  await repository.ingestEvent(context,branchEvent("swagger-main","2",branchRevision));
+  const [branchClaim]=await worker.claimJobs(workerIdentity,{limit:1});
+  const branchRequest={...request,request_id:"swagger-main",source:{...request.source,immutable_revision:branchRevision},
+    extraction_mode:"baseline" as const};
+  await expect(worker.runJob(workerIdentity,branchClaim!.lease,{
+   resolver:{resolve:async()=>({request:branchRequest,changedPaths:[],changedPathsComplete:true})},analyzer:analyzerPort,
+  })).resolves.toMatchObject({state:"succeeded"});
+  expect(calls).toBe(2);
+  const branchStored=await database.pool.query(`SELECT snapshot_id FROM ${sql}.orchestration_revision_snapshots WHERE immutable_revision=$1`,[branchRevision]);
+  expect(branchStored.rows).toHaveLength(1);
+  expect(branchStored.rows[0].snapshot_id).not.toBe(stored.rows[0].snapshot_id);
+  const nextRevision="f".repeat(40);
+  await repository.ingestEvent(context,branchEvent("swagger-main-next","3",nextRevision));
+  const [nextClaim]=await worker.claimJobs(workerIdentity,{limit:1});
+  const nextRequest={...branchRequest,request_id:"swagger-main-next",source:{...request.source,immutable_revision:nextRevision},
+    extraction_mode:"fallback_full_service" as const};
+  await expect(worker.runJob(workerIdentity,nextClaim!.lease,{
+   resolver:{resolve:async()=>({request:nextRequest,changedPaths:[],changedPathsComplete:true})},analyzer:analyzerPort,
+  })).resolves.toMatchObject({state:"succeeded"});
+  expect(calls).toBe(3); // Same source bytes still reanalyze the explicitly configured manifest input.
+  const nextStored=await database.pool.query(`SELECT snapshot_id FROM ${sql}.orchestration_revision_snapshots WHERE immutable_revision=$1`,[nextRevision]);
+  expect(nextStored.rows).toHaveLength(1);
+  expect(nextStored.rows[0].snapshot_id).not.toBe(branchStored.rows[0].snapshot_id);
  }finally{await database.cleanup();}
 });

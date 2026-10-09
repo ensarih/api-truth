@@ -49,6 +49,7 @@ const request = (
   requestId: string,
   changedPaths: string[],
   extractionMode: AnalyzerRequest["extraction_mode"],
+  serviceRoot = ".",
 ): AnalyzerRequest => ({
   exchange_version: "1.0.0",
   ir_version: "1.0.0",
@@ -57,12 +58,12 @@ const request = (
   source: {
     repository_id: "habitats",
     service_id: "aviary",
-    service_root: ".",
+    service_root: serviceRoot,
     immutable_revision: immutableRevision,
     source_digest: sourceDigest,
     access_label: "execution-fixture-read",
   },
-  resolution_inputs: [{ kind: "source_tree", path: ".", digest: sourceDigest }],
+  resolution_inputs: [{ kind: "source_tree", path: serviceRoot, digest: sourceDigest }],
   prior_dependencies: [],
   changed_paths: changedPaths,
   extraction_mode: extractionMode,
@@ -148,6 +149,95 @@ afterAll(async () => {
 });
 
 describe("D07 safe update execution", () => {
+  test("runs full-service analysis with bounded contained type-manifest inputs", async () => {
+    const requestWithManifests = structuredClone(successRequest);
+    requestWithManifests.resolution_inputs.push(
+      {kind: "type_manifest", path: "api/swagger.yaml", digest: `sha256:${"c".repeat(64)}`},
+      {kind: "type_manifest", path: "config/routing.json", digest: `sha256:${"d".repeat(64)}`},
+    );
+    const analyze = vi.fn(async (candidate: AnalyzerRequest) => {
+      expect(candidate.resolution_inputs).toEqual(requestWithManifests.resolution_inputs);
+      expect(candidate.extraction_mode).toBe("fallback_full_service");
+      return successResult;
+    });
+
+    const output = await executeUpdate({plan: successPlan, request: requestWithManifests,
+      base_snapshot: baseSnapshot, config_fingerprint: configFingerprint}, {analyze});
+
+    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(output.analyzer_result?.status).toBe("success");
+    expect(output.target_snapshot.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/birds"]);
+  });
+
+  test("rejects additional inputs on reuse and does not advance without analysis", async () => {
+    const plan = updatePlan(baseSnapshot, baseSnapshot.source.source_digest, []);
+    const reuseRequest = request(targetRevision, baseSnapshot.source.source_digest, "reuse-extra-manifest", [], "baseline");
+    reuseRequest.resolution_inputs.push({kind: "type_manifest", path: "api/swagger.yaml", digest: `sha256:${"e".repeat(64)}`});
+    const analyze = vi.fn();
+    await expect(executeUpdate({plan, request: reuseRequest, base_snapshot: baseSnapshot,
+      config_fingerprint: configFingerprint}, {analyze})).rejects.toMatchObject({code: "UPDATE_SCOPE_MISMATCH"});
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["duplicate manifest path", (candidate: AnalyzerRequest) => candidate.resolution_inputs.push(
+      {kind: "type_manifest", path: "api/swagger.yaml", digest: `sha256:${"f".repeat(64)}`})],
+    ["non-SHA digest", (candidate: AnalyzerRequest) => candidate.resolution_inputs.push(
+      {kind: "type_manifest", path: "api/swagger.yaml", digest: "pending"})],
+    ["runtime observation", (candidate: AnalyzerRequest) => candidate.resolution_inputs.push(
+      {kind: "runtime_observation", path: "receipt.json", digest: `sha256:${"a".repeat(64)}`})],
+    ["extra source tree", (candidate: AnalyzerRequest) => candidate.resolution_inputs.push(
+      {kind: "source_tree", path: "src", digest: `sha256:${"b".repeat(64)}`})],
+    ["generated sources", (candidate: AnalyzerRequest) => candidate.resolution_inputs.push(
+      {kind: "generated_sources", path: "generated", digest: `sha256:${"b".repeat(64)}`})],
+    ["classpath", (candidate: AnalyzerRequest) => candidate.resolution_inputs.push(
+      {kind: "classpath", locator: {scheme: "maven", coordinate: "org.example:library:1.0"}, digest: `sha256:${"b".repeat(64)}`})],
+  ])("rejects an unpinned or duplicate extra input: %s", async (_label, mutate) => {
+    const candidate = structuredClone(successRequest);
+    candidate.resolution_inputs.push({kind: "type_manifest", path: "api/swagger.yaml", digest: `sha256:${"c".repeat(64)}`});
+    mutate(candidate);
+    const analyze = vi.fn();
+    await expect(executeUpdate({plan: successPlan, request: candidate, base_snapshot: baseSnapshot,
+      config_fingerprint: configFingerprint}, {analyze})).rejects.toMatchObject({code: "UPDATE_SCOPE_MISMATCH"});
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  test("rejects extra manifests unless both plan and request select full-service fallback", async () => {
+    const candidate = structuredClone(successRequest);
+    candidate.extraction_mode = "baseline";
+    candidate.resolution_inputs.push({kind: "type_manifest", path: "api/swagger.yaml", digest: `sha256:${"c".repeat(64)}`});
+    const analyze = vi.fn();
+    await expect(executeUpdate({plan: successPlan, request: candidate, base_snapshot: baseSnapshot,
+      config_fingerprint: configFingerprint}, {analyze})).rejects.toMatchObject({code: "UPDATE_SCOPE_MISMATCH"});
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  test("rejects manifests outside a nested service root and more than sixteen manifests", async () => {
+    const nestedRoot = await makeRoot({"services/orders/app.ts": baseFiles["app.ts"]!});
+    const nestedDigest = digest({"app.ts": baseFiles["app.ts"]!});
+    const nestedBaseResult = await createAnalyzer({projectRoot: nestedRoot}).analyze(
+      request(baseRevision, nestedDigest, "nested-base", [], "baseline", "services/orders"));
+    const nestedBase = contractSnapshotFromAnalyzerResult(nestedBaseResult, configFingerprint).snapshot;
+    const nestedTargetDigest = digest({"app.ts": successFiles["app.ts"]!});
+    const nestedPlan = updatePlan(nestedBase, nestedTargetDigest, ["services/orders/app.ts"]);
+    const nestedRequest = request(targetRevision, nestedTargetDigest, "nested-target", ["services/orders/app.ts"],
+      "fallback_full_service", "services/orders");
+    const analyze = vi.fn();
+
+    nestedRequest.resolution_inputs.push({kind: "type_manifest", path: "services/orders-extra/api.yaml",
+      digest: `sha256:${"a".repeat(64)}`});
+    await expect(executeUpdate({plan: nestedPlan, request: nestedRequest, base_snapshot: nestedBase,
+      config_fingerprint: configFingerprint}, {analyze})).rejects.toMatchObject({code: "UPDATE_SCOPE_MISMATCH"});
+    expect(analyze).not.toHaveBeenCalled();
+
+    nestedRequest.resolution_inputs.pop();
+    for (let index = 0; index < 17; index++) nestedRequest.resolution_inputs.push({kind: "type_manifest",
+      path: `services/orders/api/${index}.yaml`, digest: `sha256:${String(index).padStart(64, "0")}`});
+    await expect(executeUpdate({plan: nestedPlan, request: nestedRequest, base_snapshot: nestedBase,
+      config_fingerprint: configFingerprint}, {analyze})).rejects.toMatchObject({code: "UPDATE_SCOPE_MISMATCH"});
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
   test("reuses the exact base snapshot and deterministic empty difference set without analyzer access", async () => {
     const plan = updatePlan(baseSnapshot, baseSnapshot.source.source_digest, []);
     const reuseRequest = request(
