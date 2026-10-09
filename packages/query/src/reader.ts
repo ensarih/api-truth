@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import {isProxy} from "node:util/types";
 import { parseConfig, parseContractSnapshot, type ContractSnapshot } from "@api-truth/ir";
 import { canonicalOrchestrationHash } from "@api-truth/orchestration";
 import { snapshotContentSha256, snapshotIdentitySha256 } from "../../catalog/src/canonical.js";
@@ -10,6 +11,7 @@ import { parseQuerySelection, type QuerySelection } from "./selector.js";
 
 export class QueryReadError extends Error {
   readonly code: "INVALID_QUERY_CONTEXT" | "INVALID_QUERY_DETAIL" | "INVALID_QUERY_SEARCH"
+    | "INVALID_QUERY_OBSERVATION"
     | "QUERY_RESULT_LIMIT_EXCEEDED" | "QUERY_NOT_FOUND_OR_DENIED"
     | "QUERY_STALE_SELECTION" | "QUERY_COMPARISON_UNAVAILABLE" | "QUERY_STORAGE_ERROR";
   constructor(code: QueryReadError["code"]) {
@@ -48,6 +50,17 @@ export type QuerySearchResult = Readonly<{ services: readonly Readonly<{
 }>[]; truncated: false }>;
 export type QueryHistoricalPublication = Readonly<{ publicationId: string; contentSha256: string;
   bytes: Uint8Array; selector: OpenApiPublicationSelector; pin: QueryPin }>;
+export type QueryObservationRecord = Readonly<{importId:string; recordId:string; sourceId:string; sourceVersion:string;
+  windowStart:string; windowEnd:string; importedAt:string; status:"confirmed"|"unresolved"; reason?:string;
+  endpointId?:string; mappingId?:string; method?:string; statusCode?:number; completeness:"metadata_only";
+  policyVersion:"metadata-only-1"}>;
+export type QueryObservationResult = Readonly<{status:"resolved"; selector:QuerySelection; pin:QueryPin;
+  records:readonly QueryObservationRecord[]; truncated:boolean}> | Readonly<{status:"unknown"|"unavailable"|"transitional"|"ambiguous";
+  selector:QuerySelection}>;
+export type QueryObservationOptions = Readonly<{limit:number; endpointId?:string}>;
+export interface QueryObservationReader {
+  readMetadataObservations(context:unknown,selection:unknown,options:unknown):Promise<QueryObservationResult>;
+}
 export type QueryReader = Readonly<{
   readContract(context: unknown, selection: unknown): Promise<QueryContractResult>;
   readEndpoint(context: unknown, selection: unknown, endpointId: unknown): Promise<QueryDetailResult<"endpoint">>;
@@ -126,6 +139,21 @@ const parseSearchRequest = (input: unknown): SearchRequest => {
     return Object.freeze({ tenantId, query, limit,
       ...(hasEnvironment ? { environment: environment as string } : {}) });
   } catch { throw new QueryReadError("INVALID_QUERY_SEARCH"); }
+};
+
+const parseObservationOptions = (input:unknown):QueryObservationOptions => {
+  try {
+    if(!input||typeof input!=="object"||Array.isArray(input)||isProxy(input)||Object.getPrototypeOf(input)!==Object.prototype)throw new Error();
+    const descriptors=Object.getOwnPropertyDescriptors(input);
+    const hasEndpoint=Object.hasOwn(descriptors,"endpointId");
+    const names=hasEndpoint?["limit","endpointId"]:["limit"];
+    if(Reflect.ownKeys(descriptors).length!==names.length||names.some(name=>!descriptors[name]||!("value" in descriptors[name]!)))throw new Error();
+    const limit=descriptors.limit!.value as unknown;
+    const endpointId=descriptors.endpointId?.value as unknown;
+    if(typeof limit!=="number"||!Number.isInteger(limit)||limit<1||limit>100
+      ||hasEndpoint&&!bounded(endpointId))throw new Error();
+    return Object.freeze({limit,...(hasEndpoint?{endpointId:endpointId as string}:{})});
+  }catch{throw new QueryReadError("INVALID_QUERY_OBSERVATION");}
 };
 
 const hasScopes = async (client: PoolClient, tenantId: string, principalId: string,
@@ -323,6 +351,63 @@ const readSelected = async (client: PoolClient, selector: QuerySelection,
   return Object.freeze({ ...selected, publication });
 };
 
+type ObservationDbRow = {import_id:string; record_id:string; source_id:string; source_version:string;
+  window_start:Date|string; window_end:Date|string; imported_at:Date|string; status:string; reason:string|null;
+  endpoint_id:string|null; mapping_id:string|null; method:string|null; status_code:number|null;
+  completeness:string; policy_version:string};
+const timestamp = (value:Date|string):string => {
+  const parsed=value instanceof Date?value:new Date(value);
+  if(!Number.isFinite(parsed.getTime()))return storage();
+  return parsed.toISOString();
+};
+const readMetadataObservationsWithClient = async (client:PoolClient,selector:QuerySelection,
+  principalId:string,options:QueryObservationOptions):Promise<QueryObservationResult> => {
+  if(selector.selector.kind!=="environment")throw new QueryReadError("INVALID_QUERY_OBSERVATION");
+  const selected=await readSelected(client,selector,principalId);
+  if(selected.status!=="resolved")return Object.freeze({status:selected.status,selector});
+  if(options.endpointId!==undefined&&!selected.snapshot.endpoints.some(endpoint=>endpoint.endpoint_id===options.endpointId))return denied();
+  const result=await client.query<ObservationDbRow>(
+    `SELECT imported.import_id::text,observed.record_id::text,imported.source_id,imported.source_version,
+       imported.window_start,imported.window_end,imported.imported_at,observed.status,observed.reason,
+       observed.endpoint_id,observed.mapping_id,observed.method,observed.status_code,
+       observed.completeness,observed.policy_version
+     FROM observation_records observed
+     JOIN observation_imports imported ON imported.tenant_id=observed.tenant_id
+       AND imported.repository_id=observed.repository_id AND imported.service_id=observed.service_id
+       AND imported.environment=observed.environment AND imported.import_id=observed.import_id
+     WHERE observed.tenant_id=$1 AND observed.repository_id=$2 AND observed.service_id=$3
+       AND observed.environment=$4 AND imported.snapshot_id=$5 AND imported.revision=$6
+       AND imported.config_fingerprint=$7 AND imported.checkpoint_version=$8::bigint
+       AND ($9::text IS NULL OR observed.endpoint_id=$9)
+     ORDER BY imported.imported_at DESC, imported.import_id::text COLLATE "C" DESC,
+       observed.record_id::text COLLATE "C" ASC LIMIT $10`,
+    [selector.tenantId,selector.repositoryId,selector.serviceId,selector.selector.environment,
+      selected.pin.snapshotId,selected.pin.revision,selected.pin.configFingerprint,
+      selected.pin.checkpointVersion,options.endpointId??null,options.limit+1]);
+  const truncated=result.rows.length>options.limit;
+  const records=result.rows.slice(0,options.limit).map(row=>{
+    const safeToken=(value:string|null):value is string=>value!==null&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+    const safeUuid=(value:string)=>/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+    const reasons=new Set(["environment_unresolved","revision_unknown","revision_mismatch","invalid_url","no_mapping",
+      "ambiguous_mapping","no_endpoint","ambiguous_endpoint","unsupported_route_selectors"]);
+    if(!safeUuid(row.import_id)||!safeUuid(row.record_id)||!safeToken(row.source_id)||!safeToken(row.source_version)
+      ||!(["confirmed","unresolved"].includes(row.status))||row.completeness!=="metadata_only"
+      ||row.policy_version!=="metadata-only-1"||row.status_code!==null&&(!Number.isInteger(row.status_code)
+        ||row.status_code<100||row.status_code>599)||row.method!==null&&!(["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"].includes(row.method)))return storage();
+    if(row.status==="confirmed"&&(!row.endpoint_id||!selected.snapshot.endpoints.some(endpoint=>endpoint.endpoint_id===row.endpoint_id)
+      ||!safeToken(row.mapping_id)||!row.method||row.status_code===null||row.reason!==null)
+      ||row.status==="unresolved"&&(row.endpoint_id!==null||row.mapping_id!==null||!row.reason||!reasons.has(row.reason)))return storage();
+    return Object.freeze({importId:row.import_id,recordId:row.record_id,sourceId:row.source_id,
+      sourceVersion:row.source_version,windowStart:timestamp(row.window_start),windowEnd:timestamp(row.window_end),
+      importedAt:timestamp(row.imported_at),status:row.status as "confirmed"|"unresolved",
+      ...(row.reason===null?{}:{reason:row.reason}),...(row.endpoint_id===null?{}:{endpointId:row.endpoint_id}),
+      ...(row.mapping_id===null?{}:{mappingId:row.mapping_id}),...(row.method===null?{}:{method:row.method}),
+      ...(row.status_code===null?{}:{statusCode:row.status_code}),completeness:"metadata_only" as const,
+      policyVersion:"metadata-only-1" as const});
+  });
+  return Object.freeze({status:"resolved",selector,pin:selected.pin,records:Object.freeze(records),truncated});
+};
+
 const searchConfiguredServices = async (client: PoolClient, principalId: string,
   request: SearchRequest): Promise<QuerySearchResult> => {
   const active = (await client.query<{ document: unknown; document_sha256: string }>(
@@ -391,7 +476,7 @@ export async function readQueryContractWithClient(client:PoolClient, options:{sc
 }
 
 /** Reads selector, authorization, and snapshot in one consistent database transaction. */
-export const createQueryReader = (pool: Pool, options: { schema: string }): QueryReader => {
+export const createQueryReader = (pool: Pool, options: { schema: string }): QueryReader & QueryObservationReader => {
   const schema = quoteEnvironmentSchema(options.schema);
   const withRead = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
     const client = await pool.connect().catch(() => { throw new QueryReadError("QUERY_STORAGE_ERROR"); });
@@ -414,6 +499,13 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
   };
   return Object.freeze({
     readContract,
+    async readMetadataObservations(contextInput:unknown,selectionInput:unknown,optionsInput:unknown):Promise<QueryObservationResult>{
+      const selector=parseQuerySelection(selectionInput);
+      if(selector.selector.kind!=="environment")throw new QueryReadError("INVALID_QUERY_OBSERVATION");
+      const options=parseObservationOptions(optionsInput);
+      const principalId=parseContext(contextInput,selector.tenantId);
+      return withRead(client=>readMetadataObservationsWithClient(client,selector,principalId,options));
+    },
     async readPublication(contextInput: unknown, keyInput: unknown): Promise<QueryHistoricalPublication> {
       const key = parsePublicationKey(keyInput);
       const principalId = parseContext(contextInput, key.tenantId);

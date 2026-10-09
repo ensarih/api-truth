@@ -1,10 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { QueryReader, QuerySelection, QueryContractResult } from "@api-truth/query";
+import type { QueryReader, QueryObservationReader, QuerySelection, QueryContractResult } from "@api-truth/query";
 
 export type PortalPrincipal = Readonly<{ tenantId: string; principalId: string }>;
 export type PortalOptions = Readonly<{
   authenticate(request: IncomingMessage): Promise<PortalPrincipal | undefined>;
-  query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">;
+  query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">
+    & Partial<QueryObservationReader>;
 }>;
 
 const page = `<!doctype html>
@@ -29,7 +30,8 @@ const page = `<!doctype html>
 <option value="revision">Revision</option></select></label><label>Name or revision <input name="toValue" maxlength="512" required></label>
 <button type="submit">Compare</button></form><p id="compare-status" role="status"></p><pre id="changes"></pre></section>
 </main><script src="/app.js" defer></script></body></html>`;
-const script = `const search=document.getElementById('search'),contract=document.getElementById('contract'),compare=document.getElementById('compare');
+const script = `const runtimeEnabled=__OBSERVATION_READER_ENABLED__;
+const search=document.getElementById('search'),contract=document.getElementById('contract'),compare=document.getElementById('compare');
 const status=document.getElementById('search-status'),results=document.getElementById('results');
 const contractStatus=document.getElementById('contract-status'),summary=document.getElementById('contract-summary');
 const endpoints=document.getElementById('endpoints'),schemas=document.getElementById('schemas'),evidence=document.getElementById('evidence'),detail=document.getElementById('detail');
@@ -58,6 +60,11 @@ contract.addEventListener('submit',async event=>{event.preventDefault();summary.
     if(body.status!=='resolved'){contractStatus.textContent='Contract state: '+body.status+'. No contract is available here.';return;}
     contractStatus.textContent='Contract available. Analyzed at '+body.analyzedAt+'.';
     const coverage=document.createElement('p');coverage.textContent='Coverage: '+body.coverage.status+'.';summary.append(coverage);
+    if(runtimeEnabled&&params.get('kind')==='environment'&&body.pin&&body.pin.checkpointVersion){
+      const activity=document.createElement('button');activity.type='button';activity.textContent='View runtime activity';
+      const runtimeParams=new URLSearchParams({repositoryId:params.get('repositoryId'),serviceId:params.get('serviceId'),
+        environment:params.get('value'),expectedCheckpointVersion:body.pin.checkpointVersion,limit:'20'});
+      activity.addEventListener('click',()=>showDetail('/api/observations?'+runtimeParams));summary.append(activity);}
     for(const item of body.endpoints){const row=document.createElement('li'),button=document.createElement('button');
       button.type='button';button.textContent=item.method+' '+item.path;
       button.addEventListener('click',()=>showDetail('/api/endpoint?'+params+'&endpointId='+encodeURIComponent(item.endpointId)));
@@ -190,9 +197,24 @@ export const createPortalServer = (options: PortalOptions): Server => {
       json(response, 400, { error: "INVALID_REQUEST" }); return;
     }
     if (url.pathname === "/") { send(response, 200, page, "text/html; charset=utf-8"); return; }
-    if (url.pathname === "/app.js") { send(response, 200, script, "text/javascript; charset=utf-8"); return; }
+    if (url.pathname === "/app.js") { send(response, 200,
+      script.replace("__OBSERVATION_READER_ENABLED__", String(typeof options.query.readMetadataObservations === "function")),
+      "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {
+      if (url.pathname === "/api/observations" && typeof options.query.readMetadataObservations === "function") {
+        const values = params(url, ["repositoryId", "serviceId", "environment"],
+          ["expectedCheckpointVersion", "limit", "endpointId"]);
+        const limit = values?.limit ?? "20";
+        const selected = values && selection(principal, values.repositoryId!, values.serviceId!,
+          "environment", values.environment!, values.expectedCheckpointVersion);
+        if (!values || !selected || !/^(?:[1-9]|[1-9][0-9]|100)$/.test(limit)
+          || values.endpointId !== undefined && !safeId(values.endpointId)) {
+          json(response, 400, {error: "INVALID_REQUEST"}); return;
+        }
+        json(response, 200, await options.query.readMetadataObservations(principal, selected,
+          {limit: Number(limit), ...(values.endpointId === undefined ? {} : {endpointId: values.endpointId})})); return;
+      }
       if (url.pathname === "/api/services") {
         const search = validSearch(url);
         if (!search) { json(response, 400, { error: "INVALID_REQUEST" }); return; }

@@ -49,6 +49,13 @@ test("search, service selection, UAT details, export, and unknown state work in 
     compareContracts: async () => ({ status: "unavailable", beforeStatus: "unknown", afterStatus: "unknown" }),
     readPublication: async (): Promise<QueryHistoricalPublication> => ({ publicationId,
       contentSha256: publication.contentSha256, bytes: openApiBytes, selector: publicationSelector, pin }),
+    readMetadataObservations: async (principal, rawSelection, options) => {
+      expect(principal).toEqual(context);
+      expect(rawSelection).toMatchObject({repositoryId: "commerce", serviceId: "orders",
+        selector: {kind: "environment", environment: "uat", expectedCheckpointVersion: "7"}});
+      expect(options).toEqual({limit: 20});
+      return {status: "resolved", selector: rawSelection as QuerySelection, pin, records: [], truncated: false};
+    },
   };
   const server = createPortalServer({
     authenticate: async (request) => {
@@ -75,6 +82,10 @@ test("search, service selection, UAT details, export, and unknown state work in 
     await expect(page.locator("#contract input[name=repositoryId]")).toHaveValue("commerce");
     await expect(page.locator("#contract input[name=serviceId]")).toHaveValue("orders");
     await expect(page.locator("#contract input[name=value]")).toHaveValue("uat");
+
+    await page.getByRole("button", {name: "View runtime activity"}).click();
+    await expect(page.locator("#detail")).toContainText('"checkpointVersion": "7"');
+    await expect(page.locator("#detail")).toContainText('"records": []');
 
     await page.getByRole("button", { name: "GET /orders/{id}" }).click();
     await expect(page.locator("#detail")).toContainText(`"endpoint_id": "${snapshot.endpoints[0]!.endpoint_id}"`);

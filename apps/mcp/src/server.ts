@@ -1,12 +1,13 @@
 import { Buffer } from "node:buffer";
 import { McpServer, type CallToolResult, type ServerContext } from "@modelcontextprotocol/server";
-import type { QueryReader, QuerySelection, QuerySelector } from "@api-truth/query";
+import type { QueryReader, QueryObservationReader, QuerySelection, QuerySelector } from "@api-truth/query";
 import * as z from "zod/v4";
 
 export type ApiTruthMcpPrincipal = Readonly<{ tenantId: string; principalId: string }>;
 
 export type ApiTruthMcpOptions = Readonly<{
-  query: Pick<QueryReader, "searchServices" | "readContract" | "readEndpoint" | "readSchema" | "compareContracts">;
+  query: Pick<QueryReader, "searchServices" | "readContract" | "readEndpoint" | "readSchema" | "compareContracts">
+    & Partial<QueryObservationReader>;
   authenticate(context: ServerContext): Promise<ApiTruthMcpPrincipal | undefined>;
   maxOutputBytes?: number;
 }>;
@@ -66,6 +67,9 @@ const searchSchema = z.object({
   maxResults: z.number().int().min(1).max(50).default(20),
   environment: boundedIdentifier.optional(),
 }).strict();
+const observationSchema = z.object({repositoryId: boundedIdentifier, serviceId: boundedIdentifier,
+  environment: boundedIdentifier, expectedCheckpointVersion: databaseVersion.optional(),
+  endpointId: boundedIdentifier.optional(), maxResults: z.number().int().min(1).max(100).default(20)}).strict();
 
 const successSchema = z.object({ ok: z.literal(true), data: z.unknown() }).strict();
 const failureSchema = z.object({ ok: z.literal(false), error: z.enum(publicErrors) }).strict();
@@ -231,5 +235,17 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
       selection(principal, args.repositoryId, args.serviceId, args.before),
       selection(principal, args.repositoryId, args.serviceId, args.after))));
 
+  if (typeof options.query.readMetadataObservations === "function") {
+    const readObservations = options.query.readMetadataObservations.bind(options.query);
+    server.registerTool("api_truth_get_observations", {
+      title: "Get API runtime metadata",
+      description: "Read sanitized runtime metadata for the current authorized environment pin. Samples do not establish schemas, required fields or authentication.",
+      inputSchema: observationSchema, outputSchema, annotations: readOnlyAnnotations,
+    }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
+      readObservations(principal, selection(principal, args.repositoryId, args.serviceId,
+        {kind: "environment", environment: args.environment,
+          ...(args.expectedCheckpointVersion === undefined ? {} : {expectedCheckpointVersion: args.expectedCheckpointVersion})}),
+      {limit: args.maxResults, ...(args.endpointId === undefined ? {} : {endpointId: args.endpointId})})));
+  }
   return server;
 };
