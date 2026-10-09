@@ -1,5 +1,5 @@
 import {isProxy} from "node:util/types";
-import {parseContractSnapshot,type Claim,type ContractSnapshot,type Evidence} from "../../ir/src/index.js";
+import {canonicalJsonStringify,parseContractSnapshot,type Claim,type ContractSnapshot,type Evidence} from "../../ir/src/index.js";
 import {parseQuerySelection,type QuerySelection} from "./selector.js";
 import type {QueryPin} from "./reader.js";
 
@@ -98,6 +98,23 @@ const routingDeclarationEvidence=(claim:Claim,evidenceById:Map<string,Evidence>,
     ||!entries.some(item=>item?.method==="deterministic_analysis"))return undefined;
   return [...claim.evidence_ids];
 };
+const javaProfile=(snapshot:ContractSnapshot)=>snapshot.analyzer.analyzer_id==="java-spring-mvc"
+  &&snapshot.analyzer.analyzer_version==="0.1.0";
+const javaDeclarationEvidence=(claim:Claim,evidenceById:Map<string,Evidence>,snapshot:ContractSnapshot,
+  endpointId:string):string[]|undefined=>{
+  if(!javaProfile(snapshot)||claim.predicate!=="route.declaration"||claim.verification!=="declared"
+    ||claim.subject.service_id!==snapshot.service.service_id||claim.subject.endpoint_id!==endpointId
+    ||claim.subject.schema_pointer!==undefined||claim.evidence_ids.length!==1)return undefined;
+  const evidence=evidenceById.get(claim.evidence_ids[0]!);
+  return evidenceMatches(evidence,snapshot,endpointId,"source_code","type_declaration")
+    ?[claim.evidence_ids[0]!]:undefined;
+};
+const javaRouteValue=(value:unknown,endpoint:ContractSnapshot["endpoints"][number]):value is {
+  method:string;path:string;selectors:unknown;handler:string}=>plain(value)
+  &&Object.keys(value).length===4&&["method","path","selectors","handler"].every(key=>Object.hasOwn(value,key))
+  &&value.method===endpoint.identity.method&&value.path===endpoint.application_path
+  &&safeIdentifier(value.handler)
+  &&canonicalJsonStringify(value.selectors)===canonicalJsonStringify(endpoint.identity.selectors);
 type SearchInput=Readonly<{snapshot:ContractSnapshot;selector:QuerySelection;pin:QueryPin}>;
 const resolvedInput=(input:unknown):SearchInput=>{
   const outer=descriptors(input);
@@ -134,6 +151,7 @@ export const searchOperationCandidates=(input:unknown,optionsInput:unknown):Oper
     return {status:"unknown",reason:!outer?"invalid_input":state==="resolved"?"invalid_input":"unresolved_selection"};
   }
   const {snapshot,selector,pin}=selected;
+  const java=javaProfile(snapshot);
   const terms=termsFor(intentQuery);if(terms.length===0)return {status:"unknown",reason:"no_usable_context",selector,pin};
   if(snapshot.endpoints.length===0)return {status:"unknown",reason:"no_usable_context",selector,pin};
   if(snapshot.endpoints.length>MAX_ENDPOINTS||snapshot.claims.length>MAX_CLAIMS)return {status:"unknown",reason:"scan_limit",selector,pin};
@@ -153,14 +171,17 @@ export const searchOperationCandidates=(input:unknown,optionsInput:unknown):Oper
     const routeInputs=endpointClaims.filter(claim=>claim.predicate==="route.declaration"||claim.predicate==="route.registration");
     const routeClaims=routeInputs.flatMap(claim=>{
       const doc=claim.predicate==="route.declaration";
-      const codeDeclaration=doc&&claim.value&&typeof claim.value==="object"&&!Array.isArray(claim.value)
+      const codeDeclaration=!java&&doc&&claim.value&&typeof claim.value==="object"&&!Array.isArray(claim.value)
         &&(claim.value as {controller?:unknown}).controller!==undefined;
-      const ids=codeDeclaration?routingDeclarationEvidence(claim,evidenceById,snapshot,endpoint.endpoint_id)
-        :claimEvidence(claim,evidenceById,snapshot,endpoint.endpoint_id,
-          doc?"api_document":"source_code",doc?"type_declaration":"deterministic_analysis");
+      const ids=java?doc&&javaRouteValue(claim.value,endpoint)
+        ?javaDeclarationEvidence(claim,evidenceById,snapshot,endpoint.endpoint_id):undefined
+        :codeDeclaration?routingDeclarationEvidence(claim,evidenceById,snapshot,endpoint.endpoint_id)
+          :claimEvidence(claim,evidenceById,snapshot,endpoint.endpoint_id,
+            doc?"api_document":"source_code",doc?"type_declaration":"deterministic_analysis");
       return ids?[{claim,ids,doc,codeDeclaration}]:[];
     });
-    const routeUnambiguous=routeInputs.length>0&&routeClaims.length===routeInputs.length&&routeClaims.every(({claim})=>claim.value&&typeof claim.value==="object"
+    const routeUnambiguous=routeInputs.length>0&&(!java||routeInputs.length===1)
+      &&routeClaims.length===routeInputs.length&&routeClaims.every(({claim})=>claim.value&&typeof claim.value==="object"
       &&!Array.isArray(claim.value)&&(claim.value as {method?:unknown}).method===endpoint.identity.method
       &&(claim.value as {path?:unknown}).path===endpoint.application_path);
     const pathClaim=routeUnambiguous?routeClaims[0]:undefined;
@@ -193,9 +214,14 @@ export const searchOperationCandidates=(input:unknown,optionsInput:unknown):Oper
             if(matches){score+=2*matches;for(const id of route.ids)cited.add(id);}
           }
         }
+        if(java&&javaRouteValue(claim.value,endpoint)){
+          const matches=countMatches(claim.value.handler,terms);
+          if(matches){score+=2*matches;for(const id of route.ids)cited.add(id);}
+        }
       }else if(claim.predicate==="route.registration"&&claim.value&&typeof claim.value==="object"&&!Array.isArray(claim.value)){
         if(routeClaims.some(item=>item.claim===claim)&&routeUnambiguous){endpointHasContext=true;hasUsableContext=true;}
       }else if(claim.predicate==="handler.symbol"&&claim.value&&typeof claim.value==="object"&&!Array.isArray(claim.value)){
+        if(java)continue;
         const valid=claimEvidence(claim,evidenceById,snapshot,endpoint.endpoint_id,"source_code","deterministic_analysis");
         if(!valid)continue;const symbol=(claim.value as {symbol?:unknown}).symbol;
         if(safeText(symbol,128)){endpointHasContext=true;hasUsableContext=true;

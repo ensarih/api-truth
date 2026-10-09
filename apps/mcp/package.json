@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@api-truth/query": "0.0.0",
+    "@api-truth/query": "0.1.0",
     "@modelcontextprotocol/server": "2.2.0",
     "zod": "4.2.0",
-    "@api-truth/semantics": "0.5.0"
+    "@api-truth/semantics": "0.6.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.2.0"

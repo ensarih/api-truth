@@ -1,5 +1,5 @@
 import {isProxy} from "node:util/types";
-import {parseContractSnapshot, type Claim, type ContractSnapshot, type Evidence} from "../../ir/src/index.js";
+import {canonicalJsonStringify,parseContractSnapshot, type Claim, type ContractSnapshot, type Evidence} from "../../ir/src/index.js";
 import {parseQuerySelection} from "../../query/src/selector.js";
 import {isSemanticDocumentTextSafe as documentTextSafe, isSemanticIntentQuerySafe,
   isSemanticSourceIdentifierSafe, isSemanticSourceRouteSafe} from "./egress.js";
@@ -162,6 +162,16 @@ const exactObject = (value: unknown, keys: readonly string[]): value is Record<s
   && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === keys.length
   && Object.keys(value).every(key => keys.includes(key));
 
+const javaProfile = (snapshot: ContractSnapshot): boolean => snapshot.analyzer.analyzer_id === "java-spring-mvc"
+  && snapshot.analyzer.analyzer_version === "0.1.0";
+const javaRouteValue = (value: unknown, endpoint: ContractSnapshot["endpoints"][number]): value is {
+  method: string; path: string; selectors: unknown; handler: string} =>
+  exactObject(value, ["method", "path", "selectors", "handler"])
+  && value.method === endpoint.identity.method && value.path === endpoint.application_path
+  && canonicalJsonStringify(value.selectors) === canonicalJsonStringify(endpoint.identity.selectors)
+  && isSemanticSourceRouteSafe(value.method, value.path)
+  && isSemanticSourceIdentifierSafe(value.handler);
+
 const sourceProjection = (input: SemanticAnalysisInput): SemanticProviderRequest["endpoints"] => {
   const evidence = new Map(input.snapshot.evidence.map(item => [item.evidence_id, item]));
   const selected = new Set(input.endpointIds);
@@ -176,7 +186,14 @@ const sourceProjection = (input: SemanticAnalysisInput): SemanticProviderRequest
     const route = routes[0]!;
     if (!sourceClaimEvidence(route, evidence, input.snapshot, endpoint.endpoint_id)) continue;
     const documents: SemanticProviderRequest["endpoints"][number]["documents"][number][] = [];
-    if (route.predicate === "route.registration" && route.verification === "established_by_analysis"
+    if (javaProfile(input.snapshot) && route.predicate === "route.declaration" && route.verification === "declared"
+      && route.evidence_ids.length === 1 && evidence.get(route.evidence_ids[0]!)?.method === "type_declaration"
+      && javaRouteValue(route.value, endpoint)) {
+      documents.push({kind: "code_route", text: `${route.value.method} ${route.value.path}`,
+        evidenceIds: [...route.evidence_ids]});
+      documents.push({kind: "code_handler", text: route.value.handler,
+        evidenceIds: [...route.evidence_ids]});
+    } else if (!javaProfile(input.snapshot) && route.predicate === "route.registration" && route.verification === "established_by_analysis"
       && exactObject(route.value, ["method", "path"]) && route.value.method === endpoint.identity.method
       && route.value.path === endpoint.application_path
       && isSemanticSourceRouteSafe(route.value.method, route.value.path)) {
@@ -190,7 +207,7 @@ const sourceProjection = (input: SemanticAnalysisInput): SemanticProviderRequest
           && sourceClaimEvidence(handler, evidence, input.snapshot, endpoint.endpoint_id))
           documents.push({kind: "code_handler", text: handler.value.symbol, evidenceIds: [...handler.evidence_ids]});
       }
-    } else if (route.predicate === "route.declaration" && route.verification === "declared"
+    } else if (!javaProfile(input.snapshot) && route.predicate === "route.declaration" && route.verification === "declared"
       && exactObject(route.value, ["method", "path", "controller", "action"])
       && route.value.method === endpoint.identity.method && route.value.path === endpoint.application_path
       && isSemanticSourceRouteSafe(route.value.method, route.value.path)

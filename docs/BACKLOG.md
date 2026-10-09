@@ -838,3 +838,12 @@ The configured host and immutable Git connector require one explicit contained d
 Validation: exact staged tracked-source archive, clean install, typecheck and 1,429 offline tests; all 295 PostgreSQL tests passed. Linux Java CI at `7caf3e1` also passed the first Java gate. OpenAPI compiler reference closure now traverses schema positions only, preserving literal enum/const JSON as data while retaining genuine nested component dependencies.
 
 Independent review also found percent-encoded local reference ambiguity; the 3.1 profile now rejects these fragments before emitting any endpoint or schema claim. Regression tests prove no wrong component is selected. Object-valued union members are diagnosed without coercing source JSON. The final six Git document worker cases passed again after these fixes.
+
+
+### Java declaration identifiers in discovery — bounded source projection (2026-10-09)
+
+Keyword search and semantic context accept exactly `java-spring-mvc@0.1.0` route declarations when method, path, selectors and the single endpoint-scoped source/type-declaration evidence match the immutable snapshot. Duplicate, mismatched or unsupported-profile declarations are withheld. Only safe route and handler identifiers enter candidate labels and provider context; selector values, DTO names, response/status/security assumptions and source bodies do not. Incomplete source coverage cannot establish absence. Semantic suggestions remain inferred, unreviewed and non-normative.
+
+Actual Java AST-to-catalog tests exercise distinct selector variants, candidate matching, provider context and hostile evidence mutations. Query advances to 0.1.0 and semantics to 0.6.0 with coordinated exact workspace dependencies. Broader Java contract extraction and runtime proof remain open.
+
+Validation: independent review, clean tracked-source install/typecheck and 1,429 offline tests; all 22 dedicated Java tests (including 11 discovery scenarios) and 42 query/portal/semantic PostgreSQL tests passed.
