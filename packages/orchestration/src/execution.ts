@@ -62,7 +62,7 @@ export type AnalysisWorkerPorts = Readonly<{
   resolver: { resolve(input: { tenantId: string; repository: Prepared["repository"];
     service: Prepared["service"]; immutableRevision: string; baseRevision?: string;
     configFingerprint: string }): Promise<{ request: AnalyzerRequest; changedPaths: string[];
-      changedPathsComplete: boolean }> };
+      changedPathsComplete: boolean }>; release?(request: unknown): Promise<void> };
   analyzer: { analyze(request: AnalyzerRequest): Promise<AnalyzerResult> };
 }>;
 
@@ -136,7 +136,8 @@ const validatedPorts = (input: unknown): AnalysisWorkerPorts => {
   try {
     if (input === null || typeof input !== "object" || Array.isArray(input)) fail("JOB_EXECUTION_FAILED");
     const ports = input as AnalysisWorkerPorts;
-    if (typeof ports.resolver?.resolve !== "function" || typeof ports.analyzer?.analyze !== "function") fail("JOB_EXECUTION_FAILED");
+    if (typeof ports.resolver?.resolve !== "function" || typeof ports.analyzer?.analyze !== "function"
+      || ports.resolver.release !== undefined && typeof ports.resolver.release !== "function") fail("JOB_EXECUTION_FAILED");
     return ports;
   } catch { fail("JOB_EXECUTION_FAILED"); }
 };
@@ -197,8 +198,11 @@ const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
         (request.resolution_inputs[0] && "path" in request.resolution_inputs[0]
           ? request.resolution_inputs[0].path : undefined))
       || !equal(request.changed_paths, paths)) fail("JOB_EXECUTION_FAILED");
-    return { request, changedPaths: paths, changedPathsComplete: raw.changedPathsComplete };
-  } catch { fail("JOB_EXECUTION_FAILED"); }
+    return detachedFrozen({ request, changedPaths: paths, changedPathsComplete: raw.changedPathsComplete });
+  } catch {
+    try {await ports.resolver.release?.(raw?.request);} catch { /* Preserve a fixed validation failure. */ }
+    fail("JOB_EXECUTION_FAILED");
+  }
 };
 
 const analyzeBaseline = async (request: AnalyzerRequest, ports: AnalysisWorkerPorts,
@@ -671,9 +675,15 @@ export const executeLeasedAnalysisJob = async (pool: Pool, options: { schema: st
     : prepared.job.kind === "pr_preview_analysis" ? await baseForPreview(pool, options, prepared) : undefined;
   await confirmLive(pool, options, worker, lease);
   const resolved = await resolveRequest(prepared, ports, baseSelection?.selectedRevision);
-  await confirmLive(pool, options, worker, lease);
-  const material = await materialize(prepared, resolved, ports, baseSelection,
-    () => confirmLive(pool, options, worker, lease));
+  let material: Materialized;
+  try {
+    await confirmLive(pool, options, worker, lease);
+    material = await materialize(prepared, resolved, ports, baseSelection,
+      () => confirmLive(pool, options, worker, lease));
+  } finally {
+    // Release owned source resources before a final authority check or any durable completion.
+    try {await ports.resolver.release?.(resolved.request);} catch {fail("JOB_EXECUTION_FAILED");}
+  }
   await confirmLive(pool, options, worker, lease);
   let completed: AnalysisCompletion;
   try {

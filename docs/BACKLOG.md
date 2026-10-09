@@ -1045,3 +1045,14 @@ Migration 0012 adds a nullable fingerprint to immutable revision associations. B
 Existing associations remain NULL, meaning unknown. An otherwise exact replay remains compatible and leaves NULL unchanged. This slice preserves existing source-only reuse and still performs full analysis for extra manifests and document profiles. It neither enables partial extraction/pruning nor treats a source digest alone as proof of unchanged additional inputs.
 
 Validation: independent review and a clean locked install/typecheck passed. All 1,552 offline and 358 PostgreSQL tests pass, including real completion replay/conflict checks, legacy NULL compatibility and preserved source-only reuse. Two migration-ledger assertions were updated for the twelfth migration. The preceding `775eda9` main/development checks and main synthetic lifecycle passed all CI gates.
+
+
+### Direct document resolution and source-session release — NB1 lifecycle (2026-10-09)
+
+Git connector 0.11.0 resolves the configured Swagger 2, OpenAPI 3.0 or OpenAPI 3.1 document directly from bounded immutable Git bytes, avoiding a preliminary analyzer call. An explicitly selected base commit yields an exact selected-document delta only when its contained document is readable and parses with the expected version. Missing or malformed base documents leave the proof incomplete; source profiles retain their existing fallback.
+
+An exact-request release hook makes disposable sessions available for cleanup even when analysis is skipped or resolution validation fails. Recent successful releases are idempotent, substituted requests are rejected, and failed cleanup remains retryable. D08 releases owned resources before its final authority check and completion transaction; failure withholds snapshots and pointers.
+
+All standalone document profiles remain partial because application/runtime binding is unverified. Unchanged bytes still trigger full analysis and fresh evidence for the target revision. This slice enables no partial-snapshot reuse, complete differences or runtime absence claim. Declaration caching requires a separate boundary; the existing complete source-reuse query selectors also require verification when selected and evidence revisions differ.
+
+Validation: independent review, 22 focused Git-port unit cases and nine real-Git PostgreSQL lifecycle cases cover all three profiles, full-analysis fallbacks, capacity release, release failure and supersession during cleanup. A clean locked install/typecheck passed all 1,562 offline and 367 PostgreSQL tests.

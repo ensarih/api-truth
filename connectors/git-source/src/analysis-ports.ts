@@ -6,6 +6,9 @@ import {
   type AnalyzerRequest,
 } from "../../../packages/ir/src/index.js";
 import { createConfiguredAnalyzer, configuredAnalyzerProfiles } from "../../../analyzers/host/src/index.js";
+import { readSelectedDocument } from "../../../analyzers/nodejs/src/source.js";
+import { parseStrictJson } from "../../../analyzers/nodejs/src/strict-json.js";
+import { parseStrictYaml } from "../../../analyzers/nodejs/src/strict-yaml.js";
 import type { AnalysisWorkerPorts } from "../../../packages/orchestration/src/execution.js";
 import { materializeGitSource, type MaterializedGitSource } from "./index.js";
 
@@ -14,6 +17,10 @@ type RepositoryBinding = Readonly<{ tenantId: string; repositoryId: string; repo
 type Limits = Readonly<{ maxFiles: number; maxBytes: number; timeoutMs: number; maxOutputBytes: number; maxSessions?: number }>;
 type Session = { tree: MaterializedGitSource; request: AnalyzerRequest; canonical: string;
   host: ReturnType<typeof createConfiguredAnalyzer> };
+type LocalGitAnalysisPorts = AnalysisWorkerPorts & {
+  resolver: AnalysisWorkerPorts["resolver"] & { release(request: AnalyzerRequest): Promise<void> };
+  dispose(): Promise<void>;
+};
 
 const MAX_SESSIONS = 8;
 const sha256 = (value: string | Buffer) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -96,17 +103,42 @@ async function manifestDigest(tree: MaterializedGitSource, adapterId: string,
     return sha256(`${relativePath}\0${text}`);
   }
   if (adapterId === "nodejs-swagger-express-mw") return sha256(`${configured.path}\0${text}`);
-  if (adapterId === "nodejs-swagger2-document" || adapterId === "openapi3-document" || adapterId === "openapi31-document") {
-    return sha256(`${configured.path}\0${text}`);
-  }
   return fail();
+}
+
+type SelectedDelta = { changedPaths: string[]; changedPathsComplete: boolean };
+const unknownSelectedDelta = (): SelectedDelta => ({ changedPaths: [], changedPathsComplete: false });
+async function selectedDocumentDelta(repoPath: string, baseRevision: string | undefined, serviceRoot: string,
+  selectedPath: string, adapterId: string, currentDigest: string, limits: Limits): Promise<SelectedDelta> {
+  if (baseRevision === undefined) return unknownSelectedDelta();
+  let baseTree: MaterializedGitSource | undefined;
+  let delta = unknownSelectedDelta();
+  try {
+    baseTree = await materializeGitSource({ repoPath, revision: baseRevision, serviceRoot,
+      limits: { maxFiles: limits.maxFiles, maxBytes: limits.maxBytes } });
+    const previous = await readSelectedDocument(baseTree.projectRoot, serviceRoot, selectedPath,
+      Math.min(limits.maxOutputBytes, 2_000_000));
+    const parsed = selectedPath.endsWith(".json") ? parseStrictJson(previous.text) : parseStrictYaml(previous.text);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return delta;
+    const declaredVersion = adapterId === "nodejs-swagger2-document" ? (parsed as Record<string, unknown>).swagger
+      : (parsed as Record<string, unknown>).openapi;
+    if (adapterId === "nodejs-swagger2-document" ? declaredVersion !== "2.0"
+      : typeof declaredVersion !== "string" || !declaredVersion.startsWith(adapterId === "openapi3-document" ? "3.0." : "3.1."))
+      return delta;
+    delta = { changedPaths: previous.digest === currentDigest ? [] : [selectedPath], changedPathsComplete: true };
+  } catch {
+    // A missing or invalid selected base document is not a complete change proof.
+  } finally {
+    if (baseTree) await baseTree.dispose();
+  }
+  return delta;
 }
 
 /** Bind the D08 analysis ports to an explicit local-repository allowlist and one-shot immutable source sessions. */
 export function createLocalGitAnalysisPorts(options: {
   repositories: readonly RepositoryBinding[];
   limits: Limits;
-}): AnalysisWorkerPorts & { dispose(): Promise<void> } {
+}): LocalGitAnalysisPorts {
   if (!Array.isArray(options.repositories) || options.repositories.length < 1 || options.repositories.length > 128
     || !boundedLimits(options.limits)) fail();
   const limits: Limits = Object.freeze({ ...options.limits });
@@ -122,6 +154,9 @@ export function createLocalGitAnalysisPorts(options: {
   const maxSessions = limits.maxSessions ?? MAX_SESSIONS;
   const sessions = new Map<string, Session>();
   const pendingCleanup = new Map<string, MaterializedGitSource>();
+  const pendingSessionCleanup = new Map<string, string>();
+  const releasing = new Map<string, { canonical: string; promise: Promise<void> }>();
+  const released = new Map<string, string>();
   const inProgressRequests = new Set<string>();
   const activeRequestIds = new Set<string>();
   let reservations = 0;
@@ -140,9 +175,49 @@ export function createLocalGitAnalysisPorts(options: {
       throw fail();
     }
   };
+  const rememberReleased = (requestId: string, canonical: string) => {
+    released.delete(requestId);
+    released.set(requestId, sha256(canonical));
+    if (released.size > 1024) released.delete(released.keys().next().value!);
+  };
+  const releaseTree = (requestId: string, canonical: string, tree: MaterializedGitSource): Promise<void> => {
+    pendingSessionCleanup.set(requestId, canonical);
+    const promise = cleanup(requestId, tree).then(() => {
+      pendingSessionCleanup.delete(requestId);
+      rememberReleased(requestId, canonical);
+    }).finally(() => { releasing.delete(requestId); });
+    releasing.set(requestId, { canonical, promise });
+    return promise;
+  };
 
-  const ports: AnalysisWorkerPorts & { dispose(): Promise<void> } = {
+  const ports: LocalGitAnalysisPorts = {
     resolver: {
+      async release(rawRequest) {
+        const parsed = parseAnalyzerRequest(rawRequest);
+        if (!parsed.ok) return fail();
+        const requestId = parsed.value.request_id;
+        const canonical = canonicalJsonStringify(parsed.value);
+        if (activeRequestIds.has(requestId)) return fail();
+        const activeRelease = releasing.get(requestId);
+        if (activeRelease) {
+          if (activeRelease.canonical !== canonical) return fail();
+          return activeRelease.promise;
+        }
+        const session = sessions.get(requestId);
+        if (!session) {
+          const pendingCanonical = pendingSessionCleanup.get(requestId);
+          if (pendingCanonical !== undefined) {
+            const tree = pendingCleanup.get(requestId);
+            if (disposed || pendingCanonical !== canonical || !tree) return fail();
+            return releaseTree(requestId, canonical, tree);
+          }
+          if (released.get(requestId) !== sha256(canonical)) return fail();
+          return;
+        }
+        if (disposed || session.canonical !== canonical) return fail();
+        sessions.delete(requestId);
+        return releaseTree(requestId, canonical, session.tree);
+      },
       async resolve(rawInput) {
         if (disposed || reservations + sessions.size + activeAnalyses + pendingCleanup.size >= maxSessions) return fail();
         const key = `${rawInput.tenantId}\0${rawInput.repository.repository_id}`;
@@ -195,27 +270,34 @@ export function createLocalGitAnalysisPorts(options: {
           };
           const probe = parseAnalyzerRequest(probeRaw);
           if (!probe.ok) return fail();
-          const probedResult = await host.analyze(probe.value);
-          if (!/^sha256:[a-f0-9]{64}$/i.test(probedResult.source.source_digest)) return fail();
+          const selectedDocument = selection.standaloneDocument
+            ? await readSelectedDocument(tree.projectRoot, rawInput.service.root, selection.expectedInputs[0]!.path,
+              Math.min(limits.maxOutputBytes, 2_000_000)) : undefined;
+          const selectedDelta = selectedDocument === undefined ? unknownSelectedDelta()
+            : await selectedDocumentDelta(repoPath, rawInput.baseRevision, rawInput.service.root,
+              selection.expectedInputs[0]!.path, rawInput.service.analyzer.adapter_id, selectedDocument.digest, limits);
+          const probedResult = selectedDocument === undefined ? await host.analyze(probe.value) : undefined;
+          const sourceDigest = selectedDocument?.digest ?? probedResult?.source.source_digest;
+          if (sourceDigest === undefined || !/^sha256:[a-f0-9]{64}$/i.test(sourceDigest)) return fail();
           const normalizedInputs: Array<{ kind: "source_tree" | "type_manifest"; path: string; digest: string }> =
             selection.standaloneDocument ? [] : [
-              { kind: "source_tree", path: rawInput.service.root, digest: probedResult.source.source_digest },
+              { kind: "source_tree", path: rawInput.service.root, digest: sourceDigest },
             ];
           for (const item of selection.expectedInputs) {
-            const digest = await manifestDigest(tree, rawInput.service.analyzer.adapter_id, item);
-            if (selection.standaloneDocument && digest !== probedResult.source.source_digest) return fail();
+            const digest = selectedDocument?.digest ?? await manifestDigest(tree, rawInput.service.analyzer.adapter_id, item);
             normalizedInputs.push({ kind: "type_manifest", path: item.path, digest });
           }
           const parsed = parseAnalyzerRequest({ ...probe.value, source: { ...probe.value.source,
-            source_digest: probedResult.source.source_digest }, resolution_inputs: normalizedInputs });
+            source_digest: sourceDigest }, resolution_inputs: normalizedInputs, changed_paths: selectedDelta.changedPaths });
           if (!parsed.ok) return fail();
           if (disposed) return fail();
           const request = parsed.value;
           const canonical = canonicalJsonStringify(request);
           if (sessions.has(requestId)) return fail();
           sessions.set(requestId, { tree, request, canonical, host });
+          released.delete(requestId);
           tree = undefined;
-          return { request, changedPaths: [], changedPathsComplete: false };
+          return { request, ...selectedDelta };
         } catch {
           return fail();
         } finally {
@@ -251,7 +333,10 @@ export function createLocalGitAnalysisPorts(options: {
           return fail();
         } finally {
           try {
+            pendingSessionCleanup.set(parsed.value.request_id, session.canonical);
             await cleanup(parsed.value.request_id, session.tree);
+            pendingSessionCleanup.delete(parsed.value.request_id);
+            rememberReleased(parsed.value.request_id, session.canonical);
           } finally {
             activeRequestIds.delete(parsed.value.request_id);
             activeAnalyses--;
@@ -268,11 +353,15 @@ export function createLocalGitAnalysisPorts(options: {
       disposed = true;
       if (reservations > 0) await reservationsDrained;
       if (activeAnalyses > 0) await analysesDrained;
+      await Promise.allSettled([...releasing.values()].map(item => item.promise));
       for (const [requestId, session] of sessions) {
         await cleanup(requestId, session.tree);
         sessions.delete(requestId);
       }
-      for (const [requestId, tree] of pendingCleanup) await cleanup(requestId, tree);
+      for (const [requestId, tree] of pendingCleanup) {
+        await cleanup(requestId, tree);
+        pendingSessionCleanup.delete(requestId);
+      }
     },
   };
   return ports;

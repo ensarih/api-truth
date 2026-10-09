@@ -1,6 +1,6 @@
 # Local Git source connector
 
-`@api-truth/connector-git-source@0.7.0` reads one explicit local repository,
+`@api-truth/connector-git-source@0.11.0` reads one explicit local repository,
 one immutable 40-character commit ID, and one normalized service-tree path. It
 reads the committed tree and blobs directly; working-tree edits, staged changes,
 untracked files, ignored files, branch names, and remote refs do not select
@@ -40,7 +40,7 @@ explicit `(tenantId, repositoryId) → absolute local repository path` allowlist
 the configured repository locator is never interpreted as a filesystem path.
 Resolve accepts only a full immutable commit ID and a source profile compiled
 into the analyzer host: Express, routing-controllers, swagger-express-mw,
-standalone Swagger 2, or standalone OpenAPI 3.0. Runtime observations are
+standalone Swagger 2, OpenAPI 3.0, or OpenAPI 3.1. Runtime observations are
 rejected. Standalone document profiles require an explicit IR 1.1 selection
 and exactly one owner-configured, contained `type_manifest`; their request has
 that manifest only, with no `source_tree`, entrypoint, or extra inputs. The
@@ -50,21 +50,31 @@ declarations only and do not establish application route binding. Configured
 routing-controller manifests and the middleware's exact default Swagger
 document retain their adapter-specific digest formats.
 
-The adapter asks the compiled analyzer host to measure the selected source
-projection, then returns a normalized request containing those measured
-digests. Adapter analysis may therefore run once during resolution and again
-when orchestration submits the exact request. The deterministic request ID
+Standalone document resolution reads and hashes the selected committed bytes
+directly, without a preliminary analyzer call. Source profiles still ask the
+compiled analyzer host to measure their selected projection; those profiles
+may run once during resolution and again for the exact submitted request. The deterministic request ID
 fingerprints the tenant, repository, service, commit and optional base,
 configuration fingerprint, selected analyzer, and a frozen copy of the limits.
 The analyzer port accepts that exact canonical request once; changed fields,
 substituted requests, and duplicate active request IDs are rejected. The host
 is bound to the disposable materialization, which is removed after analysis,
-rejected substitution, or `dispose()`. Cleanup failures remain recorded for a
-later `dispose()` retry and are surfaced as a fixed safe error.
+rejected substitution, exact-request `resolver.release(request)`, or `dispose()`.
+Release is idempotent for the most recent 1,024 completed request identities;
+substituted requests are rejected. Failed cleanup remains retryable for the
+exact request or through `dispose()` and surfaces a fixed safe error. D08
+releases the session before its final authority check and durable completion;
+a cleanup failure prevents snapshot and branch promotion.
 
-Changed paths are intentionally reported as incomplete and empty. Requests use
-baseline mode without a base revision and full-service fallback mode with one;
-the adapter does not infer changes or authorize incremental reuse. Active
+For standalone documents, an explicitly selected base commit is materialized
+and its contained document is parsed and hashed within the same bounds. Equal
+bytes produce a complete empty selected-document delta; different bytes name
+the selected path. Missing or malformed base documents leave the delta
+incomplete. This proof covers only the selected document. Source profiles
+still report incomplete empty deltas. Requests use baseline mode without a
+base revision and full-service fallback with one. All three document profiles
+still require full analysis because their runtime binding and coverage are
+unverified; this delta does not authorize snapshot reuse or absence claims. Active
 materializations are capped (eight sessions by default, with a lower cap
 configurable), and all reads remain offline and non-executing. This provides a
 local source-to-analyzer bridge, not remote-provider acquisition, branch
