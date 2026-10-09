@@ -37,19 +37,19 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for five bounded profiles; configured source-manifest paths are pinned and multi-input full-service branch updates pass through D07/D08. Bounded standalone Swagger/OpenAPI document orchestration is also supported with one exact config-pinned input and full reanalysis. Independent runtime receipt/key identity and safe multi-input reuse remain open. Runtime observations are rejected by D08 until separately pinned. |
+| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for seven bounded profiles; configured source-manifest paths are pinned and multi-input full-service branch updates pass through D07/D08. Bounded standalone Swagger/OpenAPI document orchestration is also supported with one exact config-pinned input and full reanalysis. Independent runtime receipt/key identity and safe multi-input reuse remain open. Runtime observations are rejected by D08 until separately pinned. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
-| NB3 / NB4 | Open | Cross-adapter hostile-input/invalidation matrix and complete bounded Swagger profile gate. |
-| NB5 | Open | Decorator framework conformance and source-to-downstream update gate. |
+| NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
+| NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
 | NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Sanitization, unambiguous environment URL correlation and safe examples. |
-| P4-SEMANTICS | In progress | Grounded selected-operation intent discovery and authorized provider adapters; undocumented code context, corpus retrieval, persistence/review and evaluation remain open. |
-| D12-S0/S2 | Open | Live provider facts, artifacts, ordering, authentication and environment wiring. |
+| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
+| D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
-| D13-S2 / P6-OPS | Open | Release hygiene, capacity/recovery/access audits and reproducible operating gates. |
+| D13-S2 / P6-OPS | In progress | Private reporting, pinned toolchains/CI and root-lock metadata inventory are implemented; ownership/legal review, capacity/recovery/access audits and reproducible operating gates remain. |
 
 ## Current position
 
@@ -60,7 +60,7 @@ provider or enterprise pilot claim.
 | D09 | Complete: slices 0–4 | Deployment facts, serving checkpoints, exact-scope repair, authorized views, and the local lifecycle pass 320 offline and 181 PostgreSQL tests. Independent review findings on request races, removed scopes, migration cutover, and stale views are fixed. |
 | D10 | Complete: slices 0–4 | Evidence-gated OpenAPI 3.1 compilation, safe `consumes` variant aggregation, durable revision/branch/environment publication, offline official-schema validation, and a local round trip pass full suites. |
 | D11–D13 | D11 complete; D12–D13 in progress | Shared authorized query, portal, and MCP gates pass; provider wiring, full lifecycle publication, and release readiness remain. |
-| Phases 2–6 | Planned | Java/framework conformance, runtime evidence, semantic discovery, related documents, and operating readiness follow their roadmap gates. |
+| Phases 2–6 | In progress | Bounded Java, runtime metadata, semantic discovery and release-hygiene slices are implemented; complete conformance, related documents and operating readiness still follow their roadmap gates. |
 
 The first working release requires the complete Phase 1 loop. The implemented
 components still need a live provider connection and the full release scenario.
@@ -920,3 +920,10 @@ Validation: clean tracked-source install/typecheck and all 1,514 offline tests p
 Two Linux offline jobs exceeded the 15-second fixture-driver test deadline while every other test passed. The public synthetic driver now reuses the same strict local fact normalizer in-process instead of launching seven Node/IR/validator processes. It preserves all seven event kinds, IDs, provider fixture sequences and previous-event chaining, and refuses unconfigured branches without writing an artifact. Standalone CLI behavior remains covered independently. The test timeout and assertions were not weakened.
 
 Validation: independent review, clean tracked-source install/typecheck and all 1,514 offline tests passed. The driver/CLI focused suite passed 18 tests; the formerly slow fixture test completed within the unchanged deadline. Linux CI rerun remains the final startup-regression gate.
+
+
+### Synthetic example portal form — P3 optional UI (2026-10-09)
+
+Portal 0.2.0 shows the policy-ID form only when the host enables the example service, and enables generation only for a resolved environment checkpoint. It posts the currently displayed pin and clears pending/results when the policy or contract changes. Returned tenant, source digest, full pin and endpoint membership must match the loaded contract. The actual returned endpoint is labeled; the form does not claim the policy targets a user-selected endpoint. All example content is rendered as text, and malformed or stale responses clear the display. These are synthetic placeholders, not captured traffic.
+
+Validation: independent UI/scope review, clean tracked-source install/typecheck and all 1,514 offline tests passed. All eight real-browser tests and twelve portal/observation PostgreSQL tests passed. Browser regressions cover malicious text, invalid tenant/endpoint/source digest, malformed withheld results, stale policy/contract replies and the absent optional capability.
