@@ -229,3 +229,33 @@ test("serving checkpoint advancement between example reads prevents stale delive
   await expect(exampleService(read).generate(context,exampleRequest()))
     .rejects.toMatchObject({code:"EXAMPLE_STALE_CONTEXT"});
 });
+
+
+test("portal and MCP deliver the same synthetic example pin and reject revoked access",async()=>{
+  const reader=query(),examples=exampleService(reader.readContract);
+  const direct=await examples.generate(context,exampleRequest());
+  const portal=createPortalServer({authenticate:async()=>context,query:reader,examples});
+  portal.listen(0,"127.0.0.1");await once(portal,"listening");
+  const address=portal.address();if(!address||typeof address==="string")throw Error("Missing portal address");
+  const client=new Client({name:"synthetic-example-pg",version:"1.0.0"});
+  const server=createApiTruthMcpServer({authenticate:async()=>context,query:reader,examples});
+  const [clientTransport,serverTransport]=InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);await client.connect(clientTransport);
+  const input={repositoryId,serviceId,environment,expectedCheckpointVersion:"7",policyId:"customer-summary"};
+  const post=()=>fetch(`http://127.0.0.1:${address.port}/api/examples`,{method:"POST",
+    headers:{"content-type":"application/json"},body:JSON.stringify(input)});
+  try{
+    const response=await post();expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(direct);
+    const mcp=await client.callTool({name:"api_truth_get_synthetic_example",arguments:input});
+    expect(mcp).toMatchObject({structuredContent:{ok:true,data:direct}});
+    await database.pool.query(`UPDATE ${schema}.principal_scope_grants SET active=false
+      WHERE tenant_id=$1 AND principal_id=$2`,[tenantId,principalId]);
+    expect((await post()).status).toBe(404);
+    expect(await client.callTool({name:"api_truth_get_synthetic_example",arguments:input}))
+      .toMatchObject({isError:true,structuredContent:{ok:false,error:"NOT_FOUND_OR_DENIED"}});
+  }finally{
+    await Promise.allSettled([client.close(),server.close()]);
+    portal.closeAllConnections();portal.close();await once(portal,"close");
+  }
+});

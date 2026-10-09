@@ -5,6 +5,7 @@ import {validateOperationSearchOptions, type QueryReader, type QueryObservationR
 import { parseStrictJson } from "../../../packages/ir/src/strict-json.js";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
+import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
 
 export type PortalPrincipal = Readonly<{ tenantId: string; principalId: string }>;
 export type PortalOptions = Readonly<{
@@ -12,6 +13,7 @@ export type PortalOptions = Readonly<{
   query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">
     & Partial<QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader>;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
+  examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
 }>;
 
 const page = `<!doctype html>
@@ -141,6 +143,10 @@ const error = (response: ServerResponse, failure: unknown): void => {
   else if (code === "SEMANTIC_NOT_FOUND_OR_DENIED") json(response, 404, { error: "NOT_FOUND" });
   else if (code === "SEMANTIC_INVALID_REQUEST") json(response, 400, { error: "INVALID_REQUEST" });
   else if (code === "SEMANTIC_STORAGE_ERROR") json(response, 503, { error: "SEMANTIC_UNAVAILABLE" });
+  else if (code === "EXAMPLE_NOT_FOUND_OR_DENIED") json(response, 404, { error: "NOT_FOUND" });
+  else if (code === "EXAMPLE_STALE_CONTEXT") json(response, 409, { error: "STALE_SELECTION" });
+  else if (code === "EXAMPLE_INVALID_REQUEST") json(response, 400, { error: "INVALID_REQUEST" });
+  else if (code === "EXAMPLE_STORAGE_ERROR") json(response, 503, { error: "EXAMPLE_UNAVAILABLE" });
   else if (code === "INVALID_QUERY_SELECTION" || code === "INVALID_QUERY_CONTEXT"
     || code === "INVALID_QUERY_DETAIL" || code === "INVALID_QUERY_SEARCH")
     json(response, 400, { error: "INVALID_REQUEST" });
@@ -315,6 +321,20 @@ const parseCorpusBody=(input:unknown):{environment:string;intentQuery:string;lim
     ...(Object.hasOwn(body,"limit")?{limit:body.limit}:{})});
   return options?{environment:body.environment,intentQuery:options.intentQuery,limit:options.limit??20}:undefined;
 };
+const parseExampleBody=(input:unknown,principal:PortalPrincipal):
+  {selection:QuerySelection;policyId:string}|undefined=>{
+  if(!input||typeof input!=="object"||Array.isArray(input)
+    ||Object.getPrototypeOf(input)!==Object.prototype)return undefined;
+  const body=input as Record<string,unknown>;
+  if(Object.keys(body).sort().join(",")!=="environment,expectedCheckpointVersion,policyId,repositoryId,serviceId"
+    ||!safeId(body.repositoryId)||!safeId(body.serviceId)||!safeId(body.environment)
+    ||typeof body.expectedCheckpointVersion!=="string"||!decimalVersion(body.expectedCheckpointVersion)
+    ||typeof body.policyId!=="string"||body.policyId.length>128
+    ||!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(body.policyId))return undefined;
+  const selected=selection(principal,body.repositoryId,body.serviceId,"environment",
+    body.environment,body.expectedCheckpointVersion);
+  return selected?{selection:selected,policyId:body.policyId}:undefined;
+};
 
 /** The host supplies authentication. No request header becomes a principal by itself. */
 export const createPortalServer = (options: PortalOptions): Server => {
@@ -324,6 +344,8 @@ export const createPortalServer = (options: PortalOptions): Server => {
     throw new Error("PORTAL_HOST_REQUIRED");
   const semanticDiscover = typeof options.semantic?.discover === "function"
     ? options.semantic.discover.bind(options.semantic) : undefined;
+  const generateExample=typeof options.examples?.generate==="function"
+    ? options.examples.generate.bind(options.examples):undefined;
   return createServer(async (request, response) => {
     let principal: PortalPrincipal | undefined;
     try { principal = await options.authenticate(request); } catch { /* Fail closed. */ }
@@ -331,7 +353,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
       (request.method === "POST" ? jsonClose : json)(response, 401, { error: "NOT_AUTHORIZED" }); return;
     }
     if (!request.url || request.url.length > 2048 || (request.method !== "GET"
-      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates"]
+      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/examples"]
         .includes(request.url.split("?", 1)[0]!)))) {
       (request.method === "POST" ? jsonClose : json)(response, 400, { error: "INVALID_REQUEST" }); return;
     }
@@ -348,11 +370,12 @@ export const createPortalServer = (options: PortalOptions): Server => {
       "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {
-      if (["/api/discover", "/api/candidates", "/api/corpus-candidates"].includes(url.pathname)) {
+      if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/examples"].includes(url.pathname)) {
         if (url.search.length > 0) { jsonClose(response, 400, {error: "INVALID_REQUEST"}); return; }
         const candidate = url.pathname === "/api/candidates";
         const corpus = url.pathname === "/api/corpus-candidates";
-        if (request.method !== "POST" || (candidate
+        const example=url.pathname === "/api/examples";
+        if (request.method !== "POST" || (example?generateExample===undefined:candidate
           ? typeof options.query.readOperationCandidates !== "function"
           : corpus?typeof options.query.searchOperationCandidatesAcrossServices !== "function"
             : semanticDiscover === undefined)) {
@@ -373,6 +396,11 @@ export const createPortalServer = (options: PortalOptions): Server => {
         let body: unknown;
         try { body = parseStrictJson(new TextDecoder("utf-8", {fatal: true}).decode(raw), {maxDepth: 8, maxNodes: 128}); }
         catch { json(response, 400, {error: "INVALID_REQUEST"}); return; }
+        if(example){
+          const requestData=parseExampleBody(body,principal);
+          if(!requestData){json(response,400,{error:"INVALID_REQUEST"});return;}
+          json(response,200,await generateExample!(principal,requestData));return;
+        }
         if(corpus){
           const requestData=parseCorpusBody(body);
           if(!requestData){json(response,400,{error:"INVALID_REQUEST"});return;}

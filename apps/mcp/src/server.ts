@@ -4,6 +4,7 @@ import type { QueryReader, QueryObservationReader, QueryOperationReader, QueryCo
   QuerySelection, QuerySelector } from "@api-truth/query";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
+import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
 import * as z from "zod/v4";
 
 export type ApiTruthMcpPrincipal = Readonly<{ tenantId: string; principalId: string }>;
@@ -14,6 +15,7 @@ export type ApiTruthMcpOptions = Readonly<{
   authenticate(context: ServerContext): Promise<ApiTruthMcpPrincipal | undefined>;
   maxOutputBytes?: number;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
+  examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
 }>;
 
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -89,6 +91,9 @@ const corpusCandidateSchema = z.object({environment: boundedIdentifier,
   intentQuery: z.string().min(1).max(512).regex(/^[^\u0000-\u001f\u007f]+$/)
     .refine(isSemanticIntentQuerySafe),
   maxResults: z.number().int().min(1).max(20).default(20)}).strict();
+const syntheticExampleSchema = z.object({repositoryId: boundedIdentifier,serviceId: boundedIdentifier,
+  environment: boundedIdentifier,expectedCheckpointVersion: databaseVersion,
+  policyId: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)}).strict();
 
 const successSchema = z.object({ ok: z.literal(true), data: z.unknown() }).strict();
 const failureSchema = z.object({ ok: z.literal(false), error: z.enum(publicErrors) }).strict();
@@ -136,6 +141,9 @@ const mapQueryError = (error: unknown): PublicError => {
     case "SEMANTIC_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
     case "SEMANTIC_STALE_CONTEXT": return "STALE_SELECTION";
     case "SEMANTIC_INVALID_REQUEST": return "INVALID_REQUEST";
+    case "EXAMPLE_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
+    case "EXAMPLE_STALE_CONTEXT": return "STALE_SELECTION";
+    case "EXAMPLE_INVALID_REQUEST": return "INVALID_REQUEST";
     default: return "QUERY_UNAVAILABLE";
   }
 };
@@ -304,6 +312,17 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
         {kind: "environment", environment: args.environment,
           ...(args.expectedCheckpointVersion === undefined ? {} : {expectedCheckpointVersion: args.expectedCheckpointVersion})}),
       {limit: args.maxResults, ...(args.endpointId === undefined ? {} : {endpointId: args.endpointId})})));
+  }
+  if (typeof options.examples?.generate === "function") {
+    const generate=options.examples.generate.bind(options.examples);
+    server.registerTool("api_truth_get_synthetic_example", {
+      title: "Get a synthetic schema example",
+      description: "Generate a deterministic, non-normative placeholder from a host-configured property policy and the exact authorized serving pin. It is not observed traffic or runtime validation evidence.",
+      inputSchema: syntheticExampleSchema,outputSchema,annotations: readOnlyAnnotations,
+    },async(args,context)=>execute(options,maxOutputBytes,context,async principal=>
+      generate(principal,{selection:selection(principal,args.repositoryId,args.serviceId,
+        {kind:"environment",environment:args.environment,expectedCheckpointVersion:args.expectedCheckpointVersion}),
+      policyId:args.policyId})));
   }
   return server;
 };

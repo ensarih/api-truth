@@ -890,3 +890,10 @@ Observations 0.4.0 adds a service using a trusted authorized QueryReader and det
 Real PostgreSQL tests use the current environment resolver and catalog grants to verify generation, absent policy, revocation before and between reads, and checkpoint advancement. Surface delivery and observed-example lifecycle remain separate gates.
 
 Validation: independent service review, clean tracked-source install/typecheck and all 1,487 offline tests passed; ten observation-query PostgreSQL tests include four real authorized-service scenarios. Delivery is denied after a catalog grant revocation or environment checkpoint change between the two reads.
+
+
+### Synthetic examples through portal API and MCP — P3 optional delivery (2026-10-09)
+
+Portal 0.1.0 `POST /api/examples` and MCP 0.1.0 `api_truth_get_synthetic_example` expose the authorized service only when the host configures it. Requests name one repository, service, environment, expected checkpoint and policy ID; tenant/principal come from authentication. Caller property paths, schemas, snapshots and policy bodies are rejected. Existing byte bounds and fixed error mapping apply. The read-only tool returns explicitly synthetic, non-normative results. The portal browser UI, observed examples and retention remain separate work.
+
+Validation: independent surface review, exact clean install/typecheck and all 1,491 offline tests passed. Eleven observation-query PostgreSQL tests include equality of direct service, portal and MCP output on the same pin and denial on both surfaces after revocation. Four new surface contract tests cover strict requests, optional capability, fixed errors and byte bounds.
