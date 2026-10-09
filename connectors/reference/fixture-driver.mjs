@@ -1,9 +1,6 @@
 /** Public synthetic workflow driver. Formats fixtures only; no API call or deployment occurs. */
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { writeFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { registerHooks } from "node:module";
 
 const sourceRoots = [new URL("../../packages/", import.meta.url).href,
@@ -26,26 +23,20 @@ const run = async () => {
   const output = process.argv[5];
   if (branch.length === 0 || branch.length > 512 || output.length === 0) throw new Error("INVALID_INPUT");
   const { buildSyntheticReferenceFixture } = await import("./src/fixture.ts");
+  const { normalizeLocalFact } = await import("./src/adapter.ts");
   const { parseEvent } = await import("../../packages/ir/src/index.ts");
   const steps = buildSyntheticReferenceFixture(branch);
   const events = [];
   const previous = new Map();
-  const directory = await mkdtemp(join(tmpdir(), "api-truth-synthetic-"));
-  try {
-    for (const [index, step] of steps.entries()) {
-      const priorKey = String(step.fact.kind);
-      const policy = { ...step.policy, ...(previous.has(priorKey) ? { previousEvent: previous.get(priorKey) } : {}) };
-      const policyFile = join(directory, `policy-${index}.json`);
-      await writeFile(policyFile, JSON.stringify(policy), { mode: 0o600 });
-      const result = spawnSync(process.execPath, [fileURLToPath(new URL("./cli.mjs", import.meta.url)), policyFile],
-        { input: JSON.stringify(step.fact), encoding: "utf8", maxBuffer: 1024 * 1024 });
-      if (result.status !== 0) throw new Error(`FORMAT_FAILED_${index}`);
-      const parsed = parseEvent(JSON.parse(result.stdout));
-      if (!parsed.ok) throw new Error(`INVALID_EVENT_${index}`);
-      events.push(parsed.value);
-      previous.set(priorKey, parsed.value);
-    }
-  } finally { await rm(directory, { recursive: true, force: true }); }
+  for (const [index, step] of steps.entries()) {
+    const priorKey = String(step.fact.kind);
+    const policy = { ...step.policy, ...(previous.has(priorKey) ? { previousEvent: previous.get(priorKey) } : {}) };
+    const event = normalizeLocalFact(step.fact, policy);
+    const parsed = parseEvent(event);
+    if (!parsed.ok) throw new Error(`INVALID_EVENT_${index}`);
+    events.push(parsed.value);
+    previous.set(priorKey, parsed.value);
+  }
   await mkdir(dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify({ demonstration_only: true, events }, null, 2)}\n`, { mode: 0o600 });
   process.stdout.write(`Wrote ${events.length} synthetic event envelopes.\n`);

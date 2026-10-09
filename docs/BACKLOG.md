@@ -913,3 +913,10 @@ Validation: independent review and extra regression checks for App/suspension re
 Observations 0.4.1 aligns local schema lookup and fingerprint closure with the IR validator's literal schema-ID suffix semantics. Component IDs containing `~1` no longer select a different component containing `/`. Policy property paths still follow JSON Pointer escaping. A parse-valid conflicting-component regression proves the selected example shape and fingerprint depend only on the referenced literal component.
 
 Validation: clean tracked-source install/typecheck and all 1,514 offline tests passed, plus all eleven observation-query PostgreSQL cases. The conflicting identifier regression validates the fixture through the IR parser before generation and proves decoy-schema changes cannot alter the selected schema fingerprint.
+
+
+### Synthetic workflow startup cost — CI corrective slice (2026-10-09)
+
+Two Linux offline jobs exceeded the 15-second fixture-driver test deadline while every other test passed. The public synthetic driver now reuses the same strict local fact normalizer in-process instead of launching seven Node/IR/validator processes. It preserves all seven event kinds, IDs, provider fixture sequences and previous-event chaining, and refuses unconfigured branches without writing an artifact. Standalone CLI behavior remains covered independently. The test timeout and assertions were not weakened.
+
+Validation: independent review, clean tracked-source install/typecheck and all 1,514 offline tests passed. The driver/CLI focused suite passed 18 tests; the formerly slow fixture test completed within the unchanged deadline. Linux CI rerun remains the final startup-regression gate.

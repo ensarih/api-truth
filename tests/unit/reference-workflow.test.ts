@@ -51,6 +51,11 @@ test("Node driver emits only synthetic, ordered events and refuses other branche
       "repository.baseline_requested", "pull_request.updated", "pull_request.updated", "branch.updated",
       "deployment.changed", "deployment.changed", "reconciliation.requested",
     ]);
+    expect(artifact.events.map((event: any) => event.event_id)).toEqual([
+      "synthetic-baseline", "synthetic-pr-open", "synthetic-pr-merged", "synthetic-branch",
+      "synthetic-deploy-attempt", "synthetic-serving", "synthetic-reconcile",
+    ]);
+    expect(artifact.events.map((event: any) => event.provider_evidence.order.value)).toEqual(["1","2","3","4","5","6","7"]);
     expect(artifact.events.filter((event: any) => event.event_type === "deployment.changed")
       .every((event: any) => event.payload.environment === "uat")).toBe(true);
     expect(artifact.events[4].payload.change_kind).toBe("attempt");
@@ -59,5 +64,6 @@ test("Node driver emits only synthetic, ordered events and refuses other branche
       { encoding: "utf8" });
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toBe("UNCONFIGURED_BRANCH\n");
+    await expect(readFile(join(directory, "rejected.json"), "utf8")).rejects.toMatchObject({code:"ENOENT"});
   } finally { await rm(directory, { recursive: true, force: true }); }
 }, 15_000);
