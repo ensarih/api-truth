@@ -856,3 +856,12 @@ Validation: independent review, clean tracked-source install/typecheck and 1,429
 This is a scoped metadata check, not legal acceptance or release approval. Isolated framework fixture lockfiles, JDK/parser artifacts, full license texts, ownership and distribution obligations remain open release gates.
 
 Validation: clean tracked-source install, typecheck and 1,438 offline tests passed, including nine hostile-input inventory scenarios. The inventory was run on the clean installed tree and reported complete root-lock metadata without contacting a registry.
+
+
+### Synthetic schema examples — P3 safe-example core (2026-10-09)
+
+The observations 0.3.0 pure module generates deterministic non-normative placeholders only after explicit endpoint/direction/status/media/property-path opt-in and matching environment/snapshot pins. Required nested properties need their own opted-in paths. Unsupported constraints, formats, unions, compositions, literal const/enum/default/example values, sensitive property names, ambiguous content/status and cycles withhold the complete candidate. Diagnostics contain fixed rule IDs and counts. Fingerprints identify the selected schema closure and policy without storing traffic.
+
+This module neither proves caller authorization nor reads traffic. A host must supply a fresh authorized query view and enforce authorization/current-pin checks at delivery. Observed/redacted examples, request/response correlation, retention/deletion and portal/MCP delivery remain open; generated placeholders cannot establish requiredness or deployed behavior.
+
+Validation: terminal-container constraint bypasses found during review were fixed with regressions. Independent review, exact clean install/typecheck and all 1,450 offline tests passed; 19 observation persistence/import/query PostgreSQL tests also passed.
