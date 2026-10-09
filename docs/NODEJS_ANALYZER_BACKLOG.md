@@ -1,7 +1,7 @@
 # Node.js analyzer expansion backlog
 
 **Status:** active analyzer priority, 2026-10-09
-**Current implementation:** `typescript-express@0.4.0` covers a bounded static
+**Current implementation:** `typescript-express@0.5.0` covers a bounded static
 Express subset. `nodejs-swagger2-document@0.13.0` reads selected Swagger 2 JSON/YAML
 declarations with flat parameter serialization and scalar/flat-array form and multipart-file
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
@@ -758,3 +758,8 @@ Independent review found no blocker.
 ### Configured source manifests through branch updates (2026-10-09)
 
 Analyzer selections can explicitly pin up to 16 ordered, unique `type_manifest` paths. The host and durable worker reject missing/substituted/extra selections; the worker also requires canonical SHA-256 digests and service containment. D07 accepts source-tree plus contained manifests only for full-service fallback execution. D08 conservatively forces full analysis for these inputs, including unchanged source bytes at a new branch revision; this prevents unsafe reuse before a separate multi-input reuse gate. Actual Swagger middleware baseline and successive durable branch jobs pass against PostgreSQL. Runtime receipts, generated sources and classpaths remain rejected. Document-only durable orchestration remains open.
+
+
+### Minimal Express API-key guard source proof (2026-10-09)
+
+`typescript-express@0.5.0` establishes a header API-key source requirement only for an exact single-app, single-route module and a first guard that rejects mismatched nonempty literal credentials with an empty 401 before continuing. Header names and evidence are emitted; expected credentials are omitted. Extra runtime imports, middleware, registration paths or mutations and unsupported guard control flow leave security unknown. Real analyzed source reaches strict catalog/OpenAPI preparation without fabricated security evidence. The proof concerns source semantics under standard Express, not deployed credentials or observed access control. See the [bounded analyzer scope](../analyzers/typescript/README.md).

@@ -213,3 +213,36 @@ for (const [scenario, status, marker] of cases) {
 test("the pinned legacy config stack cannot be certified on Node 24 without modification", {timeout: 20000}, async () => {
   await assert.rejects(isolated(process.execPath, "default"), error => error.code === 1 && error.stderr.includes("TypeError: Utils.isRegExp is not a function"));
 });
+
+test("pinned Express header guard rejects before handler and accepts case-insensitive header names", async () => {
+  const express = require("express");
+  const app = express();
+  let handled = 0;
+  function requireApiKey(req, res, next) {
+    if (req.get("X-API-Key") !== "synthetic-test-token") return res.status(401).end();
+    next();
+  }
+  app.get("/orders", requireApiKey, (_req, res) => {
+    handled++;
+    res.status(200).type("application/json").json({});
+  });
+  const server = await new Promise(resolve => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/orders`;
+    for (const headers of [{}, {"x-api-key": "wrong-test-token"}]) {
+      const response = await fetch(url, {headers});
+      assert.equal(response.status, 401);
+      assert.equal(await response.text(), "");
+      assert.equal(handled, 0);
+    }
+    const response = await fetch(url, {headers: {"x-aPi-kEy": "synthetic-test-token"}});
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {});
+    assert.equal(handled, 1);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});

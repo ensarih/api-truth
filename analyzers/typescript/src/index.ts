@@ -1,11 +1,12 @@
 import { resolve, relative, dirname } from "node:path";
 import ts from "typescript";
 import { hash, inside, readSources, digestSources } from "./source.js";
+import { API_KEY_GUARD_POLICY, proveStaticApiKeyGuard } from "./security-analysis.js";
 import { parseAnalyzerRequest, parseAnalyzerResult, deriveEndpointIdentity,
   type AnalyzerRequest, type AnalyzerResult, type Endpoint, type Evidence, type ApiSchema, type Claim,
 } from "../../../packages/ir/src/index.js";
 
-export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.4.0" };
+export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.5.0" };
 const walk = (node: ts.Node, visit: (node: ts.Node) => void) => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
 const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 
@@ -217,6 +218,59 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (decl && ts.isFunctionDeclaration(decl)) return decl;
     if (decl && ts.isVariableDeclaration(decl) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) return decl.initializer;
     return undefined;
+  };
+  const directGuardModule = (receiver: Receiver, registration: RouteRegistration,
+    guard: ts.FunctionLikeDeclaration): boolean => {
+    const { call } = registration;
+    const source = call.getSourceFile();
+    if (!receiver.app || sources.size !== 1 || !sources.has(source.fileName)
+      || receiver.routes.length !== 1 || receiver.uses.length !== 0 || registration.builder
+      || receiver.node.getSourceFile() !== source || guard.getSourceFile() !== source
+      || ((source as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics?.length ?? 0) > 0)
+      return false;
+    if (call.arguments.length !== 3 || call.arguments[0] !== registration.path
+      || !literal(call.arguments[0])?.startsWith("/")
+      || call.questionDotToken || !ts.isPropertyAccessExpression(call.expression)
+      || call.expression.questionDotToken || !ts.isIdentifier(call.expression.expression)
+      || symbol(call.expression.expression) !== symbol(receiver.node.name)
+      || !ts.isExpressionStatement(call.parent) || call.parent.expression !== call)
+      return false;
+    const first = call.arguments[1];
+    const last = call.arguments[2];
+    if (!first || !last || functionFor(first) !== guard
+      || !(ts.isArrowFunction(last) || ts.isFunctionExpression(last))) return false;
+
+    const statements = source.statements;
+    const expectedCount = ts.isIdentifier(first) ? 4 : 3;
+    if (statements.length !== expectedCount) return false;
+    const imported = statements[0];
+    if (!imported || !ts.isImportDeclaration(imported) || literal(imported.moduleSpecifier) !== "express"
+      || !imported.importClause?.name || imported.importClause.isTypeOnly
+      || imported.importClause.namedBindings || imported.modifiers?.length || imported.attributes) return false;
+    const receiverStatement = statements[1];
+    if (!receiverStatement || !ts.isVariableStatement(receiverStatement)
+      || receiverStatement.modifiers?.length || receiverStatement.declarationList.declarations.length !== 1
+      || !(receiverStatement.declarationList.flags & ts.NodeFlags.Const)
+      || receiverStatement.declarationList.declarations[0] !== receiver.node
+      || !receiver.node.initializer || !ts.isCallExpression(receiver.node.initializer)
+      || receiver.node.initializer.arguments.length !== 0 || receiver.node.initializer.questionDotToken
+      || !ts.isIdentifier(receiver.node.initializer.expression)
+      || symbol(receiver.node.initializer.expression) !== symbol(imported.importClause.name)) return false;
+    if (statements[expectedCount - 1] !== call.parent) return false;
+    if (ts.isIdentifier(first)) {
+      const guardStatement = statements[2];
+      const declaration = symbol(first)?.valueDeclaration;
+      if (guardStatement && ts.isFunctionDeclaration(guardStatement)) {
+        if (declaration !== guardStatement || guardStatement !== guard || guardStatement.modifiers?.length)
+          return false;
+      } else if (guardStatement && ts.isVariableStatement(guardStatement)) {
+        if (guardStatement.modifiers?.length || guardStatement.declarationList.declarations.length !== 1
+          || !(guardStatement.declarationList.flags & ts.NodeFlags.Const)
+          || guardStatement.declarationList.declarations[0] !== declaration
+          || !declaration || !ts.isVariableDeclaration(declaration) || declaration.initializer !== guard) return false;
+      } else return false;
+    } else if (first !== guard) return false;
+    return true;
   };
   const receiverFor = (node: ts.Expression): Receiver | undefined => {
     const direct = receivers.get(symbol(node)!);
@@ -551,7 +605,30 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       const handlers = uniqueExpressions([...inherited, ...shared, ...registration.handlers]);
       for (const [index, arg] of handlers.entries()) {
         const fn = functionFor(arg);
-        if (fn) analyzeFunction(fn, endpoint, index < handlers.length - 1, arg);
+        const staticGuard = fn && index === 0 && handlers.length === 2 && handlers[0] === registration.handlers[0]
+          && directGuardModule(receiver, registration, fn) ? proveStaticApiKeyGuard(fn) : undefined;
+        if (fn && staticGuard) {
+          dependency(endpoint, fn);
+          const schemeEvidenceId = evidence(fn, "runtime_validator");
+          const guardEvidenceId = evidence(fn, "runtime_validator", [], endpoint.endpoint_id);
+          const routeEvidenceId = evidence(call, "deterministic_analysis", [], endpoint.endpoint_id);
+          const responseEvidenceId = evidence(fn, "deterministic_analysis", [], endpoint.endpoint_id);
+          result.dependencies.push({ from_endpoint_id: endpoint.endpoint_id,
+            to: { kind: "evidence", id: schemeEvidenceId }, evidence_ids: [schemeEvidenceId] });
+          result.security_schemes ??= {};
+          result.security_schemes.apiKey = { definition: { type: "apiKey", name: staticGuard.headerName, in: "header" },
+            evidence_ids: [schemeEvidenceId] };
+          endpoint.security = { state: "declared", evidence_ids: [guardEvidenceId, routeEvidenceId],
+            alternatives: [{ requirements: [{ scheme: "apiKey", scopes: [] }] }] };
+          endpoint.responses.push({ status: { kind: "exact", code: 401 }, content: [] });
+          endpoint.evidence_ids = [...new Set([...endpoint.evidence_ids, responseEvidenceId])].sort();
+          claim(endpoint, "security.scheme", { scheme: "apiKey", type: "apiKey", in: "header",
+            name: staticGuard.headerName, policy: API_KEY_GUARD_POLICY }, fn, "runtime_validator", undefined, guardEvidenceId);
+          claim(endpoint, "security.requirement", [{ apiKey: [] }], call,
+            "deterministic_analysis", undefined, routeEvidenceId);
+          claim(endpoint, "response.serialization", { status: { kind: "exact", code: 401 }, media_type: null,
+            schema: {} }, fn, "deterministic_analysis", undefined, responseEvidenceId);
+        } else if (fn) analyzeFunction(fn, endpoint, index < handlers.length - 1, arg);
         else if (!(ts.isCallExpression(arg) && ts.isPropertyAccessExpression(arg.expression) && importedExpress(arg.expression.expression) === "default" && arg.expression.name.text === "json")) diagnostic("handler_unresolved", arg, endpoint);
       }
       if (endpoint.responses.length === 0) endpoint.responses.push({ status: { kind: "unknown", reason: "No supported response serialization" }, content: [] });

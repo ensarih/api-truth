@@ -152,7 +152,7 @@ it does not substitute for a protected enterprise pilot.
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
 | D13-S0 | Complete | Fresh-checkout setup and operator guide. | The local guide records pinned runtime, disposable PostgreSQL, initial configuration and authentication ports, TypeScript/Express support, synthetic extraction-to-catalog and OpenAPI demos, and known limits. A separate clean checkout passed install, offline checks, database startup/readiness, demos, and integration checks. The fixed disposable database was then stopped, restarted, and SQL-readiness checked successfully. No provider key or private source is required. |
-| D13-S1 | In progress | Full Phase 1 scenario and cross-surface conformance. | D12's PostgreSQL lifecycle now reaches PR, merge, UAT, failure, rollback, duplicate/stale replay, and missed-observation repair; D11 proves same-pin portal/MCP/export and revocation for a separately strict-publishable snapshot. The two paths are not yet one release scenario. A minimal complete code-extracted endpoint was tested against real D10 preparation and now has qualifying endpoint-scoped response evidence and returns `UNKNOWN_SECURITY`; a truthful security-declaration/verification path must close before strict publication from extracted code. |
+| D13-S1 | In progress | Full Phase 1 scenario and cross-surface conformance. | D12's PostgreSQL lifecycle now reaches PR, merge, UAT, failure, rollback, duplicate/stale replay, and missed-observation repair; D11 proves same-pin portal/MCP/export and revocation for a separately strict-publishable snapshot. The two paths are not yet one release scenario. A bounded single-route Express API-key guard now provides source security proof and a real code-extracted snapshot passes strict D10 preparation. The combined analyzer-backed lifecycle is being validated; broader authentication and deployment enforcement remain separate gates. |
 | D13-S2 | Open | Public release hygiene and v0.1 readiness review. | Synthetic-only fixtures/artifacts, license/governance/security reporting, supported/unsupported matrix, privacy scan, clean install, all offline/PostgreSQL/protocol/browser tests, and known limits are documented. Publish a release only after the gate passes. |
 
 ## Later phases and analyzer coverage
@@ -185,7 +185,7 @@ profile slice, not the completed NB5 conformance gate.
 
 The Node.js backlog is a detailed child backlog. Its NB1 contract and
 authority decisions are prerequisites for full document/decorator conformance; current
-`typescript-express@0.4.0` support does not imply broader adapter coverage. Java,
+`typescript-express@0.5.0` support does not imply broader adapter coverage. Java,
 logs, semantic providers, and Confluence are planned capabilities, not current
 implementation claims.
 
