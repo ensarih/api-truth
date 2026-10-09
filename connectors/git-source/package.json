@@ -1,12 +1,13 @@
 {
   "name": "@api-truth/connector-git-source",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./analysis-ports": "./src/analysis-ports.ts",
-    "./runtime-capture-pin": "./src/runtime-capture-pin.ts"
+    "./runtime-capture-pin": "./src/runtime-capture-pin.ts",
+    "./protected-capture-verification": "./src/protected-capture-verification.ts"
   },
   "dependencies": {
     "@api-truth/analyzer-host": "0.10.0",

@@ -97,3 +97,25 @@ The result is `pinned_envelope`: it does not verify handler source bytes,
 deployment, capture-process identity, or observed route behavior. Runtime
 observations remain rejected by the D08 local analysis ports until a separate
 authorized job/checkpoint association and full verification gate exists.
+
+
+## Protected capture handler-byte verification
+
+The `./protected-capture-verification` subpath exports
+`createProtectedCaptureVerificationPort`. A trusted host fixes the repository
+path, service root, immutable source/environment scope and expected external
+capture identity. The port authorizes before work, pins and rereads protected
+receipt/key bytes, materializes only committed Git blobs, verifies the middleware
+source digest and receipt-listed handler hashes, and rechecks pin/authorization
+before delivery. A committed reserved receipt is rejected. Service code is never
+executed; disposable source trees are cleaned on success and failure.
+
+The returned `verified_handler_bytes` describes matches for receipt-listed files.
+Document-operation correspondence, deployment and future dispatch remain
+unverified. This standalone port creates no IR, jobs, snapshots or serving
+pointers; D08 runtime inputs remain rejected. Concurrency defaults to two sessions
+and can be bounded between one and eight by the trusted host. Callback ports must
+honor AbortSignal and enforce their own underlying I/O deadlines. The configured
+`timeoutMs` is checked across verification phases, but Git materialization is
+awaited under its own 120-second bound so a late disposable tree cannot leak;
+it is not an exact end-to-end wall-clock bound.
