@@ -1104,3 +1104,14 @@ open. Trusted-process instrumentation does not isolate hostile application code.
 Validation: independent review resolved a pre-load integrity ordering defect.
 A clean locked install/typecheck passed 1,592 offline tests; all 67 pinned framework
 cases passed, including a modified-module sentinel that must never execute.
+
+### Pure observed field-presence projection — P3 prerequisite (2026-10-10)
+
+Observations 0.5.0 adds a bounded raw-JSON presence projector for owner-selected
+literal schema paths under an exact environment, revision and snapshot pin. It
+rejects duplicate members and only uses complete, unredacted bodies with matching
+primitive declarations. Results contain states and selected static paths, never
+values or value hashes, and cannot alter requiredness or other source contracts.
+Host authorization and the completeness assertion remain trusted inputs. No body
+source adapter, persistence, retention, portal/MCP or model integration is enabled.
+Those lifecycle and authorization gates remain open.

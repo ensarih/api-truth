@@ -23,3 +23,32 @@ This pure generator validates bounded input shape and matching snapshot/pin fiel
 `createSyntheticExampleService({queryReader, policies})` supplies that bounded read path. A trusted host configures immutable policy bindings for exact tenant, repository, service, environment, and policy ID. The caller supplies only its identity context, an environment selection with an expected serving checkpoint, and a policy ID; it cannot submit property paths. The service reads the contract through `QueryReader` before looking up the policy, withholds when no policy is configured, and reads again after generating a candidate. A grant loss or any change to the snapshot, revision, configuration, or checkpoint discards the candidate with a fixed error. This service does not persist or publish examples and does not accept traffic or model input.
 
 The initial schema subset is intentionally conservative: local `#/schemas/...` references, scalar types, objects, arrays, required members, and bounded string/numeric/item limits. Composition, unions, formats, patterns, `const`, `enum`, `additionalProperties`, and other unsupported semantics withhold the example when they affect an opted-in value. Selectors for query/path/header parameters, observed examples, retention, and portal/MCP delivery are outside this module.
+
+## Observed field presence (pure projection)
+
+`projectObservedFieldPresence(input)` accepts an exact resolved environment pin,
+contract snapshot, host-authorized owner policy, bounded raw `payloadText` and
+`payloadCompleteness`. The host must authorize the source read and exact policy
+before reading a body, then recheck authorization and the current pin before
+using the result. The function checks consistency; it does not grant authority.
+
+The policy selects at most 32 literal RFC 6901 property paths in one request
+schema or exact-status response schema and JSON media type. Only directly declared
+object paths ending in primitive types are supported. References, arrays, unions,
+constraints and ambiguous or undocumented paths withhold the whole projection.
+Prototype keys, wildcards and the documented implementation's conservative PII
+label subset are rejected. Credential field names can be selected because only
+presence is returned, never their values.
+
+Only `complete_unredacted` payloads may produce `present` or `absent`; this flag is
+a trusted caller assertion, not independently verified traffic completeness.
+Duplicate JSON keys, malformed bodies, wrong value types, incomplete or masked
+bodies and unsupported shapes yield fixed withheld diagnostics. Input is bounded
+to 256 KiB payload text, depth 32 and 10,000 parsed nodes. Results contain selected
+static paths, states and scope, with no payload values or value hashes. Invalid
+input shapes throw `FieldPresenceInputError` with a fixed message.
+
+These observations are explicitly non-normative and cannot establish requiredness
+or modify contracts. This slice has no source reader, durable body import, sample
+storage, retention, provider, portal or MCP integration. Those require separate
+authorization, versioned policy and lifecycle gates.
