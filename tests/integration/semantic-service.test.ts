@@ -2,12 +2,16 @@ import {once} from "node:events";
 import {Client, InMemoryTransport} from "@modelcontextprotocol/client";
 import {createApiTruthMcpServer} from "../../apps/mcp/src/server.js";
 import {createPortalServer} from "../../apps/portal/src/server.js";
-import {readFile} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 import {afterEach, expect, test, vi} from "vitest";
+import {ANALYZER as EXPRESS_ANALYZER, createAnalyzer as createExpressAnalyzer}
+  from "../../analyzers/typescript/src/index.js";
 import {snapshotContentSha256, snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
-import {createAccessPolicyStore} from "../../packages/catalog/src/index.js";
+import {contractSnapshotFromAnalyzerResult, createAccessPolicyStore} from "../../packages/catalog/src/index.js";
 import {applyEnvironmentMigrations, createEnvironmentRepository} from "../../packages/environment/src/index.js";
-import type {ContractSnapshot} from "../../packages/ir/src/index.js";
+import type {AnalyzerRequest, ContractSnapshot} from "../../packages/ir/src/index.js";
 import {applyOpenApiMigrations} from "../../packages/openapi/src/index.js";
 import {applyOrchestrationMigrations, createOrchestrationRepository} from "../../packages/orchestration/src/index.js";
 import {createQueryReader} from "../../packages/query/src/index.js";
@@ -55,7 +59,27 @@ const answer = () => ({status: "suggestions", suggestions: [{endpointId: "ep-get
   intent: "Find an existing order", summary: "Reads one stored order.",
   evidenceIds: ["ev-doc-get"]}]});
 
-const setup = async (enabled = true): Promise<void> => {
+const analyzedExpressSnapshot = async (): Promise<ContractSnapshot> => {
+  const root = await mkdtemp(join(tmpdir(), "api-truth-semantic-pg-source-"));
+  try {
+    await writeFile(join(root, "app.ts"), `import express from "express";
+      const app = express();
+      function readOrders(req, res) { return res.status(200).json({secret: "CANARY_RAW_SOURCE"}); }
+      app.get("/orders", readOrders);`);
+    const request: AnalyzerRequest = {exchange_version: "1.0.0", ir_version: "1.0.0",
+      request_id: "semantic-pg-source", analyzer: EXPRESS_ANALYZER,
+      source: {repository_id: repositoryId, service_id: serviceId, service_root: ".",
+        immutable_revision: "b".repeat(40), source_digest: "pending", access_label: scopes[3]},
+      resolution_inputs: [{kind: "source_tree", path: ".", digest: "pending"}],
+      prior_dependencies: [], changed_paths: [], extraction_mode: "baseline",
+      limits: {timeout_ms: 30_000, max_files: 20, max_output_bytes: 1_000_000},
+      execution_policy: {network_access: false, side_effects: "none"}};
+    const result = await createExpressAnalyzer({projectRoot: root}).analyze(request);
+    return contractSnapshotFromAnalyzerResult(result, "sha256:config-a").snapshot;
+  } finally {await rm(root, {recursive: true, force: true});}
+};
+
+const setup = async (enabled = true, analyzedSnapshot?: ContractSnapshot): Promise<void> => {
   database = await createCatalogTestDatabase();
   await applyOrchestrationMigrations(database.pool, {schema: database.schema});
   await applyEnvironmentMigrations(database.pool, {schema: database.schema});
@@ -68,22 +92,35 @@ const setup = async (enabled = true): Promise<void> => {
   const orchestration = createOrchestrationRepository(database.pool, {schema: database.schema});
   await orchestration.registerConfiguration(admin, configuration(enabled));
   await orchestration.activateInitialConfiguration(admin, {fingerprint: "sha256:config-a"});
-  snapshot = JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json", import.meta.url), "utf8")) as ContractSnapshot;
-  snapshot.evidence.push({evidence_id: "ev-doc-get", source: {kind: "api_document",
+  snapshot = analyzedSnapshot ?? JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json", import.meta.url), "utf8")) as ContractSnapshot;
+  if (!analyzedSnapshot) {
+    snapshot.evidence.push({evidence_id: "ev-doc-get", source: {kind: "api_document",
     source_id: snapshot.source.repository_id},
     source_version: snapshot.source.immutable_revision, location: {pointer: "/paths/~1api~1orders/get/summary"},
     method: "type_declaration", scope: {service_id: serviceId, snapshot_id: snapshot.snapshot_id,
       endpoint_id: "ep-get", revision: snapshot.source.immutable_revision},
     limitations: [], access_label: scopes[4]});
-  snapshot.claims.push({claim_id: "claim-get-summary", subject: {service_id: serviceId, endpoint_id: "ep-get"},
+    snapshot.claims.push({claim_id: "claim-get-summary", subject: {service_id: serviceId, endpoint_id: "ep-get"},
     predicate: "operation.summary", value: "Read a stored order by identifier.",
     verification: "declared", evidence_ids: ["ev-doc-get"]});
+    const get = snapshot.endpoints.find(endpoint => endpoint.endpoint_id === "ep-get")!;
+    snapshot.evidence.push({evidence_id: "ev-doc-route", source: {kind: "api_document",
+      source_id: snapshot.source.repository_id}, source_version: snapshot.source.immutable_revision,
+    location: {pointer: "/paths/~1api~1orders~1{orderId}/get"}, method: "type_declaration",
+    scope: {service_id: serviceId, snapshot_id: snapshot.snapshot_id,
+      endpoint_id: "ep-get", revision: snapshot.source.immutable_revision},
+    limitations: [], access_label: scopes[4]});
+    snapshot.claims.push({claim_id: "claim-get-route", subject: {service_id: serviceId, endpoint_id: "ep-get"},
+      predicate: "route.declaration", value: {method: get.identity.method, path: get.application_path},
+      verification: "declared", evidence_ids: ["ev-doc-route"]});
+  }
   const schema = quoteCatalogTestSchema(database.schema);
   await database.pool.query(`INSERT INTO ${schema}.catalog_snapshots
     (tenant_id,snapshot_id,repository_id,service_id,immutable_revision,analyzer_status,ir_version,
      identity_version,config_fingerprint,identity_sha256,content_sha256,required_scope_ids,document)
-    VALUES($1,$2,$3,$4,$5,'partial',$6,$7,$8,$9,$10,$11,$12::jsonb)`,
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
   [tenantId, snapshot.snapshot_id, repositoryId, serviceId, snapshot.source.immutable_revision,
+    snapshot.coverage.status === "complete" ? "success" : "partial",
     snapshot.ir_version, snapshot.identity_version, snapshot.config.config_fingerprint,
     snapshotIdentitySha256(snapshot), snapshotContentSha256(snapshot), [scopes[2]], JSON.stringify(snapshot)]);
   const environmentRepo = createEnvironmentRepository(database.pool, {schema: database.schema});
@@ -242,6 +279,38 @@ test("authorized discovery compares a bounded intent with selected documented en
   expect(provider).toHaveBeenCalledTimes(1);
 });
 
+test("actual Express source identifiers reach the authorized pinned host without raw handler data", async () => {
+  await setup(true, await analyzedExpressSnapshot());
+  const endpointId = snapshot.endpoints[0]!.endpoint_id;
+  expect(snapshot.claims.some(claim => claim.predicate === "operation.summary"
+    || claim.predicate === "operation.description")).toBe(false);
+  const provider = vi.fn(async request => {
+    expect(request).toMatchObject({promptVersion: "semantic-discovery-source-1",
+      source: {pin: selected}, endpoints: [{endpointId, method: "GET", applicationPath: "/orders",
+        documents: [{kind: "code_route", text: "GET /orders"},
+          {kind: "code_handler", text: "readOrders"}]}]});
+    expect(JSON.stringify(request)).not.toMatch(/CANARY_RAW_SOURCE|secret|credential|SYNTHETIC_MODEL_KEY/);
+    const evidenceId = request.endpoints[0]!.documents[0]!.evidenceIds[0]!;
+    expect(snapshot.evidence.find(evidence => evidence.evidence_id === evidenceId)).toMatchObject({
+      source: {kind: "source_code", source_id: repositoryId},
+      source_version: snapshot.source.immutable_revision,
+      scope: {endpoint_id: endpointId, revision: snapshot.source.immutable_revision},
+      access_label: scopes[3],
+    });
+    return {status: "suggestions", suggestions: [{endpointId,
+      intent: "Find orders", summary: "Tentative identifier-based name.", evidenceIds: [evidenceId]}]};
+  });
+  await expect(service(provider).discover(context(), selection(), [endpointId], "Find orders"))
+    .resolves.toMatchObject({status: "suggestions", verification: "inferred", review: "unreviewed",
+      normative: false, provenance: {promptVersion: "semantic-discovery-source-1", pin: selected}});
+  expect(provider).toHaveBeenCalledTimes(1);
+  await createAccessPolicyStore(database!.pool, {schema: database!.schema})
+    .putGrant({tenantId}, {principalId, scopeId: scopes[3], active: false});
+  await expect(service(provider).discover(context(), selection(), [endpointId], "Find orders"))
+    .rejects.toMatchObject({code: "SEMANTIC_NOT_FOUND_OR_DENIED"});
+  expect(provider).toHaveBeenCalledTimes(1);
+});
+
 test("discovery rejects secret-like intent before DB access and stays disabled without egress", async () => {
   await setup(false);
   const provider = vi.fn(async () => answer());
@@ -305,4 +374,29 @@ test("portal and MCP discovery share actual authorized PostgreSQL selection and 
     await Promise.allSettled([client.close(), mcp.close()]);
     portal.closeAllConnections(); await new Promise<void>(resolve => portal.close(() => resolve()));
   }
+});
+
+
+test("operation candidate search reads one authorized environment pin and fails before DB for invalid requests", async () => {
+  await setup();
+  const query = createQueryReader(database!.pool, {schema: database!.schema});
+  const connect = vi.spyOn(database!.pool, "connect");
+  for (const options of [{intentQuery: "ftp://user:canary@internal.example/api"},
+    {intentQuery: "Find an order", limit: 21}, {intentQuery: "Find an order", limit: null}, {intentQuery: "Find an order", tenantId: "other"}]) {
+    await expect(query.readOperationCandidates(context(), selection(), options))
+      .rejects.toMatchObject({code: "INVALID_QUERY_SEARCH"});
+  }
+  await expect(query.readOperationCandidates(context(), {...selection(), selector: {kind: "environment", environment}},
+    {intentQuery: "Find an order"})).rejects.toMatchObject({code: "INVALID_QUERY_SEARCH"});
+  expect(connect).not.toHaveBeenCalled(); connect.mockRestore();
+  const result = await query.readOperationCandidates(context(), selection(), {intentQuery: "stored order"});
+  expect(result).toMatchObject({status: "candidates", pin: selected, candidates: [
+    {endpointId: "ep-get", evidenceIds: expect.arrayContaining(["ev-doc-get"])}]});
+  await expect(query.readOperationCandidates(context(), {...selection(), selector: {...selection().selector,
+    expectedCheckpointVersion: "999"}}, {intentQuery: "stored order"}))
+    .rejects.toMatchObject({code: "QUERY_STALE_SELECTION"});
+  await createAccessPolicyStore(database!.pool, {schema: database!.schema})
+    .putGrant({tenantId}, {principalId, scopeId: scopes[4], active: false});
+  await expect(query.readOperationCandidates(context(), selection(), {intentQuery: "stored order"}))
+    .rejects.toMatchObject({code: "QUERY_NOT_FOUND_OR_DENIED"});
 });

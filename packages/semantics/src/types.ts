@@ -4,7 +4,7 @@ import type {QuerySelection} from "../../query/src/selector.js";
 
 export type SemanticProviderId = "openai" | "gemini" | "claude";
 export type SemanticDocumentKind = "operation_summary" | "operation_description"
-  | "response_description" | "operation_id";
+  | "response_description" | "operation_id" | "code_route" | "code_handler" | "code_action";
 type SemanticProviderContext = Readonly<{
   provider: SemanticProviderId;
   model: string;
@@ -16,7 +16,8 @@ type SemanticProviderContext = Readonly<{
 }>;
 export type SemanticProviderRequest =
   | Readonly<SemanticProviderContext & {promptVersion: "semantic-grounding-1"}>
-  | Readonly<SemanticProviderContext & {promptVersion: "semantic-discovery-1"; intentQuery: string}>;
+  | Readonly<SemanticProviderContext & {promptVersion: "semantic-discovery-1"; intentQuery: string}>
+  | Readonly<SemanticProviderContext & {promptVersion: "semantic-discovery-source-1"; intentQuery: string}>;
 export type SemanticProviderPort = (request: SemanticProviderRequest) => Promise<unknown>;
 export type SemanticAnalysisInput = Readonly<{
   snapshot: ContractSnapshot;
@@ -30,11 +31,18 @@ export type SemanticSuggestion = Readonly<{endpointId: string; intent: string; s
   evidenceIds: readonly string[]}>;
 export type SemanticProvenance = Readonly<{provider: SemanticProviderId; model: string;
   promptVersion: SemanticProviderRequest["promptVersion"]; selector: QuerySelection["selector"]; pin: QueryPin}>;
+export type SemanticContextCoverage = Readonly<{status: "complete" | "partial";
+  requestedEndpointIds: readonly string[]; analyzedEndpointIds: readonly string[];
+  omittedEndpointIds: readonly string[]}>;
 export type SemanticAnalysisResult =
-  | Readonly<{status: "disabled" | "no_context"}>
+  | Readonly<{status: "disabled"}>
+  | Readonly<{status: "no_context"; contextCoverage?: SemanticContextCoverage}>
   | Readonly<{status: "suggestions"; suggestions: readonly SemanticSuggestion[];
-    verification: "inferred"; review: "unreviewed"; normative: false; provenance: SemanticProvenance}>
+    verification: "inferred"; review: "unreviewed"; normative: false; provenance: SemanticProvenance;
+    contextCoverage?: SemanticContextCoverage}>
   | Readonly<{status: "ambiguous"; candidateEndpointIds: readonly string[]; reason: string;
-    verification: "inferred"; review: "unreviewed"; normative: false; provenance: SemanticProvenance}>
+    verification: "inferred"; review: "unreviewed"; normative: false; provenance: SemanticProvenance;
+    contextCoverage?: SemanticContextCoverage}>
   | Readonly<{status: "no_match"; reason: string;
-    verification: "inferred"; review: "unreviewed"; normative: false; provenance: SemanticProvenance}>;
+    verification: "inferred"; review: "unreviewed"; normative: false; provenance: SemanticProvenance;
+    contextCoverage?: SemanticContextCoverage}>;

@@ -112,7 +112,8 @@ test("withholds document evidence from a different source revision", async () =>
   source.snapshot.evidence.find(evidence => evidence.evidence_id === "ev-doc-get")!.source_version = "b".repeat(40);
   const provider = vi.fn(async () => suggestion());
   expect(await runGroundedSemanticDiscovery({...source, intentQuery: "Find an order"}, provider))
-    .toEqual({status: "no_context"});
+    .toMatchObject({status: "no_context", contextCoverage: {status: "partial", requestedEndpointIds: ["ep-get"],
+      analyzedEndpointIds: [], omittedEndpointIds: ["ep-get"]}});
   expect(provider).not.toHaveBeenCalled();
 });
 
@@ -176,7 +177,8 @@ test("discovery opt-out and absent documented context never call the provider", 
   const noDocs = input();
   noDocs.snapshot.claims = noDocs.snapshot.claims.filter(claim => claim.claim_id !== "claim-get-summary");
   expect(await runGroundedSemanticDiscovery({...noDocs, intentQuery: "Find an order"}, provider))
-    .toEqual({status: "no_context"});
+    .toMatchObject({status: "no_context", contextCoverage: {status: "partial", requestedEndpointIds: ["ep-get"],
+      analyzedEndpointIds: [], omittedEndpointIds: ["ep-get"]}});
   expect(provider).not.toHaveBeenCalled();
 });
 

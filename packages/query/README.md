@@ -33,3 +33,10 @@ From the repository root, run `npm run typecheck`,
 `npx vitest run --config vitest.integration.config.ts tests/integration/query-read.test.ts --maxWorkers=1`
 and `npx vitest run --config vitest.integration.config.ts tests/integration/query-publication.test.ts --maxWorkers=1`
 with the fixed local PostgreSQL test service running.
+
+
+## Operation keyword candidates
+
+The optional `QueryOperationReader.readOperationCandidates(context, selection, {intentQuery, limit?})` capability requires an explicit environment and expected checkpoint version. It reuses authorized contract resolution and additionally requires all snapshot evidence scopes in the same read transaction. Invalid options fail before database access. The pure `searchOperationCandidates` matcher does not authorize inputs on its own.
+
+Candidates rank bounded declared document text or qualified source route/handler/action identifiers. Results retain the exact pin, evidence IDs, `matchMode: "keyword"`, completeness and truncation. `no_match` means no keyword overlap in a complete searchable selected contract; it does not assert that no API implements a business task. Unknown or incomplete context is explicit. This capability performs no model calls and searches one service, not the enterprise corpus.

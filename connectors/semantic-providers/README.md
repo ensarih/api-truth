@@ -6,6 +6,8 @@ The adapters ask for a strict JSON object containing the port's result union. Th
 
 For `semantic-discovery-1`, the bounded (512 character) intent query is passed separately from endpoint documentation as untrusted user data. A version-specific fixed system instruction asks the model to match only documented selected endpoints. The older `semantic-grounding-1` request shape does not accept an intent query.
 
+The separate `semantic-discovery-source-1` profile accepts only whitelisted source-context document kinds: literal route text, handler symbols, or controller/action names. Credential-shaped values are rejected by the shared conservative text checks; ordinary API names are not rejected by keywords alone. Its fixed instruction permits tentative endpoint naming only and forbids conclusions about business workflow, behavior, schemas, security, or requiredness. This is distinct from document-grounded profiles and does not change their request shapes.
+
 Tests use mocked `fetch` responses only. They never contact provider services or read credentials.
 
 ## Provider request formats

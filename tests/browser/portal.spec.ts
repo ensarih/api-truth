@@ -189,8 +189,10 @@ test("intent discovery does not preselect the first operations when a contract h
       bytes: openApiBytes, selector: publicationSelector, pin}),
   };
   const semantic: NonNullable<PortalOptions["semantic"]> = {discover: async (_who, _selected, ids) => {
-    calls.push([...(ids as readonly string[])]);
-    return {status: "no_match", reason: "No match", verification: "inferred", review: "unreviewed", normative: false,
+    const requestedEndpointIds = [...(ids as readonly string[])]; calls.push(requestedEndpointIds);
+    return {status: "no_match", reason: "No match", contextCoverage: {status: "partial" as const,
+      requestedEndpointIds, analyzedEndpointIds: [requestedEndpointIds[0]!], omittedEndpointIds: requestedEndpointIds.slice(1)},
+      verification: "inferred", review: "unreviewed", normative: false,
       provenance: {provider: "openai", model: "test-model", promptVersion: "semantic-discovery-1",
         selector: {kind: "environment", environment: "uat", expectedCheckpointVersion: "7"}, pin}};
   }};
@@ -210,9 +212,11 @@ test("intent discovery does not preselect the first operations when a contract h
     await expect(page.locator("#discovery-status")).toContainText("Choose between 1 and 16");
     expect(calls).toEqual([]);
     await page.locator('#discovery input[name="endpointId"][value="ep-16"]').check();
+    await page.locator('#discovery input[name="endpointId"][value="ep-15"]').check();
     await page.getByRole("button", {name: "Find an API for this task"}).click();
-    await expect(page.locator("#discovery-status")).toContainText("No matching operation");
-    expect(calls).toEqual([["ep-16"]]);
+    await expect(page.locator("#discovery-status")).toContainText("No matching operation was found among the analyzed operations");
+    await expect(page.locator("#discovery-status")).toContainText("Coverage: 1 of 2 selected operations analyzed; omitted: ep-16");
+    expect(calls).toEqual([["ep-15", "ep-16"]]);
   } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
 });
 

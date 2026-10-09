@@ -8,6 +8,7 @@ import { OpenApiStorageError, readCurrentOpenApiWithClient, readPublicationOpenA
   type OpenApiPublicationSelector, type PublicationKey } from "@api-truth/openapi";
 import { quoteEnvironmentSchema } from "../../environment/src/migrations.js";
 import { parseQuerySelection, type QuerySelection } from "./selector.js";
+import {searchOperationCandidates, validateOperationSearchOptions, type OperationSearchResult} from "./operation-search.js";
 
 export class QueryReadError extends Error {
   readonly code: "INVALID_QUERY_CONTEXT" | "INVALID_QUERY_DETAIL" | "INVALID_QUERY_SEARCH"
@@ -60,6 +61,9 @@ export type QueryObservationResult = Readonly<{status:"resolved"; selector:Query
 export type QueryObservationOptions = Readonly<{limit:number; endpointId?:string}>;
 export interface QueryObservationReader {
   readMetadataObservations(context:unknown,selection:unknown,options:unknown):Promise<QueryObservationResult>;
+}
+export interface QueryOperationReader {
+  readOperationCandidates(context:unknown,selection:unknown,options:unknown):Promise<OperationSearchResult>;
 }
 export type QueryReader = Readonly<{
   readContract(context: unknown, selection: unknown): Promise<QueryContractResult>;
@@ -476,7 +480,7 @@ export async function readQueryContractWithClient(client:PoolClient, options:{sc
 }
 
 /** Reads selector, authorization, and snapshot in one consistent database transaction. */
-export const createQueryReader = (pool: Pool, options: { schema: string }): QueryReader & QueryObservationReader => {
+export const createQueryReader = (pool: Pool, options: { schema: string }): QueryReader & QueryObservationReader & QueryOperationReader => {
   const schema = quoteEnvironmentSchema(options.schema);
   const withRead = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
     const client = await pool.connect().catch(() => { throw new QueryReadError("QUERY_STORAGE_ERROR"); });
@@ -499,6 +503,22 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
   };
   return Object.freeze({
     readContract,
+    async readOperationCandidates(contextInput:unknown,selectionInput:unknown,optionsInput:unknown):Promise<OperationSearchResult>{
+      const options=validateOperationSearchOptions(optionsInput);
+      if(!options)throw new QueryReadError("INVALID_QUERY_SEARCH");
+      const selector=parseQuerySelection(selectionInput);
+      if(selector.selector.kind!=="environment"||selector.selector.expectedCheckpointVersion===undefined)
+        throw new QueryReadError("INVALID_QUERY_SEARCH");
+      const principalId=parseContext(contextInput,selector.tenantId);
+      return withRead(async client=>{
+        const selected=await readSelected(client,selector,principalId);
+        if(selected.status==="resolved"){
+          const scopes=selected.snapshot.evidence.map(item=>item.access_label);
+          if(scopes.length>0&&!await hasScopes(client,selector.tenantId,principalId,scopes))return denied();
+        }
+        return searchOperationCandidates(selected,options);
+      });
+    },
     async readMetadataObservations(contextInput:unknown,selectionInput:unknown,optionsInput:unknown):Promise<QueryObservationResult>{
       const selector=parseQuerySelection(selectionInput);
       if(selector.selector.kind!=="environment")throw new QueryReadError("INVALID_QUERY_OBSERVATION");

@@ -1,12 +1,15 @@
 import {isProxy} from "node:util/types";
 import {parseContractSnapshot, type Claim, type ContractSnapshot, type Evidence} from "../../ir/src/index.js";
 import {parseQuerySelection} from "../../query/src/selector.js";
-import {isSemanticDocumentTextSafe as documentTextSafe, isSemanticIntentQuerySafe} from "./egress.js";
+import {isSemanticDocumentTextSafe as documentTextSafe, isSemanticIntentQuerySafe,
+  isSemanticSourceIdentifierSafe, isSemanticSourceRouteSafe} from "./egress.js";
 import type {SemanticAnalysisInput, SemanticAnalysisResult, SemanticDiscoveryInput, SemanticDocumentKind,
-  SemanticProviderId, SemanticProviderPort, SemanticProviderRequest, SemanticProvenance} from "./types.js";
+  SemanticContextCoverage, SemanticProviderId, SemanticProviderPort, SemanticProviderRequest,
+  SemanticProvenance} from "./types.js";
 
 export const SEMANTIC_PROMPT_VERSION = "semantic-grounding-1" as const;
 export const SEMANTIC_DISCOVERY_PROMPT_VERSION = "semantic-discovery-1" as const;
+export const SEMANTIC_DISCOVERY_SOURCE_PROMPT_VERSION = "semantic-discovery-source-1" as const;
 
 export class SemanticAnalysisError extends Error {
   readonly code: "SEMANTIC_INVALID_CONTEXT" | "SEMANTIC_PROVIDER_ERROR" | "SEMANTIC_OUTPUT_REJECTED";
@@ -138,6 +141,74 @@ const evidenceFor = (evidence: Evidence | undefined, snapshot: ContractSnapshot,
   && (evidence.scope.endpoint_id === undefined || evidence.scope.endpoint_id === endpointId)
   && evidence.scope.revision === snapshot.source.immutable_revision;
 
+const sourceEvidenceFor = (evidence: Evidence | undefined, snapshot: ContractSnapshot,
+  endpointId: string): boolean => !!evidence && evidence.source.kind === "source_code"
+  && evidence.source.source_id === snapshot.source.repository_id
+  && evidence.source_version === snapshot.source.immutable_revision
+  && (evidence.method === "deterministic_analysis" || evidence.method === "type_declaration")
+  && evidence.scope.service_id === snapshot.service.service_id
+  && evidence.scope.snapshot_id === snapshot.snapshot_id
+  && evidence.scope.endpoint_id === endpointId
+  && evidence.scope.revision === snapshot.source.immutable_revision;
+
+const sourceClaimEvidence = (claim: Claim, evidence: ReadonlyMap<string, Evidence>,
+  snapshot: ContractSnapshot, endpointId: string): boolean => claim.evidence_ids.length > 0
+  && claim.evidence_ids.length <= 8 && new Set(claim.evidence_ids).size === claim.evidence_ids.length
+  && claim.evidence_ids.every(evidenceId => sourceEvidenceFor(evidence.get(evidenceId), snapshot, endpointId));
+
+const exactObject = (value: unknown, keys: readonly string[]): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value) && !isProxy(value)
+  && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === keys.length
+  && Object.keys(value).every(key => keys.includes(key));
+
+const sourceProjection = (input: SemanticAnalysisInput): SemanticProviderRequest["endpoints"] => {
+  const evidence = new Map(input.snapshot.evidence.map(item => [item.evidence_id, item]));
+  const selected = new Set(input.endpointIds);
+  const endpoints: SemanticProviderRequest["endpoints"][number][] = [];
+  let totalText = 0;
+  for (const endpoint of input.snapshot.endpoints) {
+    if (!selected.has(endpoint.endpoint_id) || !isSemanticSourceRouteSafe(endpoint.identity.method, endpoint.application_path)) continue;
+    const claims = input.snapshot.claims.filter(claim => claim.subject.endpoint_id === endpoint.endpoint_id
+      && claim.subject.service_id === input.snapshot.service.service_id && claim.subject.schema_pointer === undefined);
+    const routes = claims.filter(claim => claim.predicate === "route.registration" || claim.predicate === "route.declaration");
+    if (routes.length !== 1) continue;
+    const route = routes[0]!;
+    if (!sourceClaimEvidence(route, evidence, input.snapshot, endpoint.endpoint_id)) continue;
+    const documents: SemanticProviderRequest["endpoints"][number]["documents"][number][] = [];
+    if (route.predicate === "route.registration" && route.verification === "established_by_analysis"
+      && exactObject(route.value, ["method", "path"]) && route.value.method === endpoint.identity.method
+      && route.value.path === endpoint.application_path
+      && isSemanticSourceRouteSafe(route.value.method, route.value.path)) {
+      documents.push({kind: "code_route", text: `${route.value.method} ${route.value.path}`,
+        evidenceIds: [...route.evidence_ids]});
+      const handlers = claims.filter(claim => claim.predicate === "handler.symbol");
+      if (handlers.length === 1) {
+        const handler = handlers[0]!;
+        if (handler.verification === "established_by_analysis"
+          && exactObject(handler.value, ["symbol"]) && isSemanticSourceIdentifierSafe(handler.value.symbol)
+          && sourceClaimEvidence(handler, evidence, input.snapshot, endpoint.endpoint_id))
+          documents.push({kind: "code_handler", text: handler.value.symbol, evidenceIds: [...handler.evidence_ids]});
+      }
+    } else if (route.predicate === "route.declaration" && route.verification === "declared"
+      && exactObject(route.value, ["method", "path", "controller", "action"])
+      && route.value.method === endpoint.identity.method && route.value.path === endpoint.application_path
+      && isSemanticSourceRouteSafe(route.value.method, route.value.path)
+      && isSemanticSourceIdentifierSafe(route.value.controller) && isSemanticSourceIdentifierSafe(route.value.action)) {
+      documents.push({kind: "code_route", text: `${route.value.method} ${route.value.path}`,
+        evidenceIds: [...route.evidence_ids]});
+      documents.push({kind: "code_action", text: `${route.value.controller}.${route.value.action}`,
+        evidenceIds: [...route.evidence_ids]});
+    }
+    if (!documents.length) continue;
+    totalText += documents.reduce((sum, document) => sum + Buffer.byteLength(document.text, "utf8"), 0);
+    if (documents.length > 3 || totalText > 16_384)
+      throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+    endpoints.push({endpointId: endpoint.endpoint_id, method: endpoint.identity.method,
+      applicationPath: endpoint.application_path, documents});
+  }
+  return endpoints;
+};
+
 const projection = (input: SemanticAnalysisInput): SemanticProviderRequest["endpoints"] => {
   const evidence = new Map(input.snapshot.evidence.map(item => [item.evidence_id, item]));
   const selected = new Set(input.endpointIds);
@@ -164,6 +235,51 @@ const projection = (input: SemanticAnalysisInput): SemanticProviderRequest["endp
       applicationPath: endpoint.application_path, documents});
   }
   return endpoints;
+};
+
+const mergeSourceAndDocumentContext = (sourceEndpoints: SemanticProviderRequest["endpoints"],
+  documentEndpoints: SemanticProviderRequest["endpoints"]): SemanticProviderRequest["endpoints"] => {
+  const documentsByEndpoint = new Map(documentEndpoints.filter(endpoint =>
+    isSemanticSourceRouteSafe(endpoint.method, endpoint.applicationPath)).map(endpoint => [endpoint.endpointId, endpoint]));
+  const merged: SemanticProviderRequest["endpoints"][number][] = [];
+  let totalText = 0;
+  for (const sourceEndpoint of sourceEndpoints) {
+    const documentEndpoint = documentsByEndpoint.get(sourceEndpoint.endpointId);
+    const allDocuments = [...(documentEndpoint?.documents ?? []), ...sourceEndpoint.documents];
+    const byContent = new Map<string, {kind: SemanticDocumentKind; text: string; evidenceIds: string[]}>();
+    for (const document of allDocuments) {
+      const key = JSON.stringify([document.kind, document.text]);
+      const existing = byContent.get(key);
+      if (existing) {
+        for (const evidenceId of document.evidenceIds) if (!existing.evidenceIds.includes(evidenceId))
+          existing.evidenceIds.push(evidenceId);
+        if (existing.evidenceIds.length > 8) throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+      } else byContent.set(key, {kind: document.kind, text: document.text, evidenceIds: [...document.evidenceIds]});
+    }
+    const documents = [...byContent.values()];
+    if (documents.length > 16) throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+    totalText += documents.reduce((sum, document) => sum + Buffer.byteLength(document.text, "utf8"), 0);
+    if (totalText > 16_384) throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+    merged.push({...sourceEndpoint, documents});
+    documentsByEndpoint.delete(sourceEndpoint.endpointId);
+  }
+  // Source-profile requests contain source context by definition. Keep document-only endpoints
+  // selected by the caller even when none of their siblings has eligible code identifiers.
+  for (const endpoint of documentsByEndpoint.values()) {
+    if (endpoint.documents.length > 16) throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+    totalText += endpoint.documents.reduce((sum, document) => sum + Buffer.byteLength(document.text, "utf8"), 0);
+    if (totalText > 16_384) throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+    merged.push(endpoint);
+  }
+  return merged;
+};
+
+const contextCoverage = (requestedEndpointIds: readonly string[],
+  analyzedEndpointIds: readonly string[]): SemanticContextCoverage => {
+  const analyzed = new Set(analyzedEndpointIds);
+  const omittedEndpointIds = requestedEndpointIds.filter(endpointId => !analyzed.has(endpointId));
+  return freezeDeep({status: omittedEndpointIds.length === 0 ? "complete" : "partial",
+    requestedEndpointIds: [...requestedEndpointIds], analyzedEndpointIds: [...analyzedEndpointIds], omittedEndpointIds});
 };
 
 const validateOutput = (raw: unknown, request: SemanticProviderRequest): Record<string, unknown> => {
@@ -232,13 +348,22 @@ const runSemantic = async (raw: SemanticAnalysisInput | SemanticDiscoveryInput,
     || input.endpointIds.some(endpointId => !id(endpointId)
       || !input.snapshot.endpoints.some(endpoint => endpoint.endpoint_id === endpointId)))
     throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
-  const endpoints = projection(input);
-  if (!endpoints.length) return Object.freeze({status: "no_context"});
+  const sourceEndpoints = discovery ? sourceProjection(input) : [];
+  const sourceProfile = sourceEndpoints.length > 0;
+  const documentEndpoints = discovery ? projection(input) : [];
+  let endpoints = sourceProfile ? mergeSourceAndDocumentContext(sourceEndpoints, documentEndpoints) : projection(input);
+  if (discovery) {
+    const endpointOrder = new Map(input.endpointIds.map((endpointId, index) => [endpointId, index]));
+    endpoints = endpoints.toSorted((left, right) => endpointOrder.get(left.endpointId)! - endpointOrder.get(right.endpointId)!);
+  }
+  const coverage = discovery ? contextCoverage(input.endpointIds, endpoints.map(endpoint => endpoint.endpointId)) : undefined;
+  if (!endpoints.length) return Object.freeze({status: "no_context", ...(coverage ? {contextCoverage: coverage} : {})});
   const model = input.inference.model!;
   const provider = input.inference.provider as SemanticProviderId;
   const source = {repositoryId: input.selection.repositoryId, serviceId: input.selection.serviceId,
     selector: input.selection.selector, pin: input.pin};
-  const request = freezeDeep({promptVersion: discovery ? SEMANTIC_DISCOVERY_PROMPT_VERSION : SEMANTIC_PROMPT_VERSION,
+  const request = freezeDeep({promptVersion: sourceProfile ? SEMANTIC_DISCOVERY_SOURCE_PROMPT_VERSION
+    : discovery ? SEMANTIC_DISCOVERY_PROMPT_VERSION : SEMANTIC_PROMPT_VERSION,
     ...(discovery ? {intentQuery} : {}), provider, model, source, endpoints}) as SemanticProviderRequest;
   let rawOutput: unknown;
   try {rawOutput = await providerPort(request);} catch {throw new SemanticAnalysisError("SEMANTIC_PROVIDER_ERROR");}
@@ -247,12 +372,14 @@ const runSemantic = async (raw: SemanticAnalysisInput | SemanticDiscoveryInput,
     promptVersion: request.promptVersion, selector: input.selection.selector, pin: input.pin});
   if (output.status === "suggestions") return freezeDeep({status: "suggestions",
     suggestions: output.suggestions, verification: "inferred", review: "unreviewed", normative: false,
-    provenance}) as SemanticAnalysisResult;
+    provenance, ...(coverage ? {contextCoverage: coverage} : {})}) as SemanticAnalysisResult;
   if (output.status === "ambiguous") return freezeDeep({status: "ambiguous",
     candidateEndpointIds: output.candidateEndpointIds, reason: output.reason,
-    verification: "inferred", review: "unreviewed", normative: false, provenance}) as SemanticAnalysisResult;
+    verification: "inferred", review: "unreviewed", normative: false, provenance,
+    ...(coverage ? {contextCoverage: coverage} : {})}) as SemanticAnalysisResult;
   return freezeDeep({status: "no_match", reason: output.reason,
-    verification: "inferred", review: "unreviewed", normative: false, provenance}) as SemanticAnalysisResult;
+    verification: "inferred", review: "unreviewed", normative: false, provenance,
+    ...(coverage ? {contextCoverage: coverage} : {})}) as SemanticAnalysisResult;
 };
 
 export const runGroundedSemanticAnalysis = (raw: SemanticAnalysisInput,

@@ -253,7 +253,7 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
   if (discoverSemantic) {
     server.registerTool("api_truth_discover_api", {
       title: "Find an API for an intent",
-      description: "Sends selected endpoint documentation and task text to the host-configured inference provider. It suggests matching endpoints with evidence citations; results are inferred, unreviewed, and non-normative.",
+      description: "Sends selected endpoint documentation, eligible source route and handler identifiers, and task text to the host-configured inference provider. It suggests matching endpoints with evidence citations; results are inferred, unreviewed, and non-normative, and contextCoverage reports selected operations that lacked usable context.",
       inputSchema: discoverySchema, outputSchema, annotations: {...readOnlyAnnotations, idempotentHint: false, openWorldHint: true},
     }, async (args, context) => execute(options, maxOutputBytes, context, async (principal) =>
       discoverSemantic(principal,

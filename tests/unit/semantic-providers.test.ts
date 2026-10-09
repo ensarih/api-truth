@@ -184,3 +184,21 @@ test("oversize-body cancellation cannot hold up a fixed-size rejection",async()=
     fetch:async()=>({ok:true,headers:new Headers({"content-length":"1000"}),body} as unknown as Response)});
   await expect(oversized(request("openai"))).rejects.toMatchObject({code:"SEMANTIC_PROVIDER_RESPONSE_TOO_LARGE"});
 });
+
+
+test.each(["openai", "gemini", "claude"] as const)("transports mixed document and identifier context through %s without raw source", async provider => {
+  const fetch = vi.fn(async (_url: string|URL|Request, _init?:RequestInit) => response(providerEnvelope(provider, result)));
+  const base = request(provider);
+  const mixed: SemanticProviderRequest = {...base, promptVersion: "semantic-discovery-source-1",
+    intentQuery: "Find stored orders", endpoints: [{...base.endpoints[0]!, documents: [
+      ...base.endpoints[0]!.documents,
+      {kind: "code_route", text: "GET /orders", evidenceIds: ["ev-route"]},
+      {kind: "code_handler", text: "readOrders", evidenceIds: ["ev-handler"]}]}]};
+  expect(await createSemanticProvider(provider, {resolveApiKey: () => "secret-canary", fetch})(mixed))
+    .toEqual(result.result);
+  const body = JSON.parse(String(fetch.mock.calls[0]![1]?.body));
+  const wire = JSON.stringify(body);
+  expect(wire).toContain("semantic-discovery-source-1");
+  expect(wire).toContain("code_handler"); expect(wire).toContain("operation_summary");
+  expect(wire).toContain("readOrders"); expect(wire).not.toContain("function readOrders");
+});

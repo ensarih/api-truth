@@ -22,6 +22,7 @@ const fixture = async (): Promise<ContractSnapshot> => {
 };
 const suggestion = {status: "suggestions", suggestions: [{endpointId: "ep-get", intent: "List orders",
   summary: "Returns orders", evidenceIds: ["evidence-1"]}], verification: "inferred", review: "unreviewed", normative: false,
+  contextCoverage: {status: "complete", requestedEndpointIds: ["ep-get"], analyzedEndpointIds: ["ep-get"], omittedEndpointIds: []},
   provenance: {provider: "openai", model: "test-model", promptVersion: "semantic-discovery-1",
     selector: selected.selector, pin}} satisfies SemanticAnalysisResult;
 const strictView = {kind: "environment", environment: "uat", expectedCheckpointVersion: "7"};
@@ -47,7 +48,8 @@ describe("optional semantic discovery surfaces", () => {
     expect(tool.description).toContain("host-configured inference provider");
     expect(JSON.stringify(tool.inputSchema)).not.toMatch(/tenantId|principalId/);
     const result = await client.callTool({name: "api_truth_discover_api", arguments: payload()});
-    expect(result.structuredContent).toMatchObject({ok: true, data: {status: "suggestions", review: "unreviewed", normative: false}});
+    expect(result.structuredContent).toMatchObject({ok: true, data: {status: "suggestions", review: "unreviewed", normative: false,
+      contextCoverage: {status: "complete", requestedEndpointIds: ["ep-get"], analyzedEndpointIds: ["ep-get"], omittedEndpointIds: []}}});
     vi.mocked(discover).mockRejectedValueOnce(Object.assign(new Error("provider secret"), {code: "SEMANTIC_STALE_CONTEXT"}));
     const stale = await client.callTool({name: "api_truth_discover_api", arguments: payload()});
     expect(stale.structuredContent).toEqual({ok: false, error: "STALE_SELECTION"});
@@ -115,12 +117,20 @@ describe("optional semantic discovery surfaces", () => {
       expect(responses.every(response => response.status >= 400)).toBe(true);
       expect(discover).toHaveBeenCalledTimes(1);
       expect(contractCalls).toHaveLength(1);
+      const reorderedPin = Object.fromEntries(Object.entries(pin).reverse()) as typeof pin;
+      const reorderedSelector = Object.fromEntries(Object.entries(selected.selector).reverse()) as typeof selected.selector;
+      vi.mocked(discover).mockResolvedValueOnce({...suggestion, provenance: {...suggestion.provenance,
+        pin: reorderedPin, selector: reorderedSelector}});
+      const reordered = await post(JSON.stringify(payload()));
+      expect(reordered.status).toBe(200);
+      expect(await reordered.json()).toMatchObject({status: "suggestions"});
+      expect(discover).toHaveBeenCalledTimes(2);
       vi.mocked(discover).mockResolvedValueOnce({...suggestion, provenance: {...suggestion.provenance,
         pin: {...pin, revision: "different-revision"}}});
       const stale = await post(JSON.stringify(payload()));
       expect(stale.status).toBe(409);
       expect(await stale.json()).toEqual({error: "STALE_SELECTION"});
-      expect(discover).toHaveBeenCalledTimes(2);
+      expect(discover).toHaveBeenCalledTimes(3);
       vi.mocked(discover).mockRejectedValueOnce(Object.assign(new Error("secret storage details"), {code: "SEMANTIC_STORAGE_ERROR"}));
       const unavailable = await post(JSON.stringify(payload()));
       expect(unavailable.status).toBe(503);
