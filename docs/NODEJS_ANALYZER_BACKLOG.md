@@ -775,3 +775,10 @@ Routing's explicit `production_entrypoint` option follows a bounded contained li
 ### Document operation text for semantic discovery (2026-10-09)
 
 Standalone Swagger document `0.15.0` and OpenAPI 3.0 document `0.2.0` retain bounded operation summaries/descriptions as declared claims with exact document-pointer evidence. Invalid or oversized text is withheld with a scoped diagnostic. The Swagger middleware `0.33.0` profile remains unchanged. Semantic projection now checks actual `api_document` evidence, exact source version and snapshot provenance; actual analyzer-produced snapshots exercise the boundary. Document prose is untrusted context and does not establish runtime behavior or normative contract guarantees.
+
+
+### Protected Swagger document-value comparison (2026-10-09)
+
+The separate Git connector `swagger-document-value-1` profile compares one host-selected default `api/swagger/swagger.yaml` document with a protected signed handler capture from the same immutable source. It requires literal raw document SHA-256, existing supported middleware/startup/routing/lock declarations and an unambiguous method/path/controller/operationId/export/handler-path match. Unsupported references, duplicate route shapes and ambiguous operations receive diagnostics; unmatched declarations never imply runtime absence. The underlying byte verifier additionally checks raw handler bytes, rejecting a decoded-text digest for a BOM-bearing file. The existing parsing/signature kernel still withholds BOM-bearing handler receipts; this slice does not broaden that accepted set.
+
+This is a separate value-correspondence result, not an assertion that the runtime loaded the selected document. No normative contract, deployed state, catalog snapshot or portal/MCP read is promoted by this port. Runtime document-load attestation, qualified persistence/reads and arbitrary document selectors remain open.

@@ -1,4 +1,6 @@
-import {createPublicKey} from "node:crypto";
+import {createHash, createPublicKey} from "node:crypto";
+import {constants} from "node:fs";
+import {lstat, open, realpath} from "node:fs/promises";
 import {isAbsolute, resolve} from "node:path";
 import {isProxy} from "node:util/types";
 import {canonicalJsonStringify} from "@api-truth/ir";
@@ -87,6 +89,35 @@ function safePin(value: unknown, scope: RuntimeCaptureScope, expectedIdentity: s
     hostBoundScopeFields: ["tenantId", "policyVersion"]};
 }
 
+async function rawHandlerDigest(root: string, relativePath: string, maxBytes: number, budget: () => void): Promise<string> {
+  budget();
+  const absolute = resolve(root, relativePath);
+  const canonical = resolve(await realpath(root), relativePath);
+  const file = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = await file.stat(), atPath = await lstat(absolute);
+    if (!opened.isFile() || !atPath.isFile() || opened.dev !== atPath.dev || opened.ino !== atPath.ino
+      || await realpath(absolute) !== canonical || opened.size > maxBytes)
+      throw new ProtectedCaptureVerificationError("PROTECTED_CAPTURE_UNVERIFIED");
+    const hash = createHash("sha256"), chunk = Buffer.allocUnsafe(65_536);
+    let total = 0;
+    while (true) {
+      budget();
+      const {bytesRead} = await file.read(chunk, 0, Math.min(chunk.length, maxBytes + 1 - total), null);
+      if (!bytesRead) break;
+      total += bytesRead;
+      if (total > maxBytes) throw new ProtectedCaptureVerificationError("PROTECTED_CAPTURE_UNVERIFIED");
+      hash.update(chunk.subarray(0, bytesRead));
+    }
+    const final = await file.stat();
+    if (final.size !== opened.size || total !== opened.size || final.mtimeMs !== opened.mtimeMs
+      || final.ctimeMs !== opened.ctimeMs)
+      throw new ProtectedCaptureVerificationError("PROTECTED_CAPTURE_UNVERIFIED");
+    budget();
+    return `sha256:${hash.digest("hex")}`;
+  } finally {await file.close();}
+}
+
 /** Verifies signed capture handler file bytes against one host-selected immutable Git tree. */
 export function createProtectedCaptureVerificationPort(options: ProtectedCaptureVerificationOptions): {
   verify(): Promise<ProtectedCaptureVerification>} {
@@ -170,6 +201,18 @@ export function createProtectedCaptureVerificationPort(options: ProtectedCapture
         || checked.environment !== scope.environment || checked.session_id !== pinned.sessionId
         || checked.captured_at !== pinned.capturedAt)
         throw new ProtectedCaptureVerificationError("PROTECTED_CAPTURE_UNVERIFIED");
+      // The parsing kernel decodes UTF-8; an attested file digest must additionally match raw Git bytes.
+      const rawDigests = new Map<string, string>();
+      for (const binding of checked.bindings) {
+        budget();
+        let digest = rawDigests.get(binding.handler_path);
+        if (!digest) {
+          digest = await rawHandlerDigest(source.root, binding.handler_path, maxBytes, budget);
+          rawDigests.set(binding.handler_path, digest);
+        }
+        if (digest !== binding.handler_digest)
+          throw new ProtectedCaptureVerificationError("PROTECTED_CAPTURE_UNVERIFIED");
+      }
       // Cleanup can await external filesystem work. Recheck pin and authorization only after
       // the owned tree is fully disposed, so revocation during cleanup cannot release metadata.
       await tree.dispose();

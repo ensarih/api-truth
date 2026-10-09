@@ -94,9 +94,8 @@ try {
   }
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));
-  if (protectedScenario) await put("api/controllers/orders.js", `const fs = require("node:fs");
-    exports.getOrder = function(req, res) {
-      fs.appendFileSync(${JSON.stringify(executionMarker)}, "x");
+  if (protectedScenario) await put("api/controllers/orders.js", `exports.getOrder = function(req, res) {
+      require("node:fs").appendFileSync(${JSON.stringify(executionMarker)}, "x");
       res.json({controller:"orders", id:req.swagger.params.id.value});
     };`);
   if (scenario.startsWith("runtime-binding-response-") || scenario.startsWith("runtime-binding-body-")) await put("api/controllers/orders.js",
@@ -128,7 +127,8 @@ try {
     });`);
   const npmEnvironment = ["npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled"].includes(scenario);
   await put("package.json", JSON.stringify({type: "commonjs",
-    ...(npmEnvironment ? {scripts: {start: "NODE_ENV=production node app.js"}, engines: {node: "22.19.0"}} : {}), dependencies: {"swagger-express-mw": "0.7.0"}}));
+    ...(npmEnvironment || protectedScenario ? {scripts: {start: `NODE_ENV=${protectedScenario ? "test" : "production"} node app.js`},
+      engines: {node: "22.19.0"}} : {}), dependencies: {"swagger-express-mw": "0.7.0"}}));
   await put("package-lock.json", await readFile(new URL("./package-lock.json", import.meta.url), "utf8"));
   if (["configured-directory", "directory-precedence", "initialization-fallback", "mock-mode", "runtime-binding-precedence"].includes(scenario)) {
     const dirs = scenario === "configured-directory" ? ["custom/controllers"]
@@ -249,9 +249,11 @@ try {
         artifactRef:"capture:verified-fixture",configuredKeyRef:"key:verified-fixture",
         receiptDigest:expectedReceiptDigest,signerSpkiDigest:expectedSignerSpkiDigest}));
       const expectedHandlerDigest = sha256(await readFile(join(root,"api/controllers/orders.js")));
+      const expectedRawDocumentSha256 = sha256(await readFile(join(root,"api/swagger/swagger.yaml")));
       const verifyConfigPath = join(keyDirectory, "verify-config.json");
       await writeFile(verifyConfigPath, JSON.stringify({repoPath:root,scope,receiptPath:signedPath,keyPath,
-        expectedReceiptDigest,expectedSignerSpkiDigest,expectedCaptureIdentityDigest,expectedHandlerDigest}));
+        expectedReceiptDigest,expectedSignerSpkiDigest,expectedCaptureIdentityDigest,expectedHandlerDigest,
+        expectedRawDocumentSha256}));
       const committed = (await run("git", ["ls-tree", "-r", "--name-only", revision], {cwd:root})).stdout;
       const executionMarkerBefore = await readFile(executionMarker,"utf8");
       const verified = JSON.parse((await run(analyzerNode,

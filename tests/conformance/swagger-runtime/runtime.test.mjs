@@ -210,6 +210,19 @@ for (const [scenario, status, marker] of cases) {
       assert.equal(result.protectedCapture.executionMarkerAfter, "x");
       assert.deepEqual(result.protectedCapture.limitations,
         ["Document operation correspondence and deployment are unverified"]);
+      assert.equal(result.protectedCapture.correspondence.kind, "protected_swagger_document_value_correspondence");
+      assert.equal(result.protectedCapture.correspondence.profileVersion, "swagger-document-value-1");
+      assert.equal(result.protectedCapture.correspondence.captureIdentityDigest,
+        result.protectedCapture.captureIdentityDigest);
+      assert.equal(result.protectedCapture.correspondence.sourceDigest, result.protectedCapture.sourceDigest);
+      assert.deepEqual(result.protectedCapture.correspondence.matches,
+        [{bindingIndex:0,documentPointer:"/paths/~1orders~1{id}/get",handlerPath:"api/controllers/orders.js"}]);
+      assert.deepEqual(result.protectedCapture.correspondence.diagnostics, []);
+      assert.match(result.protectedCapture.correspondence.document.digest, /^sha256:[a-f0-9]{64}$/);
+      assert.equal(result.protectedCapture.correspondence.document.rawSha256,
+        result.protectedCapture.expectedRawDocumentSha256);
+      assert.equal(result.protectedCapture.correspondence.limitations[0],
+        "Actual runtime document loading and deployment are unverified");
       assert.equal("snapshot_id" in result.protectedCapture, false);
       assert.equal("claims" in result.protectedCapture, false);
     }

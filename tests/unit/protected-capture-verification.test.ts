@@ -208,3 +208,13 @@ test("revocation while owned tree is being disposed withholds handler metadata",
   release?.();
   await expect(pending).rejects.toMatchObject({code: "PROTECTED_CAPTURE_UNAUTHORIZED"});
 });
+
+
+test("a decoded-text digest cannot attest BOM-bearing handler bytes", async () => {
+  const repo = await repository({"services/orders/api/controllers/orders.js": "\uFEFF" + handler});
+  scratch.root = await mkdtemp(join(tmpdir(), "api-truth-protected-bom-owned-")); roots.push(scratch.root);
+  // The source kernel strips the BOM for parsing; byte proof must still hash the committed file.
+  const verifier = await port(repo, signed(repo.scope));
+  await expect(verifier.verify()).rejects.toMatchObject({code: "PROTECTED_CAPTURE_UNVERIFIED"});
+  expect(await readdir(scratch.root)).toEqual([]);
+});

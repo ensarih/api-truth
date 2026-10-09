@@ -14,9 +14,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
   return nextResolve(specifier, context);
 }});
 
-const [{createRuntimeCapturePinResolver}, {createProtectedCaptureVerificationPort}] = await Promise.all([
+const [{createRuntimeCapturePinResolver}, {createProtectedCaptureVerificationPort},
+  {createProtectedSwaggerDocumentCorrespondencePort}] = await Promise.all([
   import("../../../connectors/git-source/src/runtime-capture-pin.ts"),
   import("../../../connectors/git-source/src/protected-capture-verification.ts"),
+  import("../../../connectors/git-source/src/protected-swagger-document-correspondence.ts"),
 ]);
 const config = JSON.parse(await readFile(process.argv[2], "utf8"));
 const before = (await readdir(tmpdir())).filter(name => name.startsWith("api-truth-git-source-")).sort();
@@ -32,10 +34,16 @@ const verifier = createProtectedCaptureVerificationPort({repoPath: config.repoPa
   serviceRoot: ".", scope: config.scope, expectedCaptureIdentityDigest: config.expectedCaptureIdentityDigest,
   pinResolver, ...protectedPorts, limits: {maxFiles: 100, maxBytes: 2_000_000, timeoutMs: 10_000}});
 const result = await verifier.verify();
+const correspondence = await createProtectedSwaggerDocumentCorrespondencePort({repoPath: config.repoPath,
+  serviceRoot: ".", scope: config.scope, expectedCaptureIdentityDigest: config.expectedCaptureIdentityDigest,
+  pinResolver, ...protectedPorts, documentPath: "api/swagger/swagger.yaml",
+  expectedRawDocumentSha256: config.expectedRawDocumentSha256,
+  limits: {maxFiles: 100, maxBytes: 2_000_000, timeoutMs: 10_000}}).verify();
 const after = (await readdir(tmpdir())).filter(name => name.startsWith("api-truth-git-source-")).sort();
 if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("Owned Git source tree was not cleaned");
 if (result.handlers.length !== 1 || result.handlers[0].handlerDigest !== config.expectedHandlerDigest)
   throw new Error("Handler bytes did not match capture");
-process.stdout.write(JSON.stringify({...result, revision: config.scope.immutableRevision,
+process.stdout.write(JSON.stringify({...result, correspondence, revision: config.scope.immutableRevision,
   expectedCaptureIdentityDigest: config.expectedCaptureIdentityDigest,
-  expectedHandlerDigest: config.expectedHandlerDigest, ownedTempCleaned: true}));
+  expectedHandlerDigest: config.expectedHandlerDigest,
+  expectedRawDocumentSha256: config.expectedRawDocumentSha256, ownedTempCleaned: true}));
