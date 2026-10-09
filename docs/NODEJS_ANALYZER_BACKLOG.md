@@ -10,8 +10,9 @@ direct form requiredness and scalar format export are implemented.
 `nodejs-swagger-express-mw@0.32.0` recognizes one direct default-file
 registration shape, composes a valid literal `basePath`, and identifies exact
 default or statically configured CommonJS handler source candidates with separate evidence.
-Effective routing configuration, controller handler binding, framework version,
-and production startup remain unverified.
+Optional trusted captures establish observed handler binding for one exact
+source revision, environment and session. Production startup, future dispatch,
+response enforcement and installed framework verification remain unverified.
 `nodejs-routing-controllers@0.7.0` extracts a bounded literal decorator subset
 and binds direct controller registrations. An opt-in, source-bound declaration
 profile can identify wrapper imports and emit unregistered candidate routes with
@@ -32,7 +33,7 @@ repository.
 |---|---|---|
 | Literal Express app/router registrations | Implemented within the published D05 support matrix | Endpoint identity, mounted routers, DTO schemas, selected validators, response serialization, evidence, dependencies, diagnostics |
 | Swagger 2 JSON/YAML declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions and basePath claim, and D07 update/difference engine |
-| Swagger 2 routes loaded by `swagger-express-mw` | Direct default-file registration, bounded static pipeline declarations and exact CommonJS handler candidates; effective configuration and handler/startup binding remain open | Document-only profile and its bounded JSON/YAML parsers |
+| Swagger 2 routes loaded by `swagger-express-mw` | Bounded static registration/configuration, exact CommonJS candidates and optional signed session-scoped observed handler binding; production startup and runtime response enforcement remain open | Document-only profile and its bounded JSON/YAML parsers |
 | OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
 | routing-controllers literal decorators | Initial profile; direct and bounded glob registrations, literal body requiredness, inline `@QueryParams` and `@HeaderParams` fields, and opt-in wrapper declarations; startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
@@ -125,6 +126,10 @@ reanalysis through the existing analysis-key boundary.
 **Acceptance:** existing D05 results remain stable; hostile parsers cannot leak
 source text or escape resource limits; no source execution, build hook, package
 installation, network, database, log, or model access occurs.
+
+The dated NB4 entries below are historical implementation evidence; earlier
+versions and open-gate statements do not describe the current release scope.
+The summary above and the main backlog remain the current status ledger.
 
 ## 4. Adapter delivery backlog
 
@@ -241,8 +246,8 @@ to IR 1.0 until explicit profile selection is implemented.
   candidates; create mock false cannot cancel router mock true. Exact overlay
   evidence and two pinned runtime cases cover this behavior (21 runtime tests).
 - Remaining: broader conformance and complete affecting transitive version policy,
-  effective configuration, startup and module initialization before
-  authoritative binding and handler-derived facts.
+  production configuration/startup and module initialization verification. Later
+  dated entries record bounded observed binding and inferred handler facts.
 - Resolve handlers only through documented middleware/version semantics. The
   first profile must require an exact controller mapping plus `operationId`.
   Bounded symbol search may produce candidate evidence and diagnostics but may

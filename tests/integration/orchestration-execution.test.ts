@@ -1,3 +1,6 @@
+import {createHash} from "node:crypto";
+import {readFile} from "node:fs/promises";
+import {ANALYZER as SWAGGER_ANALYZER,createAnalyzer as createSwaggerAnalyzer} from "../../analyzers/nodejs/src/middleware.js";
 import { resolve } from "node:path";
 import type { Pool } from "pg";
 
@@ -1182,4 +1185,44 @@ test("authorized status reads expose safe event, job, and outbox projections", a
       await expect(read()).rejects.toMatchObject({ code: "JOB_NOT_FOUND_OR_DENIED" });
     }
   } finally { await database.cleanup(); }
+});
+
+
+test("configured Swagger IR 1.1 reaches durable catalog and rejects resolver wire substitution",async()=>{
+ const database=await createCatalogTestDatabase();
+ try{
+  const revision="d".repeat(40),projectRoot=resolve("fixtures/nodejs/swagger2/middleware/src");
+  const raw:AnalyzerRequest={...requestFor(revision),ir_version:"1.1.0",analyzer:SWAGGER_ANALYZER,
+   resolution_inputs:[{kind:"source_tree",path:".",digest:"pending"},{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]};
+  const analyzer=createSwaggerAnalyzer({projectRoot});
+  const first=await analyzer.analyze(raw);
+  const documentText=await readFile(resolve(projectRoot,"api/swagger/swagger.yaml"),"utf8");
+  const documentDigest=`sha256:${createHash("sha256").update("api/swagger/swagger.yaml").update("\0").update(documentText).digest("hex")}`;
+  const request:AnalyzerRequest={...raw,source:first.source,resolution_inputs:[
+   {kind:"source_tree",path:".",digest:first.source.source_digest},
+   {kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:documentDigest}]};
+  const config=structuredClone(configuration);
+  Object.assign(config.document.repositories[0]!.services[0]!.analyzer,{adapter_id:SWAGGER_ANALYZER.analyzer_id,adapter_version:SWAGGER_ANALYZER.analyzer_version,ir_version:"1.1.0"});
+  await applyOrchestrationMigrations(database.pool,{schema:database.schema});
+  const repository=createOrchestrationRepository(database.pool,{schema:database.schema});
+  await repository.registerConfiguration(admin,config);
+  await repository.activateInitialConfiguration(admin,{fingerprint:config.fingerprint});
+  const access=createAccessPolicyStore(database.pool,{schema:database.schema});
+  await access.putScope({tenantId},{scopeId:"engineering",active:true});
+  await repository.ingestEvent(context,baselineEvent(revision));
+  const worker=createOrchestrationWorker(database.pool,{schema:database.schema});
+  const [claim]=await worker.claimJobs(workerIdentity,{limit:1});
+  let calls=0;
+  const analyzerPort={analyze:async(input:AnalyzerRequest)=>{calls++;return analyzer.analyze(input);}};
+  await expect(worker.runJob(workerIdentity,claim!.lease,{
+   resolver:{resolve:async()=>({request:{...request,ir_version:"1.0.0"},changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
+  })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
+  expect(calls).toBe(0);
+  await expect(worker.runJob(workerIdentity,claim!.lease,{
+   resolver:{resolve:async()=>({request,changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
+  })).resolves.toMatchObject({state:"succeeded"});
+  const sql=quoteCatalogTestSchema(database.schema);
+  const stored=await database.pool.query(`SELECT job.ir_version,association.snapshot_id FROM ${sql}.orchestration_jobs job JOIN ${sql}.orchestration_revision_snapshots association ON association.producing_job_id=job.job_id AND association.tenant_id=job.tenant_id WHERE job.job_id=$1`,[claim!.jobId]);
+  expect(stored.rows[0]).toMatchObject({ir_version:"1.1.0",snapshot_id:expect.any(String)});
+ }finally{await database.cleanup();}
 });

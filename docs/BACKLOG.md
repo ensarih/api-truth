@@ -26,6 +26,31 @@ semantic work. Existing phase and backlog IDs remain stable. Incremental updates
 configured branch selection, provenance and environment distinctions remain
 requirements throughout; live-provider completion moves later, not out of scope.
 
+## Autonomous completion queue — 2026-10-09
+
+The owner authorized completing the maintained backlog without step-by-step
+approval. Work proceeds through tested, independently reviewed commits; an
+item remains open until its acceptance gate passes. Credentials or private pilot
+inputs are not assumed. Public synthetic conformance is separate from a live
+provider or enterprise pilot claim.
+
+| ID | Status | Next acceptance work |
+|---|---|---|
+| NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
+| NB1-PROFILES | Open | Exact adapter dispatch and digest-bound options/resolution identity; profile-switch invalidation. |
+| NB2 / NB8-DETECT | Open | Bounded onboarding inventory, production-connected signals and explicit mixed/unsupported classification; no branch enumeration. |
+| NB3 / NB4 | Open | Cross-adapter hostile-input/invalidation matrix and complete bounded Swagger profile gate. |
+| NB5 | Open | Decorator framework conformance and source-to-downstream update gate. |
+| NB6 | Open | OAS 3.0 then bounded 3.1 document profiles and serialization/ref/server tests. |
+| NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
+| D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
+| P3-LOGS | Open | Sanitization, unambiguous environment URL correlation and safe examples. |
+| P4-SEMANTICS | Open | Grounded provider adapters, intent discovery and deterministic evaluation. |
+| D12-S0/S2 | Open | Live provider facts, artifacts, ordering, authentication and environment wiring. |
+| P2-JAVA | Open | Spring analyzer, two-ecosystem conformance and downstream lifecycle. |
+| P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
+| D13-S2 / P6-OPS | Open | Release hygiene, capacity/recovery/access audits and reproducible operating gates. |
+
 ## Current position
 
 | Work | Status | Evidence or next gate |
@@ -53,7 +78,7 @@ rows remain in this tracked backlog so the outstanding work survives outside
 that brief. Reviewed D08 slices 0–5 stay complete; new defects reopen the
 affected slice rather than being hidden in a later task.
 
-## Next — complete the first working release
+## First working release gates — D09–D11 complete, D12–D13 open
 
 | ID | Depends on | Work | Acceptance gate |
 |---|---|---|---|
@@ -149,9 +174,10 @@ requiredness and direct scalar formats export using original snapshot field
 pointers and qualified evidence; source declarations alone remain non-normative. `nodejs-swagger-express-mw@0.32.0`
 binds one direct default-file registration and composes valid literal
 `basePath`, and records exact CommonJS handler source candidates under default or bounded
-static routing configuration declarations, but effective
-configuration, handler/startup binding, and D08 profile selection remain in
-NB1–NB4. `nodejs-routing-controllers@0.7.0`
+static routing configuration declarations. Optional signed captures establish
+observed binding in one exact revision/environment/session. Production startup
+and runtime enforcement remain unverified. D08 wire-version selection is now
+explicit; complete profile dispatch/options conformance remains in NB1–NB4. `nodejs-routing-controllers@0.7.0`
 extracts literal decorator declarations, binds direct controller
 registrations, and applies literal global prefixes, but cannot prove the
 startup entry point. It is the first NB5

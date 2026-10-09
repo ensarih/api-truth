@@ -615,3 +615,15 @@ test("D08 catalog lock is accepted as the exact D06 advisory lock", async () => 
     await database.cleanup();
   }
 });
+
+test("explicit analyzer IR version is pinned in durable jobs and analysis identity",async()=>{
+ const config=configuration();
+ Object.assign(config.document.repositories[0]!.services[0]!.analyzer,{adapter_id:"nodejs-swagger-express-mw",adapter_version:"0.32.0",ir_version:"1.1.0"});
+ const {database,repository,schemaSql}=await setup(config);
+ try{
+  await repository.ingestEvent(context(),branch("configured-ir","1","a".repeat(40)));
+  const jobs=await database.pool.query(`SELECT ir_version,analyzer_adapter_id,semantic_identity FROM ${schemaSql}.orchestration_jobs WHERE tenant_id='tenant-a' AND kind='branch_analysis'`);
+  expect(jobs.rows).toHaveLength(1);
+  expect(jobs.rows[0]).toMatchObject({ir_version:"1.1.0",analyzer_adapter_id:"nodejs-swagger-express-mw",semantic_identity:{analysis:{irVersion:"1.1.0"}}});
+ }finally{await database.cleanup();}
+});

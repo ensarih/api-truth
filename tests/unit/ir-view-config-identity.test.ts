@@ -261,3 +261,16 @@ describe("endpoint identity", () => {
     })).toThrow();
   });
 });
+
+describe("configured analyzer wire version",()=>{
+ const config=(irVersion?:string)=>({config_version:"1.0.0",access_scopes:[{access_scope_id:"read",label:"read"}],
+  repositories:[{repository_id:"repo",provider:"github",locator:"synthetic/repo",access_scope_id:"read",services:[{
+   service_id:"service",root:".",analyzer:{adapter_id:"nodejs-swagger-express-mw",adapter_version:"0.32.0",...(irVersion?{ir_version:irVersion}:{})},
+   intended_branches:["main"],environments:[]}]}]});
+ test.each([undefined,"1.0.0","1.1.0"])("accepts supported version %s",version=>{
+  expect(parseConfig(config(version)).ok).toBe(true);
+ });
+ test.each(["1.2.0","latest","2.0.0"])("rejects unsupported version %s",version=>{
+  expect(parseConfig(config(version)).ok).toBe(false);
+ });
+});

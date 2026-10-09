@@ -1,6 +1,6 @@
 import { type Static, Type } from "@sinclair/typebox";
 import { issue, parserFor, type ValidationIssue } from "./validation.js";
-import { ConfigVersionSchema } from "./versions.js";
+import { ConfigVersionSchema, IrVersionSchema, LEGACY_IR_VERSION } from "./versions.js";
 
 export const SecretReferenceSchema = Type.Object({
   secret_ref: Type.Union([
@@ -52,6 +52,7 @@ const ServiceConfigSchema = Type.Object({
   analyzer: Type.Object({
     adapter_id: Type.String({ minLength: 1 }),
     adapter_version: Type.String({ minLength: 1 }),
+    ir_version: Type.Optional(IrVersionSchema),
   }, { additionalProperties: false }),
   intended_branches: Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
   environments: Type.Array(EnvironmentConfigSchema),
@@ -120,3 +121,6 @@ const validateConfigReferences = (config: InstallationConfig): ValidationIssue[]
 
 export const parseConfig = parserFor(InstallationConfigSchema, validateConfigReferences);
 export const validateConfig = parseConfig;
+
+/** Legacy configurations retain their original wire contract until explicitly changed. */
+export const configuredAnalyzerIrVersion = (analyzer: InstallationConfig["repositories"][number]["services"][number]["analyzer"]): "1.0.0" | "1.1.0" => analyzer.ir_version ?? LEGACY_IR_VERSION;

@@ -1,7 +1,7 @@
 # API Truth — Implementation Plan
 
-**Status:** development; D01–D10 complete; D11 shared query access in progress.
-**Updated:** 2026-09-30
+**Status:** development; D01–D11 complete; D12–D13 and later phase gates remain open.
+**Updated:** 2026-10-09
 **Project name:** API Truth (`api-truth`).
 **License:** Apache-2.0; see [LICENSE](LICENSE).
 

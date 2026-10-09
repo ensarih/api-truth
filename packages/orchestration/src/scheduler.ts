@@ -1,7 +1,7 @@
 import {
   ANALYZER_EXCHANGE_VERSION,
   IDENTITY_VERSION,
-  LEGACY_IR_VERSION,
+  configuredAnalyzerIrVersion,
   type EventEnvelope,
   type InstallationConfig,
 } from "@api-truth/ir";
@@ -147,8 +147,7 @@ const analysisIdentity = (configuration: SchedulingConfiguration, target: Target
   analyzerAdapterId: target.service.analyzer.adapter_id,
   analyzerAdapterVersion: target.service.analyzer.adapter_version,
   exchangeVersion: ANALYZER_EXCHANGE_VERSION,
-  // The current orchestrated Express profile remains pinned to its supported wire contract.
-  irVersion: LEGACY_IR_VERSION,
+  irVersion: configuredAnalyzerIrVersion(target.service.analyzer),
   identityVersion: IDENTITY_VERSION,
   configVersion: configuration.document.config_version,
   configFingerprint: configuration.fingerprint,
@@ -273,7 +272,7 @@ const persistJob = async (client: PoolClient, tenantId: string, prepared: Prepar
       input.target.repository.repository_id, input.target.service.service_id, input.branch ?? null,
       input.pullRequestId ?? null, input.baseRevision ?? null, input.targetRevision ?? null,
       input.target.service.root, input.target.service.analyzer.adapter_id, input.target.service.analyzer.adapter_version,
-      ANALYZER_EXCHANGE_VERSION, LEGACY_IR_VERSION, IDENTITY_VERSION, configuration.document.config_version,
+      ANALYZER_EXCHANGE_VERSION, configuredAnalyzerIrVersion(input.target.service.analyzer), IDENTITY_VERSION, configuration.document.config_version,
       configuration.fingerprint, configuration.documentSha256, evidence.provider, evidence.provider_reference,
       evidence.order?.kind ?? null, evidence.order?.value ?? null, input.generation, identity],
   );

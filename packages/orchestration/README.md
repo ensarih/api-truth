@@ -1,7 +1,7 @@
 # `@api-truth/orchestration`
 
 Durable PostgreSQL event and job orchestration for the supported API Truth
-TypeScript/Express path. This package is the deterministic maintenance core;
+configured analyzer profiles. This package is the deterministic maintenance core;
 it does not connect to an SCM provider, deploy services, publish OpenAPI, or
 serve portal/MCP requests.
 
@@ -75,3 +75,21 @@ The application host must implement the resolver and exact provider ports.
 No GitHub adapter, production scheduler, deployment binding, OpenAPI compiler,
 portal, or MCP endpoint is shipped by this package. The maintained
 [backlog](../../docs/BACKLOG.md) tracks those later gates.
+
+
+## Explicit analyzer wire selection
+
+A service still selects an exact `analyzer.adapter_id` and `adapter_version`.
+Optional `analyzer.ir_version` selects `1.0.0` or `1.1.0`. Omission preserves
+legacy `1.0.0` behavior; Swagger middleware requires an explicit `1.1.0`.
+The protocol version enters durable job columns, semantic identities and
+revision association keys. The worker checks stored configuration, resolver
+request and analyzer result before recording a snapshot. Changing the version
+is a configuration change and invalidates the service's analysis.
+
+This is a closed additive field in installation configuration 1.0. Existing
+configurations retain their previous semantics. It does not auto-select a
+framework or certify an unsupported adapter/version combination. The host must
+supply the selected adapter and digest-bound resolution inputs through its
+existing resolver/analyzer ports; no project execution or branch enumeration
+is introduced.

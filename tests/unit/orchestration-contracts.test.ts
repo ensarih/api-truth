@@ -351,6 +351,12 @@ describe("D08 orchestration contracts", () => {
     )).toEqual([]);
   });
 
+  test("wire version changes invalidate the configured service",()=>{
+    const next=config();
+    Object.assign(next.repositories[0]!.services[0]!.analyzer,{ir_version:"1.1.0"});
+    expect(calculateConfigurationImpact({fingerprint:"same",document:config()},{fingerprint:"same",document:next})).toEqual(["orders"]);
+  });
+
   test("contains every malformed configuration pair behind a safe error", () => {
     const marker = "secret://configuration-pair";
     const validPair = { fingerprint: "valid", document: config() };

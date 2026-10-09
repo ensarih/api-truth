@@ -4,7 +4,7 @@ import {
   type StoredSnapshot,
 } from "@api-truth/catalog";
 import {
-  parseAnalyzerRequest, parseAnalyzerResult, parseConfig, parseContractSnapshot,
+  configuredAnalyzerIrVersion, parseAnalyzerRequest, parseAnalyzerResult, parseConfig, parseContractSnapshot,
   type AnalyzerRequest, type AnalyzerResult, type InstallationConfig,
 } from "@api-truth/ir";
 import { executeUpdate, planUpdate, parseUpdatePlan, type UpdateExecutionResult } from "@api-truth/updates";
@@ -106,6 +106,7 @@ const readPrepared = async (client: PoolClient, worker: WorkerIdentity, lease: J
   if (repository === undefined || service === undefined || service.root !== job.service_root
     || service.analyzer.adapter_id !== job.analyzer_adapter_id
     || service.analyzer.adapter_version !== job.analyzer_adapter_version
+    || configuredAnalyzerIrVersion(service.analyzer) !== job.ir_version
     || job.target_revision === null || job.kind === "pr_preview_analysis" && job.base_revision === null) {
     fail("JOB_EXECUTION_FAILED");
   }
