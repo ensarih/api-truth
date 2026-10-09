@@ -1,12 +1,16 @@
 {
   "name": "@api-truth/observations",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@api-truth/ir": "0.0.0"
+    "@api-truth/environment": "0.0.0",
+    "@api-truth/ir": "0.0.0",
+    "@api-truth/query": "0.0.0",
+    "@api-truth/orchestration": "0.0.0",
+    "pg": "8.23.0"
   }
 }

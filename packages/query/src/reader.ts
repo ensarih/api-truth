@@ -375,6 +375,21 @@ const searchConfiguredServices = async (client: PoolClient, principalId: string,
   return Object.freeze({ services: Object.freeze(services), truncated: false });
 };
 
+/** Read within a caller-owned transaction; retains the same selector and authorization checks. */
+export async function readQueryContractWithClient(client:PoolClient, options:{schema:string},
+  contextInput:unknown, selectionInput:unknown):Promise<QueryContractResult> {
+  const selector=parseQuerySelection(selectionInput);
+  const principalId=parseContext(contextInput,selector.tenantId);
+  const schema=quoteEnvironmentSchema(options.schema);
+  try {
+    await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
+    return await readSelected(client,selector,principalId);
+  } catch(error) {
+    if(error instanceof QueryReadError)throw error;
+    throw new QueryReadError("QUERY_STORAGE_ERROR");
+  }
+}
+
 /** Reads selector, authorization, and snapshot in one consistent database transaction. */
 export const createQueryReader = (pool: Pool, options: { schema: string }): QueryReader => {
   const schema = quoteEnvironmentSchema(options.schema);
