@@ -80,6 +80,7 @@ test("applies D08 independently, replays idempotently, and rejects checksum drif
       { version: "0005_revision_target_uniqueness" },
       { version: "0006_observed_capture_associations" },
       { version: "0007_observed_capture_verifications" },
+      { version: "0008_capture_verification_admissions" },
     ]);
     await expect(applyOrchestrationMigrationManifest(database.pool, { schema: database.schema }, [
       { version: "0001_orchestration_core", sql: "SELECT 'private migration body'" },
@@ -364,7 +365,7 @@ test("rolls back later D08 migration failure without leaking objects or SQL deta
               (SELECT count(*) FROM ${schemaSql}.orchestration_schema_migrations)::text AS count`,
       [`${database.schema}.private_partial`],
     );
-    expect(result.rows).toEqual([{ table_name: null, count: "7" }]);
+    expect(result.rows).toEqual([{ table_name: null, count: "8" }]);
   } finally { await database.cleanup(); }
 });
 

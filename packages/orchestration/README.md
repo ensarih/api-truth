@@ -87,6 +87,29 @@ surface, runtime analysis job, catalog snapshot or serving pointer is created.
 Host callbacks and pool acquisition retain their own deadline responsibilities;
 write SQL uses the same local statement timeout as capture associations.
 
+`createCaptureVerificationAdmissionStore` adds an immutable queued admission
+intent for a previously associated 0006 capture. The request contains only its
+opaque capture identity. The host fixes tenant and principal at construction,
+checks their capability before any database lookup, and supplies a DB-local
+authorization callback. That callback must lock and check an explicit capture
+opt-in bound to the **current configuration fingerprint, document SHA, and
+activation checkpoint**, plus independent source, environment, and protected
+capture permissions. It may use only bounded SQL on the supplied transaction
+client. Catalog source/environment access-scope grants are checked and locked
+first, but those reader grants alone do not authorize capture execution.
+
+Admission verifies the immutable 0006 association identity, configured
+repository/service/environment and exact service root. An older captured Git
+revision may be admitted; admission does not assert a current branch head,
+deployment, handler verification, or API-document match. The job identity
+includes the capture, verifier profile, service root and active configuration
+epoch. A tenant advisory lock serializes the bounded queued quota and replay;
+the active configuration and relevant grants remain share-locked through
+insertion. This slice contains only immutable `queued` rows. Its queued quota
+does not drain until a separately reviewed worker lifecycle exists. No worker
+is dispatched, and no 0007 result, catalog snapshot or serving pointer is
+written by admission.
+
 ## Local validation
 
 From the repository root:

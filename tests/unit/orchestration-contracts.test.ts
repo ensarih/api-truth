@@ -90,6 +90,7 @@ describe("D08 orchestration contracts", () => {
     expect(Object.keys(orchestrationApi).sort()).toEqual([
       "ActiveConfigurationSummarySchema",
       "AuthenticatedEventContextSchema",
+      "CaptureVerificationAdmissionError",
       "ControlContextSchema",
       "DeploymentAuthorityGrantSchema",
       "EVENT_TYPES",
@@ -108,6 +109,7 @@ describe("D08 orchestration contracts", () => {
       "canonicalOrchestrationHash",
       "classifyProviderUpdate",
       "computeRetryDelayMs",
+      "createCaptureVerificationAdmissionStore",
       "createObservedCaptureAssociationStore",
       "createObservedCaptureVerificationStore",
       "createOrchestrationRepository",

@@ -185,6 +185,7 @@ const orchestrationMigrationManifest = async (): Promise<OrchestrationMigration[
   "0005_revision_target_uniqueness",
   "0006_observed_capture_associations",
   "0007_observed_capture_verifications",
+  "0008_capture_verification_admissions",
 ].map(async (version) => ({
   version,
   sql: await readFile(new URL(`../migrations/${version}.sql`, import.meta.url), "utf8"),

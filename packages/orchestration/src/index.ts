@@ -31,6 +31,8 @@ export type { ObservedCaptureScope, ObservedCapturePin, ObservedCaptureAssociati
   ObservedCaptureAssociationReceipt } from "./observed-captures.js";
 export { createObservedCaptureVerificationStore, ObservedCaptureVerificationError } from "./observed-capture-verifications.js";
 export type { ObservedCaptureVerificationOptions, ObservedCaptureVerificationReceipt } from "./observed-capture-verifications.js";
+export { createCaptureVerificationAdmissionStore, CaptureVerificationAdmissionError } from "./capture-verification-admission.js";
+export type { CaptureVerificationAdmissionOptions, CaptureVerificationAdmissionReceipt } from "./capture-verification-admission.js";
 export { createReconciliationScheduler } from "./reconciliation-scheduler.js";
 export type { ScheduledReconciliationRequest } from "./reconciliation-scheduler.js";
 export { createOrchestrationWorker } from "./worker.js";

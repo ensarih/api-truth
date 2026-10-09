@@ -19,8 +19,8 @@ profile can identify wrapper imports and emit unregistered candidate routes with
 owner-asserted prefix evidence, but cannot prove the startup entry point or
 wrapper semantics. Bounded glob lists from imported static configuration select
 only contained controller source files, with runtime source projection marked
-unverified. OpenAPI 3.1 and other decorator
-frameworks are not currently discovered.
+unverified. Separate selected-document profiles cover bounded OpenAPI 3.0.x
+and 3.1.0/3.1.1 subsets. Other decorator frameworks are not currently discovered.
 
 This backlog records the work needed to cover those services without weakening
 the project's evidence, identity, isolation, or update guarantees. It was
@@ -34,7 +34,7 @@ repository.
 | Literal Express app/router registrations | Implemented within the published D05 support matrix | Endpoint identity, mounted routers, DTO schemas, selected validators, response serialization, evidence, dependencies, diagnostics |
 | Swagger 2 JSON/YAML declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions and basePath claim, and D07 update/difference engine |
 | Swagger 2 routes loaded by `swagger-express-mw` | Bounded static registration/configuration, exact CommonJS candidates and optional signed session-scoped observed handler binding; production startup and runtime response enforcement remain open | Document-only profile and its bounded JSON/YAML parsers |
-| OpenAPI 3.x document-defined routes | Bounded 3.0.x document-only profile; 3.1 remains unsupported | Shared selected-document reader, bounded parsers and IR 1.1 contracts |
+| OpenAPI 3.x document-defined routes | Separate bounded 3.0.x and 3.1.0/3.1.1 selected-document profiles; runtime binding and broader dialect/resource semantics remain open | Shared selected-document reader, bounded parsers and IR 1.1 contracts |
 | routing-controllers literal decorators | Initial profile; direct and bounded glob registrations, literal body requiredness, inline `@QueryParams` and `@HeaderParams` fields, and opt-in wrapper declarations; startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
 | Mixed Express/spec/decorator services | Detection and merge policy missing | D03 identity/provenance and D07 deletion safety provide constraints for a future composite design |
