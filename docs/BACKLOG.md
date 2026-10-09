@@ -45,7 +45,7 @@ provider or enterprise pilot claim.
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Sanitization, unambiguous environment URL correlation and safe examples. |
-| P4-SEMANTICS | Open | Grounded provider adapters, intent discovery and deterministic evaluation. |
+| P4-SEMANTICS | In progress | Grounded document-only suggestion kernel and authorized provider adapters; intent discovery, persistence/review and evaluation remain open. |
 | D12-S0/S2 | Open | Live provider facts, artifacts, ordering, authentication and environment wiring. |
 | P2-JAVA | Open | Spring analyzer, two-ecosystem conformance and downstream lifecycle. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
@@ -749,3 +749,7 @@ A clean installation exposed GHSA-68fv-2mgg-jv7q in the locked development depen
 ### Immutable local Git sources in durable analysis (2026-10-09)
 
 An explicit tenant/repository allowlist now materializes only a configured service root from a selected immutable local commit. Git transports, hooks, lazy fetch and replacement objects are disabled; unsafe paths, symlinks and submodules reject. Explicit configured branch refs are probed individually without enumeration. Source and manifest digests are measured using the exact compiled analyzer profile, independently of the Git tree digest. One-shot sessions have deterministic request identity, bounded capacity and retryable cleanup. Sixteen connector tests and a real Git → D08 → PostgreSQL baseline/branch-update test cover the bounded Express, routing-controller and Swagger middleware source profiles. Live fetch/provider delivery, document-only orchestration, delta reuse, protected pilot and broader lifecycle materialization remain separate gates.
+
+### Authorized document-grounded semantic suggestions (2026-10-09)
+
+The first Phase 4 kernel projects only selected OpenAPI declaration text and existing endpoint-bound evidence. Structured suggestions remain inferred, unreviewed and non-normative; unknown endpoints/citations/assertion fields reject. Disabled inference and missing context never call a model. The PostgreSQL host checks active configuration, permissions, evidence scopes and exact snapshot/pointer/checkpoint before and after inference. Twelve integration tests cover authorization, revocation and configuration races and constructor mutation. OpenAI, Gemini and Claude ports use explicit configured models, fixed official origins, bounded bytes and a total deadline with deterministic mocked tests; no live credentials or model grading are used. Conservative text exclusion is not a guarantee against arbitrary sensitive prose. Code-context inference, durable review/indexing, intent search, question evaluation and live provider validation remain open.
