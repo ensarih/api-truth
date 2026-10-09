@@ -6,7 +6,7 @@ import {
 } from "../../../packages/ir/src/index.js";
 import type {RuntimeBindingResolution, RuntimeBinding} from "./runtime-binding.js";
 import {resolveResponseSchema, resolveResponseObject, selectResponseForStatus} from "./response-schema-resolution.js";
-import {compareResponseBodyTypes, compareResponseBodyPresence} from "./response-body-comparison.js";
+import {compareResponseBodyTypes, compareResponseBodyPresence, compareResponseBodyAdditionalProperties} from "./response-body-comparison.js";
 import { declaredSchemaBounds, schemaBoundFields } from "./schema-bounds.js";
 import { declaredSchemaConstraints } from "./schema-constraints.js";
 import { readSelectedDocument } from "./source.js";
@@ -74,7 +74,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(JSON.stringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-11", documentPath }))
-    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-31", documentPath,
+    : hash(JSON.stringify({ request, analyzer: request.analyzer, parser: "swagger2-bound-32", documentPath,
       middleware, handlerPolicy: middleware.kind === "verified" && middleware.handlerResolver
         ? "static-routing-source-candidates-2" : "none" }));
   const result: AnalyzerResult = {
@@ -734,6 +734,19 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
         predicate: "handler.response.body.type.discrepancy", verification: "inferred", evidence_ids: [...new Set([...bodyIds, schemaEvidence, ...referenceIds])],
         value: {paths: comparison.mismatches, policy: "literal-json-body-types-4"}});
       if (comparison.kind === "compared" && !bodySchemaMissing) {
+        const additional = compareResponseBodyAdditionalProperties(body.schema, comparisonSchema);
+        const additionalIds = [...new Set([...bodyIds, schemaEvidence, ...referenceIds])];
+        if (additional.kind === "compared" && additional.extra.length) result.claims.push({
+          claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-additional-discrepancy:${bodyId}`).slice(0,24)}`,
+          subject: {service_id:request.source.service_id,endpoint_id:endpoint.endpoint_id},
+          predicate:"handler.response.body.additional_properties.discrepancy",verification:"inferred",evidence_ids:additionalIds,
+          value:{paths:additional.extra,policy:"literal-json-body-additional-1"}});
+        if (additional.kind === "unresolved" || additional.extra.length) result.diagnostics.push({
+          diagnostic_id:`diag-${hash(`${endpoint.endpoint_id}:body-additional:${bodyId}:${additional.kind}`).slice(0,24)}`,
+          code:additional.kind === "unresolved" ? "handler_response_body_additional_unresolved" : "handler_response_body_additional_discrepancy",
+          severity:"warning",affected_endpoint_ids:[endpoint.endpoint_id],evidence_ids:additionalIds,
+          message:additional.kind === "unresolved" ? "Additional fields could not be compared under the bounded object-closure policy."
+            : "The literal JSON argument contains fields forbidden by documented object closure; runtime serialization remains unverified."});
         const presence = compareResponseBodyPresence(body.schema, comparisonSchema);
         if (presence.kind === "compared" && presence.missing.length) result.claims.push({
           claim_id: `claim-${hash(`${endpoint.endpoint_id}:body-required-discrepancy:${bodyId}`).slice(0, 24)}`,

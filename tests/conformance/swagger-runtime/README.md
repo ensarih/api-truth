@@ -205,3 +205,27 @@ findings do not prove runtime response schemas or qualify strict OpenAPI facts.
 Validation: 984 offline tests and 55 pinned runtime cases, including shorthand
 match, type discrepancy, required-field discrepancy and supporting evidence
 links. Independent review found no actionable issue.
+
+
+### Closed response-object discrepancies (2026-10-09)
+
+Middleware `0.32.0` (package `0.35.0`) compares literal source response fields
+against explicit `additionalProperties: false` declarations. Extra fields yield
+inferred `handler.response.body.additional_properties.discrepancy` claims and
+`handler_response_body_additional_discrepancy` warnings, with source, binding,
+selected schema and resolved-definition evidence. Nested objects, array items
+and each `allOf` branch retain their own closure scope; sibling/other-branch
+properties do not broaden a closed branch. Swagger 2 includes this keyword in
+its [Schema Object](https://spec.openapis.org/oas/v2.0.html#schema-object).
+
+Omitted/true closure adds no extra-field restriction. Schema-valued dictionary
+constraints, unsupported compositions, malformed schemas and exceeded limits
+remain unresolved, suppressing partial findings. Comparison is bounded to
+10,000 visits, depth 64 and 32 distinct field paths. No literal values are
+recorded. Findings describe source/document differences, do not prove runtime
+validation, and do not change normalized schemas or strict export eligibility.
+The standalone document profile remains `0.13.0`.
+
+Validation: 1,000 offline tests and 58 pinned runtime cases. Runtime cases cover
+matching closed objects, extra fields and reusable definition provenance.
+Independent review found no blocker.

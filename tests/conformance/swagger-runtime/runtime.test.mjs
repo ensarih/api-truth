@@ -69,6 +69,9 @@ const cases = [
   ["runtime-binding-body-local-type", 201, "orders"],
   ["runtime-binding-body-local-required", 201, "orders"],
   ["runtime-binding-body-linear-match", 201, "orders"],
+  ["runtime-binding-body-additional-match", 201, "orders"],
+  ["runtime-binding-body-additional-extra", 201, "orders"],
+  ["runtime-binding-body-additional-reference", 201, "orders"],
   ["runtime-binding-body-shorthand-match", 201, "orders"],
   ["runtime-binding-body-shorthand-type", 201, "orders"],
   ["runtime-binding-body-shorthand-required", 201, "orders"],
@@ -134,6 +137,17 @@ for (const [scenario, status, marker] of cases) {
         assert.equal(result.analysis.responseMediaDeclaration.verification, "declared");
         assert.deepEqual(result.analysis.responseMediaDeclaration.value.media_types, ["application/json"]);
         assert.equal(result.analysis.responseMediaPointer, "/produces");
+      }
+      if (scenario.startsWith("runtime-binding-body-additional-")) {
+        const discrepancy = !scenario.endsWith("match");
+        assert.equal(result.analysis.diagnostics.includes("handler_response_body_additional_discrepancy"), discrepancy);
+        assert.equal(result.analysis.diagnostics.includes("handler_response_body_additional_unresolved"), false);
+        if (discrepancy) {
+          assert.equal(result.analysis.additionalDiscrepancy.verification,"inferred");
+          assert.deepEqual(result.analysis.additionalDiscrepancy.value.paths,["/controller"]);
+          assert.ok(result.analysis.additionalEvidencePaths.includes("/paths/~1orders~1{id}/get/responses/201/schema"));
+          if (scenario.endsWith("reference")) assert.ok(result.analysis.additionalEvidencePaths.includes("/definitions/Closed"));
+        } else assert.equal(result.analysis.additionalDiscrepancy,undefined);
       }
       assert.equal(result.analysis.bodyDeclaration.verification, "inferred");
       if (scenario.startsWith("runtime-binding-body-shorthand-")) assert.deepEqual(result.analysis.bodyConstantSources,

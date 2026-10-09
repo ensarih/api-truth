@@ -66,3 +66,38 @@ export function compareResponseBodyPresence(actual: ApiSchema, expected: unknown
   visit(actual, expected, "", 0);
   return unresolved ? {kind: "unresolved", missing: []} : {kind: "compared", missing: [...missing].sort()};
 }
+
+/** Source fields forbidden by explicit object closure; no runtime validation claim. */
+export function compareResponseBodyAdditionalProperties(actual: ApiSchema, expected: unknown): {kind:"compared"|"unresolved"; extra:string[]} {
+  let nodes=0, unresolved=false;
+  const extra=new Set<string>();
+  const consume=():boolean=>{if(++nodes>10000)unresolved=true;return !unresolved;};
+  const visit=(shape:ApiSchema,schema:unknown,path:string,depth:number):void=>{
+    if(!consume()||depth>64){unresolved=true;return;}
+    if(!object(schema)||["$ref","anyOf","oneOf","not","patternProperties"].some(key=>Object.hasOwn(schema,key))){unresolved=true;return;}
+    if(schema.type!==undefined&&(typeof schema.type!=="string"||!types.has(schema.type))){unresolved=true;return;}
+    // Schema-valued additionalProperties needs a separate dictionary policy.
+    if(schema.additionalProperties!==undefined&&typeof schema.additionalProperties!=="boolean"){unresolved=true;return;}
+    if(schema.properties!==undefined&&!object(schema.properties)){unresolved=true;return;}
+    if(Object.hasOwn(schema,"allOf")){
+      if(!Array.isArray(schema.allOf)||!schema.allOf.length||schema.allOf.length>32){unresolved=true;return;}
+      for(const branch of schema.allOf)visit(shape,branch,path,depth+1);
+      if(unresolved)return;
+    }
+    if(shape.anyOf){for(const variant of shape.anyOf)visit(variant,schema,path,depth+1);return;}
+    if(shape.type==="object"&&(schema.type===undefined||schema.type==="object")){
+      if(!shape.properties){unresolved=true;return;}
+      for(const [name,child] of Object.entries(shape.properties)){
+        if(!consume())return;
+        const childPath=`${path}/${pointer(name)}`;
+        if(object(schema.properties)&&Object.hasOwn(schema.properties,name))visit(child,schema.properties[name],childPath,depth+1);
+        else if(schema.additionalProperties===false)extra.add(childPath);
+        if(extra.size>32){unresolved=true;return;}
+      }
+    }
+    if(shape.type==="array"&&(schema.type===undefined||schema.type==="array")&&shape.items&&schema.items!==undefined)
+      visit(shape.items,schema.items,`${path}/*`,depth+1);
+  };
+  visit(actual,expected,"",0);
+  return unresolved?{kind:"unresolved",extra:[]}:{kind:"compared",extra:[...extra].sort()};
+}
