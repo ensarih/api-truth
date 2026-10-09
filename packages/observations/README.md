@@ -52,3 +52,9 @@ These observations are explicitly non-normative and cannot establish requirednes
 or modify contracts. This slice has no source reader, durable body import, sample
 storage, retention, provider, portal or MCP integration. Those require separate
 authorization, versioned policy and lifecycle gates.
+
+Synthetic examples currently withhold qualified source-reuse views that carry
+`selectedRevision` separately from the evidence revision. Their output scope
+cannot yet represent both revisions. A qualifier appearing or changing on the
+final authorized read invalidates an earlier candidate. Keyword/API detail reads
+can carry this qualification; examples do not silently discard it.

@@ -95,6 +95,7 @@ const parseBinding=(input:unknown):SyntheticExamplePolicyBinding=>{
 const samePin=(a:Extract<QueryContractResult,{status:"resolved"}>,
   b:Extract<QueryContractResult,{status:"resolved"}>):boolean=>
   a.pin.snapshotId===b.pin.snapshotId&&a.pin.revision===b.pin.revision
+  &&a.pin.selectedRevision===b.pin.selectedRevision
   &&a.pin.configFingerprint===b.pin.configFingerprint
   &&a.pin.checkpointVersion===b.pin.checkpointVersion
   &&a.pin.pointerVersion===b.pin.pointerVersion
@@ -139,6 +140,8 @@ export const createSyntheticExampleService=(optionsInput:{queryReader:Pick<Query
     const selector=request.selection.selector;
     if(selector.kind!=="environment"||before.pin.checkpointVersion!==selector.expectedCheckpointVersion)
       return error("EXAMPLE_STALE_CONTEXT");
+    if(Object.hasOwn(before.pin,"selectedRevision"))return Object.freeze({status:"withheld",
+      diagnostics:Object.freeze([Object.freeze({ruleId:"qualified_revision_unsupported",count:1})])});
     const policy=bindings.find(item=>item.policyId===request.policyId&&item.tenantId===request.selection.tenantId
       &&item.repositoryId===request.selection.repositoryId&&item.serviceId===request.selection.serviceId
       &&item.environment===selector.environment);

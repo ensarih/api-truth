@@ -184,3 +184,9 @@ test("schema references use the literal IR component ID while policy paths use J
   expect(sameReferencedComponent).toMatchObject({status:"generated",fingerprints:{schemaSha256:generated.status==="generated"
     ?generated.fingerprints.schemaSha256:""}});
 });
+
+test("qualified selected/evidence revisions withhold until example scope supports both",()=>{
+  const selected={...view(),pin:{...view().pin,selectedRevision:"b".repeat(40)}};
+  expect(buildSyntheticExample(selected,"ep-create",policy())).toEqual({status:"withheld",
+    diagnostics:[{ruleId:"qualified_revision_unsupported",count:1}]});
+});

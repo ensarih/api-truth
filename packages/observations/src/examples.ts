@@ -277,6 +277,7 @@ export const buildSyntheticExample=(resolvedView:unknown,selectedEndpointId:unkn
     ||!boundedText(snapshot.source.source_digest)
     ||snapshot.config.config_fingerprint!==pin.configFingerprint||snapshot.service.service_id!==selection.serviceId
     ||snapshot.service.repository_id!==selection.repositoryId)return fail();
+  if(Object.hasOwn(pin,"selectedRevision"))return withheld(new Map(),"qualified_revision_unsupported");
   const policy=getPolicy(policyInput);
   if(policy.endpointId!==selectedEndpointId)return fail();
   if(policy.propertyPaths.length===0)return withheld(new Map(),"no_properties_opted_in");

@@ -1115,3 +1115,12 @@ values or value hashes, and cannot alter requiredness or other source contracts.
 Host authorization and the completeness assertion remain trusted inputs. No body
 source adapter, persistence, retention, portal/MCP or model integration is enabled.
 Those lifecycle and authorization gates remain open.
+
+### Qualified revision boundary for synthetic examples (2026-10-10)
+
+Observed field-presence projection passed independent review and 1,608 offline
+tests on a clean locked install. A downstream regression test then demonstrated
+that existing synthetic examples discarded the selected/evidence revision
+qualification. The pure generator and authorized service now withhold such
+views; the final read compares the qualifier and discards stale candidates.
+Supporting both revisions in example scopes remains later work.

@@ -90,3 +90,18 @@ test("malformed trusted property pointer rejects during configuration",()=>{
   expect(()=>createSyntheticExampleService({queryReader:reader(vi.fn()),policies:[configured]}))
     .toThrow("EXAMPLE_INVALID_CONFIGURATION");
 });
+
+test("qualified source reuse cannot silently relabel a generated example",async()=>{
+  const qualified={...view(),pin:{...view().pin,selectedRevision:"b".repeat(40)}};
+  const read=vi.fn(async()=>qualified);
+  await expect(createSyntheticExampleService({queryReader:reader(read),policies:[binding()]})
+    .generate(context,{selection,policyId:"create-order"})).resolves.toEqual({status:"withheld",
+      diagnostics:[{ruleId:"qualified_revision_unsupported",count:1}]});
+  expect(read).toHaveBeenCalledTimes(1);
+});
+test("a qualifier appearing on the final read discards an earlier generated candidate",async()=>{
+  const read=vi.fn().mockResolvedValueOnce(view()).mockResolvedValueOnce({...view(),
+    pin:{...view().pin,selectedRevision:"b".repeat(40)}});
+  await expect(createSyntheticExampleService({queryReader:reader(read),policies:[binding()]})
+    .generate(context,{selection,policyId:"create-order"})).rejects.toThrow("EXAMPLE_STALE_CONTEXT");
+});
