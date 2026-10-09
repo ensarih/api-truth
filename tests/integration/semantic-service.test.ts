@@ -8,6 +8,7 @@ import {join} from "node:path";
 import {afterEach, expect, test, vi} from "vitest";
 import {ANALYZER as EXPRESS_ANALYZER, createAnalyzer as createExpressAnalyzer}
   from "../../analyzers/typescript/src/index.js";
+import {createConfiguredSemanticProviderFactory} from "../../connectors/semantic-providers/src/index.js";
 import {snapshotContentSha256, snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
 import {contractSnapshotFromAnalyzerResult, createAccessPolicyStore} from "../../packages/catalog/src/index.js";
 import {applyEnvironmentMigrations, createEnvironmentRepository} from "../../packages/environment/src/index.js";
@@ -15,7 +16,7 @@ import type {AnalyzerRequest, ContractSnapshot} from "../../packages/ir/src/inde
 import {applyOpenApiMigrations} from "../../packages/openapi/src/index.js";
 import {applyOrchestrationMigrations, createOrchestrationRepository} from "../../packages/orchestration/src/index.js";
 import {createQueryReader} from "../../packages/query/src/index.js";
-import {createSemanticService} from "../../packages/semantics/src/index.js";
+import {createSemanticService,type SemanticProviderPort} from "../../packages/semantics/src/index.js";
 import {createCatalogTestDatabase, quoteCatalogTestSchema, type CatalogTestDatabase} from "./support/database.js";
 
 const tenantId = "tenant-semantics";
@@ -145,7 +146,7 @@ const setup = async (enabled = true, analyzedSnapshot?: ContractSnapshot): Promi
 };
 afterEach(async () => {await database?.cleanup(); database = undefined;});
 
-const service = (providerPort: Parameters<typeof createSemanticService>[1]["providerPort"]) =>
+const service = (providerPort: SemanticProviderPort) =>
   createSemanticService(database!.pool, {schema: database!.schema, providerPort});
 
 test("disabled inference never sends documented content to a provider", async () => {
@@ -262,6 +263,102 @@ test("host options are captured at construction and cannot redirect provider or 
   expect(substitutedProvider).not.toHaveBeenCalled();
   expect(() => createSemanticService(database!.pool, {schema: "unsafe-schema",
     providerPort: originalProvider})).toThrowError("SEMANTIC_INVALID_REQUEST");
+});
+
+test("configured provider binds the authorized tenant secret reference only after usable context",async()=>{
+  await setup();
+  const provider=vi.fn(async request=>{
+    expect(JSON.stringify(request)).not.toMatch(/SYNTHETIC_MODEL_KEY|secret_ref|credential/);
+    return answer();
+  });
+  const factory=vi.fn(async binding=>{
+    expect(binding).toEqual({tenantId,provider:"openai",model:"synthetic-model",
+      secretRef:{scheme:"env",locator:"SYNTHETIC_MODEL_KEY"}});
+    expect(Object.isFrozen(binding)).toBe(true);
+    expect(Object.isFrozen(binding.secretRef)).toBe(true);
+    return provider;
+  });
+  const semantic=createSemanticService(database!.pool,{schema:database!.schema,providerFactory:factory});
+  await expect(semantic.analyze(context(),selection(),["ep-create"]))
+    .resolves.toMatchObject({status:"no_context"});
+  expect(factory).not.toHaveBeenCalled();
+  await expect(semantic.analyze(context(),selection(),["ep-get"]))
+    .resolves.toMatchObject({status:"suggestions",normative:false});
+  expect(factory).toHaveBeenCalledTimes(1);
+  expect(provider).toHaveBeenCalledTimes(1);
+});
+
+test("configured provider bridge resolves the selected tenant key only at egress",async()=>{
+  await setup();
+  const resolveSecret=vi.fn(async binding=>{
+    expect(binding).toEqual({tenantId,secretRef:{scheme:"env",locator:"SYNTHETIC_MODEL_KEY"}});
+    return "CANARY_MODEL_SECRET";
+  });
+  const fetchProvider=vi.fn(async(_url:string|URL|Request,init?:RequestInit)=>{
+    expect(init?.headers).toMatchObject({authorization:"Bearer CANARY_MODEL_SECRET"});
+    expect(String(init?.body)).not.toContain("CANARY_MODEL_SECRET");
+    return new Response(JSON.stringify({status:"completed",output:[{type:"message",role:"assistant",
+      status:"completed",content:[{type:"output_text",text:JSON.stringify({result:answer()})}]}]}),
+    {status:200,headers:{"content-type":"application/json"}});
+  });
+  const providerFactory=createConfiguredSemanticProviderFactory({resolveSecret,fetch:fetchProvider});
+  const semantic=createSemanticService(database!.pool,{schema:database!.schema,providerFactory});
+  await expect(semantic.analyze(context(),selection(),["ep-get"]))
+    .resolves.toMatchObject({status:"suggestions",review:"unreviewed",normative:false});
+  expect(resolveSecret).toHaveBeenCalledTimes(1);expect(fetchProvider).toHaveBeenCalledTimes(1);
+});
+
+test("disabled configured inference never constructs a provider or resolves a key",async()=>{
+  await setup(false);
+  const providerFactory=vi.fn(async()=>async()=>answer());
+  await expect(createSemanticService(database!.pool,{schema:database!.schema,providerFactory})
+    .analyze(context(),selection(),["ep-get"]))
+    .resolves.toEqual({status:"disabled"});
+  expect(providerFactory).not.toHaveBeenCalled();
+});
+
+test("configured provider stays closed on denial and discards an answer after config reference changes",async()=>{
+  await setup();
+  const factory=vi.fn(async()=>async()=>answer());
+  const semantic=createSemanticService(database!.pool,{schema:database!.schema,providerFactory:factory});
+  await createAccessPolicyStore(database!.pool,{schema:database!.schema})
+    .putGrant({tenantId},{principalId,scopeId:scopes[4],active:false});
+  await expect(semantic.analyze(context(),selection(),["ep-get"]))
+    .rejects.toMatchObject({code:"SEMANTIC_NOT_FOUND_OR_DENIED"});
+  expect(factory).not.toHaveBeenCalled();
+  await createAccessPolicyStore(database!.pool,{schema:database!.schema})
+    .putGrant({tenantId},{principalId,scopeId:scopes[4],active:true});
+  const changingFactory=vi.fn(async()=>async()=>{
+    const next=configuration(true,"sha256:config-b");
+    (next.document.inference as {credential:{secret_ref:{scheme:string;locator:string}}}).credential.secret_ref.locator=
+      "ROTATED_MODEL_KEY";
+    const orchestration=createOrchestrationRepository(database!.pool,{schema:database!.schema});
+    await orchestration.registerConfiguration(admin,next);
+    await orchestration.activateConfigurationByCas(admin,{fingerprint:"sha256:config-b",
+      expectedCheckpointVersion:"1",providerEvidence:{provider:"synthetic",provider_reference:"secret-rotation"}});
+    return answer();
+  });
+  await expect(createSemanticService(database!.pool,{schema:database!.schema,providerFactory:changingFactory})
+    .analyze(context(),selection(),["ep-get"]))
+    .rejects.toMatchObject({code:"SEMANTIC_STALE_CONTEXT"});
+  expect(changingFactory).toHaveBeenCalledTimes(1);
+});
+
+test("configured provider options reject hostile accessors, both modes, and factory failures with fixed errors",async()=>{
+  await setup();
+  const connect=vi.spyOn(database!.pool,"connect");
+  const hostile=Object.defineProperty({schema:database!.schema},"providerFactory",{
+    enumerable:true,get(){throw new Error("CANARY_FACTORY_KEY");}});
+  expect(()=>createSemanticService(database!.pool,hostile as never))
+    .toThrowError("SEMANTIC_INVALID_REQUEST");
+  expect(()=>createSemanticService(database!.pool,{schema:database!.schema,
+    providerPort:async()=>answer(),providerFactory:async()=>async()=>answer()} as never))
+    .toThrowError("SEMANTIC_INVALID_REQUEST");
+  expect(connect).not.toHaveBeenCalled();connect.mockRestore();
+  await expect(createSemanticService(database!.pool,{schema:database!.schema,
+    providerFactory:async()=>{throw new Error("CANARY_FACTORY_KEY");}})
+    .analyze(context(),selection(),["ep-get"]))
+    .rejects.toMatchObject({code:"SEMANTIC_PROVIDER_ERROR",message:"SEMANTIC_PROVIDER_ERROR"});
 });
 
 test("authorized discovery compares a bounded intent with selected documented endpoints", async () => {

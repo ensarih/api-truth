@@ -20,8 +20,14 @@ export class SemanticServiceError extends Error {
 }
 
 type Context = Readonly<{tenantId: string; principalId: string}>;
+export type SemanticSecretRef = Readonly<{scheme: "env" | "vault"; locator: string}>;
+export type SemanticProviderBinding = Readonly<{tenantId: string; provider: SemanticProviderId;
+  model: string; secretRef: SemanticSecretRef}>;
+export type SemanticProviderFactory = (binding: SemanticProviderBinding) =>
+  SemanticProviderPort | Promise<SemanticProviderPort>;
 type Authorized = Readonly<{snapshot: ContractSnapshot; pin: QueryPin; selection: QuerySelection;
   inference: Readonly<{enabled: false} | {enabled: true; provider: SemanticProviderId; model: string}>;
+  secretRef: SemanticSecretRef | null;
   configurationHash: string}>;
 const id = (value: unknown): value is string => typeof value === "string"
   && /^[^\u0000-\u001f\u007f]{1,512}$/.test(value);
@@ -181,14 +187,19 @@ const readAuthorized = async (client: PoolClient, schema: string, context: Conte
   const inference = config?.enabled === true
     ? {enabled: true as const, provider: config.provider, model: config.model}
     : {enabled: false as const};
+  const secretRef = config?.enabled === true ? Object.freeze({
+    scheme: config.credential.secret_ref.scheme,
+    locator: config.credential.secret_ref.locator}) : null;
   return Object.freeze({snapshot: reselected.snapshot, pin: reselected.pin, selection,
-    inference, configurationHash: row.document_sha256});
+    inference, secretRef, configurationHash: row.document_sha256});
 };
 
 const sameAuthorized = (before: Authorized, after: Authorized): boolean =>
   JSON.stringify(before.pin) === JSON.stringify(after.pin)
   && before.configurationHash === after.configurationHash
-  && JSON.stringify(before.inference) === JSON.stringify(after.inference);
+  && JSON.stringify(before.inference) === JSON.stringify(after.inference)
+  && before.secretRef?.scheme === after.secretRef?.scheme
+  && before.secretRef?.locator === after.secretRef?.locator;
 
 const historyLimit=(value:unknown):number=>{
   if(typeof value!=="number"||!Number.isInteger(value)||value<1||value>20)
@@ -203,17 +214,22 @@ const historyScope=(context:Context,authorized:Authorized,endpointIds:readonly s
 };
 
 /** Resolves auth and exact source context before and after inference, with no transaction during provider I/O. */
-export const createSemanticService = (pool: Pool, options: {schema: string; providerPort: SemanticProviderPort;
-  archiveHistory?: boolean}) => {
-  const configured = fields(options,options&&typeof options==="object"&&!isProxy(options)
-    &&Object.hasOwn(options,"archiveHistory")?["schema","providerPort","archiveHistory"]
-      :["schema","providerPort"]);
+export const createSemanticService = (pool: Pool, options: {schema: string; archiveHistory?: boolean} &
+  ({providerPort: SemanticProviderPort; providerFactory?: never}
+  | {providerFactory: SemanticProviderFactory; providerPort?: never})) => {
+  const hasPort=!!options&&typeof options==="object"&&!isProxy(options)&&Object.hasOwn(options,"providerPort");
+  const hasFactory=!!options&&typeof options==="object"&&!isProxy(options)&&Object.hasOwn(options,"providerFactory");
+  const hasArchive=!!options&&typeof options==="object"&&!isProxy(options)&&Object.hasOwn(options,"archiveHistory");
+  const configured = hasPort!==hasFactory ? fields(options,["schema",
+    hasPort?"providerPort":"providerFactory",...(hasArchive?["archiveHistory"]:[])]) : undefined;
   if (!configured || typeof configured.schema !== "string"
-    || typeof configured.providerPort !== "function"
+    || hasPort&&typeof configured.providerPort !== "function"
+    || hasFactory&&typeof configured.providerFactory !== "function"
     || configured.archiveHistory!==undefined&&typeof configured.archiveHistory!=="boolean")
     throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
   const schemaName = configured.schema;
-  const providerPort = configured.providerPort as SemanticProviderPort;
+  const providerPort = configured.providerPort as SemanticProviderPort|undefined;
+  const providerFactory = configured.providerFactory as SemanticProviderFactory|undefined;
   const archiveHistory=configured.archiveHistory===true;
   let schema: string;
   try {schema = quoteEnvironmentSchema(schemaName);}
@@ -248,9 +264,20 @@ export const createSemanticService = (pool: Pool, options: {schema: string; prov
     const before = await read(context, selection, endpointIds);
     const input = {snapshot: before.snapshot, pin: before.pin,
       selection: before.selection, inference: before.inference, endpointIds};
+    const selectedPort:SemanticProviderPort=providerPort??(async request=>{
+      if(!before.inference.enabled||!before.secretRef||!providerFactory
+        ||request.provider!==before.inference.provider||request.model!==before.inference.model)
+        throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
+      const binding:SemanticProviderBinding=Object.freeze({tenantId:context.tenantId,
+        provider:before.inference.provider,model:before.inference.model,
+        secretRef:before.secretRef});
+      const port=await providerFactory(binding);
+      if(typeof port!=="function")throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
+      return port(request);
+    });
     const result = discovery
-      ? await runGroundedSemanticDiscovery({...input, intentQuery: rawIntentQuery as string}, providerPort)
-      : await runGroundedSemanticAnalysis(input, providerPort);
+      ? await runGroundedSemanticDiscovery({...input, intentQuery: rawIntentQuery as string}, selectedPort)
+      : await runGroundedSemanticAnalysis(input, selectedPort);
     if (result.status === "disabled" || result.status === "no_context") return result;
     try {await transaction(context,selection,endpointIds,async(client,after)=>{
       if(!sameAuthorized(before,after))throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");

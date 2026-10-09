@@ -280,3 +280,5 @@ export const createSemanticProvider=(provider:SemanticProviderId,options:Provide
     }finally{clearTimeout(timer!);}
   };
 };
+export {createConfiguredSemanticProviderFactory} from "./configured.js";
+export type {TrustedSemanticSecretResolver} from "./configured.js";

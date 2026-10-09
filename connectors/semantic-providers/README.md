@@ -18,6 +18,8 @@ Tests use mocked `fetch` responses only. They never contact provider services or
 
 API-key resolution stays outside the request and result types. Callers should resolve secrets from their own trusted credential store and must not log them.
 
+`createConfiguredSemanticProviderFactory` is the optional host bridge for `createSemanticService({providerFactory})`. It receives a trusted secret resolver at construction. For each authorized, usable inference, the service passes the active tenant/provider/model and configured `env` or `vault` secret reference to the factory. The adapter resolves the key only when making that provider call, without a cross-tenant key cache. The resolver must authenticate its own backing secret store; a reference alone is not a credential. Factory and resolver failures return fixed errors, and neither the reference nor key is added to model requests or stored results.
+
 Document text is checked using the shared conservative exclusion patterns. These patterns do not certify arbitrary prose as free of sensitive information; the host remains responsible for its document egress policy.
 
 Wire formats follow the official [OpenAI structured output guide](https://developers.openai.com/api/docs/guides/structured-outputs), [Gemini structured output guide](https://ai.google.dev/gemini-api/docs/generate-content/structured-output), and [Claude structured output guide](https://platform.claude.com/docs/en/build-with-claude/structured-outputs). Model support and deployment access must be configured explicitly.
