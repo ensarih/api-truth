@@ -153,6 +153,9 @@ const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
       || request.source.repository_id !== job.repository_id || request.source.service_id !== job.service_id
       || request.source.service_root !== job.service_root || request.source.immutable_revision !== job.target_revision
       || request.source.access_label !== repository.access_scope_id || !digest.test(request.source.source_digest)
+      // Capture receipts affect output independently of immutable source bytes.
+      // They need a separately pinned job input before orchestration may accept them.
+      || request.resolution_inputs.some(input => input.kind === "runtime_observation")
       || request.resolution_inputs.length === 0
       || !request.resolution_inputs.some((input) => input.kind === "source_tree"
         && input.path === job.service_root && input.digest === request.source.source_digest)

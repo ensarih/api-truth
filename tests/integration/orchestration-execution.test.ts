@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import {readFile} from "node:fs/promises";
-import {ANALYZER as SWAGGER_ANALYZER,createAnalyzer as createSwaggerAnalyzer} from "../../analyzers/nodejs/src/middleware.js";
+import {createConfiguredAnalyzer} from "../../analyzers/host/src/index.js";
+import {ANALYZER as SWAGGER_ANALYZER} from "../../analyzers/nodejs/src/middleware.js";
 import { resolve } from "node:path";
 import type { Pool } from "pg";
 
@@ -1194,7 +1195,7 @@ test("configured Swagger IR 1.1 reaches durable catalog and rejects resolver wir
   const revision="d".repeat(40),projectRoot=resolve("fixtures/nodejs/swagger2/middleware/src");
   const raw:AnalyzerRequest={...requestFor(revision),ir_version:"1.1.0",analyzer:SWAGGER_ANALYZER,
    resolution_inputs:[{kind:"source_tree",path:".",digest:"pending"},{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]};
-  const analyzer=createSwaggerAnalyzer({projectRoot});
+  const analyzer=createConfiguredAnalyzer({projectRoot,selection:{adapter_id:SWAGGER_ANALYZER.analyzer_id,adapter_version:SWAGGER_ANALYZER.analyzer_version,ir_version:"1.1.0"}});
   const first=await analyzer.analyze(raw);
   const documentText=await readFile(resolve(projectRoot,"api/swagger/swagger.yaml"),"utf8");
   const documentDigest=`sha256:${createHash("sha256").update("api/swagger/swagger.yaml").update("\0").update(documentText).digest("hex")}`;
@@ -1216,6 +1217,11 @@ test("configured Swagger IR 1.1 reaches durable catalog and rejects resolver wir
   const analyzerPort={analyze:async(input:AnalyzerRequest)=>{calls++;return analyzer.analyze(input);}};
   await expect(worker.runJob(workerIdentity,claim!.lease,{
    resolver:{resolve:async()=>({request:{...request,ir_version:"1.0.0"},changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
+  })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
+  expect(calls).toBe(0);
+  await expect(worker.runJob(workerIdentity,claim!.lease,{
+   resolver:{resolve:async()=>({request:{...request,resolution_inputs:[...request.resolution_inputs,
+    {kind:"runtime_observation",path:"api-truth.runtime-binding.json",digest:`sha256:${"0".repeat(64)}`} ]},changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
   })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
   expect(calls).toBe(0);
   await expect(worker.runJob(workerIdentity,claim!.lease,{

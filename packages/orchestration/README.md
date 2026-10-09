@@ -93,3 +93,10 @@ framework or certify an unsupported adapter/version combination. The host must
 supply the selected adapter and digest-bound resolution inputs through its
 existing resolver/analyzer ports; no project execution or branch enumeration
 is introduced.
+
+
+Use `@api-truth/analyzer-host` to supply an exact configured analyzer port.
+The real Swagger middleware IR 1.1 baseline/catalog integration exercises this
+host. Runtime observation inputs are currently rejected before analyzer access;
+independent capture receipts need a pinned job input before durable reuse is
+safe. This does not remove standalone controlled-capture analysis.

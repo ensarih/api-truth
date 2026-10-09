@@ -46,14 +46,18 @@ const EnvironmentConfigSchema = Type.Object({
   deployment_authority: DeploymentAuthoritySchema,
 }, { additionalProperties: false });
 
+export const AnalyzerSelectionSchema = Type.Object({
+  adapter_id: Type.String({ minLength: 1 }),
+  adapter_version: Type.String({ minLength: 1 }),
+  ir_version: Type.Optional(IrVersionSchema),
+}, { additionalProperties: false });
+export type AnalyzerSelection = Static<typeof AnalyzerSelectionSchema>;
+export const parseAnalyzerSelection = parserFor(AnalyzerSelectionSchema);
+
 const ServiceConfigSchema = Type.Object({
   service_id: Type.String({ minLength: 1 }),
   root: Type.String({ minLength: 1 }),
-  analyzer: Type.Object({
-    adapter_id: Type.String({ minLength: 1 }),
-    adapter_version: Type.String({ minLength: 1 }),
-    ir_version: Type.Optional(IrVersionSchema),
-  }, { additionalProperties: false }),
+  analyzer: AnalyzerSelectionSchema,
   intended_branches: Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
   environments: Type.Array(EnvironmentConfigSchema),
 }, { additionalProperties: false });
