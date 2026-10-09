@@ -76,11 +76,12 @@ contract.addEventListener('submit',async event=>{event.preventDefault();const ge
   schemas.replaceChildren();evidence.replaceChildren();detail.textContent='';download.hidden=true;contractStatus.textContent='Loading…';
   try{const params=selection(),body=await fetchJson('/api/contract?'+params);if(generation!==selectionGeneration)return;
     if(body.status!=='resolved'){contractStatus.textContent='Contract state: '+body.status+'. No contract is available here.';return;}
-    if(requestedCandidate){const item=requestedCandidate.item;if(requestedCandidate.generation!==corpusGeneration||params.get('repositoryId')!==item.repositoryId||params.get('serviceId')!==item.serviceId||params.get('kind')!=='environment'||params.get('value')!==item.selector.selector.environment||params.get('expectedVersion')!==item.pin.checkpointVersion||!['snapshotId','revision','configFingerprint','checkpointVersion'].every(field=>body.pin?.[field]===item.pin[field])||body.selector?.repositoryId!==item.repositoryId||body.selector?.serviceId!==item.serviceId||body.selector?.selector?.kind!=='environment'||body.selector.selector.environment!==item.selector.selector.environment||body.selector.selector.expectedCheckpointVersion!==item.pin.checkpointVersion||!body.endpoints.some(endpoint=>endpoint.endpointId===item.endpointId)){contractStatus.textContent='Pinned candidate is stale. Search again.';return;}}
+    if(requestedCandidate){const item=requestedCandidate.item;if(requestedCandidate.generation!==corpusGeneration||params.get('repositoryId')!==item.repositoryId||params.get('serviceId')!==item.serviceId||params.get('kind')!=='environment'||params.get('value')!==item.selector.selector.environment||params.get('expectedVersion')!==item.pin.checkpointVersion||!['snapshotId','revision','configFingerprint','checkpointVersion','selectedRevision'].every(field=>body.pin?.[field]===item.pin[field])||body.selector?.repositoryId!==item.repositoryId||body.selector?.serviceId!==item.serviceId||body.selector?.selector?.kind!=='environment'||body.selector.selector.environment!==item.selector.selector.environment||body.selector.selector.expectedCheckpointVersion!==item.pin.checkpointVersion||!body.endpoints.some(endpoint=>endpoint.endpointId===item.endpointId)){contractStatus.textContent='Pinned candidate is stale. Search again.';return;}}
     contractStatus.textContent='Contract available. Analyzed at '+body.analyzedAt+'.';currentResolved={params,body};
     if(examplesEnabled&&params.get('kind')==='environment'&&body.pin?.checkpointVersion){exampleButton.disabled=false;exampleStatus.textContent='Enter a configured policy ID to generate a synthetic, non-normative example.';}
     else if(examplesEnabled)exampleStatus.textContent='Synthetic examples require a current environment selection with a serving checkpoint.';
     const coverage=document.createElement('p');coverage.textContent='Coverage: '+body.coverage.status+'.';summary.append(coverage);
+    if(body.pin?.selectedRevision){const lineage=document.createElement('p');lineage.textContent='Selected revision: '+body.pin.selectedRevision+'. Evidence from revision: '+body.pin.revision+'.';summary.append(lineage);}
     if(runtimeEnabled&&params.get('kind')==='environment'&&body.pin&&body.pin.checkpointVersion){
       const activity=document.createElement('button');activity.type='button';activity.textContent='View runtime activity';
       const runtimeParams=new URLSearchParams({repositoryId:params.get('repositoryId'),serviceId:params.get('serviceId'),
@@ -203,7 +204,7 @@ const selectedResult = (result: QueryContractResult): result is Extract<QueryCon
 const samePin = (left: unknown, right: unknown): boolean => {
   if (!left || typeof left !== "object" || Array.isArray(left) || !right || typeof right !== "object" || Array.isArray(right)) return false;
   const a = left as Record<string, unknown>, b = right as Record<string, unknown>;
-  return ["snapshotId", "revision", "configFingerprint", "checkpointVersion", "pointerVersion"]
+  return ["snapshotId", "revision", "configFingerprint", "checkpointVersion", "pointerVersion", "selectedRevision"]
     .every(field => a[field] === b[field]);
 };
 const sameSelector = (left: unknown, right: unknown): boolean => {
@@ -232,7 +233,12 @@ const validCorpusResult=(input:unknown,principal:PortalPrincipal,environment:str
       const selector=item.selector as Record<string,unknown>|undefined;
       const view=selector?.selector as Record<string,unknown>|undefined;
       return safeId(item.repositoryId)&&safeId(item.serviceId)&&safeId(item.endpointId)
-        &&pin!==undefined&&safeId(pin.snapshotId)&&safeId(pin.revision)
+        &&pin!==undefined&&Object.getPrototypeOf(pin)===Object.prototype
+        &&["snapshotId","revision","configFingerprint","checkpointVersion"].every(key=>Object.hasOwn(pin,key))
+        &&Reflect.ownKeys(pin).every(key=>typeof key==="string"&&["snapshotId","revision","configFingerprint","checkpointVersion","selectedRevision"].includes(key))
+        &&safeId(pin.snapshotId)&&safeId(pin.revision)
+        &&(!Object.hasOwn(pin,"selectedRevision")||typeof pin.selectedRevision==="string"
+          &&/^[a-fA-F0-9]{12,128}$/.test(pin.selectedRevision)&&pin.selectedRevision!==pin.revision)
         &&safeId(pin.configFingerprint)&&typeof pin.checkpointVersion==="string"
         &&decimalVersion(pin.checkpointVersion)&&selector?.version==="1"
         &&selector.tenantId===principal.tenantId&&selector.repositoryId===item.repositoryId

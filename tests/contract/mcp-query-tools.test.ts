@@ -154,3 +154,20 @@ describe("read-only API Truth MCP tools", () => {
     expect(JSON.stringify(result)).not.toContain("privateprivate");
   });
 });
+
+test("MCP preserves both selected and evidence revisions on a qualified contract detail",async()=>{
+  const query=queryReader();
+  const qualifiedPin={snapshotId:"snapshot-source-a",revision:"a".repeat(40),
+    selectedRevision:"b".repeat(40),configFingerprint:"config-1",checkpointVersion:"7"};
+  vi.mocked(query.readEndpoint).mockResolvedValueOnce({status:"resolved",selector:selection,
+    pin:qualifiedPin,publication:{status:"absent"},
+    endpoint:{endpoint_id:"endpoint-get-orders",method:"GET",path:"/orders"} as never});
+  const connection=await openProtocolClient(query);opened.push(connection);
+  const result=await connection.client.callTool({name:"api_truth_get_endpoint",arguments:{
+    repositoryId:"commerce",serviceId:"orders",endpointId:"endpoint-get-orders",
+    view:{kind:"environment",environment:"uat",expectedCheckpointVersion:"7"}}});
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent).toMatchObject({ok:true,data:{status:"resolved",
+    pin:qualifiedPin,publication:{status:"absent"}}});
+  expect(query.readEndpoint).toHaveBeenCalledWith(principal,selection,"endpoint-get-orders");
+});

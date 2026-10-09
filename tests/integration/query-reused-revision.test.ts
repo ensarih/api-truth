@@ -177,8 +177,14 @@ test("authorized revision, branch and serving reads follow an exact complete sou
         checkpointVersion: "7"}, publication: {status: "absent"}});
     expect(await reader.readMetadataObservations(context, environment, {limit: 10}))
       .toMatchObject({status: "unknown"});
-    expect(await reader.readOperationCandidates(context, environment, {intentQuery: "health"}))
-      .toMatchObject({status: "unknown", reason: "invalid_input"});
+    const candidates=await reader.readOperationCandidates(context, environment, {intentQuery: "health"});
+    expect(candidates).toMatchObject({status: "candidates",pin:{snapshotId,
+      revision:source.firstRevision,selectedRevision:source.secondRevision,checkpointVersion:"7"},
+      candidates:[{path:"/health",evidenceIds:expect.any(Array)}]});
+    expect(await reader.searchOperationCandidatesAcrossServices(context,
+      {tenantId,environment:"uat",intentQuery:"health"})).toMatchObject({status:"candidates",
+      candidates:[{pin:{snapshotId,revision:source.firstRevision,selectedRevision:source.secondRevision,
+        checkpointVersion:"7"}}]});
     const client=await database.pool.connect();
     try{
       await client.query("BEGIN");

@@ -32,8 +32,10 @@ the proven complete source-only path; non-null fingerprints must match exactly.
 Extra manifests and partial document snapshots are not admitted by this path.
 
 Qualified reads currently withhold current OpenAPI publication and metadata
-observations. Keyword corpus matching, model services and observation imports
-still require their original single-revision contract and fail closed. The
+observations. Keyword matching accepts the qualified pin and retains both revision fields
+while checking citations against the evidence revision. Model services and
+observation imports still require their original single-revision contract
+and fail closed. The
 transaction helper used by imports and model services returns `unknown` for a
 qualified reuse selection before those consumers can use it. Adopting both
 revision fields across those surfaces is separate acceptance work.
@@ -46,8 +48,8 @@ complete. A resolved contract includes either its validated current OpenAPI
 publication ID or an explicit `absent` status when strict export is unavailable.
 Query and OpenAPI reads share D10's validation in one database transaction.
 Historical publication reads recheck current grants and source scopes; they
-do not claim the historical contract is current. Semantic ranking, pagination,
-and portal/MCP transports are not yet implemented.
+do not claim the historical contract is current. Portal and MCP use this shared read layer. Pagination and broad semantic
+retrieval remain separate work.
 
 The `readMetadataObservations` capability is also exposed by `createQueryReader` for an explicit environment selector only. It returns records only when the environment resolves to one current snapshot and checkpoint, applies the same repository, deployment, source, and snapshot grants as contract reads, and filters persisted records to the exact snapshot, revision, configuration fingerprint, and checkpoint version selected in that transaction. A moved checkpoint therefore cannot mix observations from an older serving pin into the current result. Historical revision and branch selectors are rejected. The caller must pass a limit from 1 to 100; results have stable ordering and an explicit `truncated` flag. The output contains only sanitized status/method/status-code and endpoint/mapping identifiers with import/source/window lineage; it never returns log URLs, payloads, credentials, raw hashes, or inferred contract claims. Run the observations migration before using this capability; missing storage fails with a fixed query storage error.
 

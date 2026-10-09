@@ -1,6 +1,6 @@
 # API Truth — Development backlog
 
-**Updated:** 2026-10-09
+**Updated:** 2026-10-10
 **Source of truth for work status:** this file
 **Scope:** public synthetic-fixture development; an enterprise pilot requires separately authorized inputs.
 
@@ -1080,4 +1080,13 @@ Validation: independent review resolved proxy/parser substitution and mutable fa
 
 The `034e11e` and `77f8dd8` CI PostgreSQL/Java gates failed before integration tests because Docker Hub rejected unauthenticated image pulls. A CI-only Compose override now selects the Docker Official Images repository on AWS ECR Public at the exact existing PostgreSQL 18.6-bookworm OCI index digest. The index bytes and Linux amd64 manifest were verified against the same Docker Hub digest. The default local Compose file, fixed project, loopback-only port, synthetic credentials, temporary storage, readiness and teardown remain unchanged.
 
-Validation: read-only Compose configuration comparison confirmed the registry image reference is the only service-setting change; independent review and a clean locked install/typecheck passed all 1,573 offline tests. No local database was restarted or reset. Exact-commit CI startup and full gates remain the final acceptance check.
+Validation: read-only Compose configuration comparison confirmed the registry image reference is the only service-setting change; independent review and a clean locked install/typecheck passed all 1,573 offline tests. No local database was restarted or reset. At `8645fe8`, main CI successfully started the mirrored image and passed all offline, PostgreSQL, Java, Swagger runtime and browser gates.
+
+
+### Qualified source-reuse keyword candidates and portal pin checks — NB1 downstream read boundary (2026-10-10)
+
+Selected-operation and cross-service keyword matching now retain a qualified source-reuse pin's evidence revision and later selected revision. Snapshot identity and all cited evidence still bind to the original evidence revision; relabeled evidence, malformed selected revisions and extra pin fields are rejected. The pure matcher continues to require caller-authorized resolved context; it does not authorize reads or prove that a keyword match fulfills the task.
+
+Portal candidate reloads and server-side candidate/discovery result checks compare the selected revision as part of the exact pin. Corpus output accepts only the expected environment pin fields, with the optional selected revision constrained to the shared immutable-revision format. The portal shows the selected revision alongside the evidence revision, and the MCP transport preserves both fields. Semantic services, observation imports, metadata samples and current OpenAPI publication for these qualified selections remain withheld until their own contracts adopt both revisions.
+
+Validation: TDD reproduced a dropped selected-revision field being accepted by the browser and server, then verified rejection. Unit and HTTP tests cover malformed, missing and swapped qualification; real Git/D08 PostgreSQL tests cover per-service and cross-service candidates; browser cases cover original and qualified pins; an MCP protocol test preserves both revisions. Independent review and a clean locked install/typecheck passed all 1,589 offline, 368 PostgreSQL and nine browser tests. The preceding `8645fe8` main CI passed all gates.

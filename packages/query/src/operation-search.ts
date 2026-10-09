@@ -129,7 +129,10 @@ const resolvedInput=(input:unknown):SearchInput=>{
   const snapshot=parsedSnapshot.value;
   const pinProps=descriptors(pin);
   if(!pinProps||!(["snapshotId","revision","configFingerprint","checkpointVersion"].every(key=>Object.hasOwn(pinProps,key)))
-    ||Object.keys(pinProps).length!==4||parsedSelection.selector.kind!=="environment"
+    ||Object.keys(pinProps).length!==(Object.hasOwn(pinProps,"selectedRevision")?5:4)
+    ||Object.keys(pinProps).some(key=>!["snapshotId","revision","configFingerprint","checkpointVersion","selectedRevision"].includes(key))
+    ||Object.hasOwn(pinProps,"selectedRevision")&&(typeof pin.selectedRevision!=="string"||!/^[a-fA-F0-9]{12,128}$/.test(pin.selectedRevision)||pin.selectedRevision===pin.revision)
+    ||parsedSelection.selector.kind!=="environment"
     ||!parsedSelection.selector.expectedCheckpointVersion
     ||pin.snapshotId!==snapshot.snapshot_id||pin.revision!==snapshot.source.immutable_revision
     ||pin.configFingerprint!==snapshot.config.config_fingerprint

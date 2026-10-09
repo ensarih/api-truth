@@ -5,10 +5,12 @@ import {createPortalServer,type PortalOptions} from "../../apps/portal/src/serve
 import type {ContractSnapshot} from "../../packages/ir/src/index.js";
 import type {CorpusOperationSearchResult,QuerySelection} from "../../packages/query/src/index.js";
 
-test("cross-service candidates require an explicit pinned contract load before inference",async({page})=>{
+for(const qualified of [false,true])test(`cross-service candidates require an explicit pinned contract load before inference (${qualified?"qualified reuse":"original revision"})`,async({page})=>{
   const principal={tenantId:"tenant-browser-corpus",principalId:"reader"};
   const pin={snapshotId:"snapshot-browser-corpus",revision:"revision-browser-corpus",
-    configFingerprint:"sha256:config-a",checkpointVersion:"7"};
+    configFingerprint:"sha256:config-a",checkpointVersion:"7",
+    ...(qualified?{selectedRevision:"b".repeat(40)}:{})};
+  const {selectedRevision: omittedSelectedRevision,...evidenceOnlyPin}=pin;
   const selector:QuerySelection={version:"1",tenantId:principal.tenantId,repositoryId:"commerce",
     serviceId:"orders",selector:{kind:"environment",environment:"uat",expectedCheckpointVersion:"7"}};
   const snapshot=JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json",import.meta.url),
@@ -28,7 +30,7 @@ test("cross-service candidates require an explicit pinned contract load before i
     searchServices:async()=>({services:[],truncated:false}),
     readContract:async(_principal,selection)=>{selections.push(selection);
       const resolved={status:"resolved" as const,selector:selection as QuerySelection,
-        pin:wrongPin?{...pin,revision:"stale"}:pin,publication:{status:"absent" as const},snapshot};
+        pin:wrongPin?(qualified?evidenceOnlyPin:{...pin,revision:"stale"}):pin,publication:{status:"absent" as const},snapshot};
       return delayContractLoad?new Promise(resolve=>{releaseContractLoad=resolve;}):resolved;},
     compareContracts:async()=>({status:"unavailable" as const,beforeStatus:"unknown" as const,
       afterStatus:"unknown" as const}),
@@ -59,6 +61,10 @@ test("cross-service candidates require an explicit pinned contract load before i
     expect(selections[0]).toMatchObject({repositoryId:"commerce",serviceId:"orders",
       selector:{kind:"environment",environment:"uat",expectedCheckpointVersion:"7"}});
     expect(discoverCalls).toBe(0);
+    if(qualified){
+      await expect(page.locator("#contract-summary")).toContainText("Selected revision: "+"b".repeat(40));
+      await expect(page.locator("#contract-summary")).toContainText("Evidence from revision: revision-browser-corpus");
+    }
     await expect(page.locator('#discovery input[name="endpointId"]:checked')).toHaveCount(0);
     delaySearch=true;
     await page.getByRole("button",{name:"Search across services"}).click();

@@ -237,3 +237,33 @@ test("rejects explicit null or undefined limit rather than treating it as omitte
   expect(validateOperationSearchOptions({intentQuery: "Find an order", limit: undefined})).toBeUndefined();
   expect(validateOperationSearchOptions({intentQuery: "Find an order"})).toEqual({intentQuery: "Find an order", limit: 20});
 });
+
+test("qualified source reuse keeps selected and evidence revisions in keyword results",()=>{
+  const input=resolved();
+  const selectedRevision="b".repeat(40);
+  const qualified={...input,pin:{...input.pin,selectedRevision}};
+  const result=searchOperationCandidates(qualified,{intentQuery:"find order identifier",limit:10});
+  expect(result).toMatchObject({status:"candidates",pin:{...input.pin,selectedRevision},complete:true,
+    candidates:[{evidenceIds:["ev-description","ev-route","ev-summary","ev-symbol"]}]});
+  expect(qualified.snapshot).toEqual(input.snapshot);
+  if(result.status!=="candidates")throw new Error("Expected qualified keyword candidates");
+  const cited=new Set(result.candidates.flatMap(item=>item.evidenceIds));
+  expect(qualified.snapshot.evidence.filter(item=>cited.has(item.evidence_id))
+    .every(item=>item.source_version===input.pin.revision&&item.scope.revision===input.pin.revision)).toBe(true);
+  const relabeled=structuredClone(qualified);
+  relabeled.pin.revision=selectedRevision;
+  expect(searchOperationCandidates(relabeled,{intentQuery:"find order identifier"})).toMatchObject({status:"unknown"});
+});
+
+test.each([undefined,"", "a\u0000b", "Bearer secret", "nonhex-revision", "a".repeat(11), "a".repeat(129), "x".repeat(2049)])("rejects malformed optional selected revision %s",selectedRevision=>{
+  const input=resolved();
+  expect(searchOperationCandidates({...input,pin:{...input.pin,selectedRevision}},
+    {intentQuery:"find order identifier"})).toMatchObject({status:"unknown"});
+});
+
+
+test("a redundant selected revision cannot masquerade as qualified reuse",()=>{
+  const input=resolved();
+  expect(searchOperationCandidates({...input,pin:{...input.pin,selectedRevision:input.pin.revision}},
+    {intentQuery:"find order identifier"})).toMatchObject({status:"unknown"});
+});
