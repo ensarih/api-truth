@@ -1,6 +1,6 @@
 # Local Git source connector
 
-`@api-truth/connector-git-source@0.5.0` reads one explicit local repository,
+`@api-truth/connector-git-source@0.6.0` reads one explicit local repository,
 one immutable 40-character commit ID, and one normalized service-tree path. It
 reads the committed tree and blobs directly; working-tree edits, staged changes,
 untracked files, ignored files, branch names, and remote refs do not select
@@ -69,3 +69,5 @@ materializations are capped (eight sessions by default, with a lower cap
 configurable), and all reads remain offline and non-executing. This provides a
 local source-to-analyzer bridge, not remote-provider acquisition, branch
 selection, or proof of deployment/runtime behavior.
+
+The exact `java-spring-mvc@0.1.0` profile accepts one source tree and no classpath, manifest or startup options. Its AST toolchain must be prepared explicitly in the host project before immutable Git sessions are analyzed. The source checkout cannot select a compiler or dependency runtime.

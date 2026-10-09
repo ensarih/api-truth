@@ -205,3 +205,17 @@ framework dependencies and Node 22.19.0 fixture binary; the analyzer and normal
 checks keep Node 24.6.0. Run `npm run test:swagger:runtime` after the documented
 setup. This is a separate local and CI suite, not part of `npm run check`.
 No scanned service code is executed by extraction.
+
+## Java AST and durable worker checks
+
+Prepare the project-local prerequisites explicitly while online:
+
+```sh
+npm run java:env:up
+npm run java:parser:up
+npm run test:java
+npm run test:env:up
+npm run test:java:integration
+```
+
+Java tests have separate configurations so the default offline suite requires no installed JDK. Missing or invalid prerequisites fail the Java gates; they are not skipped. Extraction reads synthetic Java syntax using the fixed AST helper and never builds or runs the analyzed service. The CI Java job installs the pinned prerequisites, checks AST containment and uncertainty, and exercises actual Git revisions through the PostgreSQL worker. macOS arm64 is checked locally; the other installation targets require their own actual execution evidence.

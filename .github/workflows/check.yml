@@ -92,3 +92,31 @@ jobs:
           browser_path="$(node --input-type=module -e 'import { chromium } from "@playwright/test"; process.stdout.write(chromium.executablePath())')"
           test -x "$browser_path"
           API_TRUTH_BROWSER_EXECUTABLE="$browser_path" npm run test:browser
+
+  java-conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked dependencies and explicit Java prerequisites
+        run: |
+          test "$(node --version)" = "v24.6.0"
+          test "$(npm --version)" = "11.5.1"
+          npm ci
+          npm run java:env:up
+          npm run java:parser:up
+      - name: Verify offline Java AST boundary
+        run: npm run test:java
+      - name: Start isolated PostgreSQL
+        run: npm run test:env:up
+      - name: Verify Java source updates through the durable worker
+        run: npm run test:java:integration
+      - name: Stop isolated PostgreSQL
+        if: always()
+        run: npm run test:env:down

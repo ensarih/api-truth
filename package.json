@@ -38,7 +38,12 @@
     "extract:openapi3": "node scripts/extract-openapi3.mjs",
     "inventory:nodejs": "node scripts/inventory-nodejs.mjs",
     "java:env:up": "node scripts/java-test-environment.mjs up",
-    "java:env:ready": "node scripts/java-test-environment.mjs ready"
+    "java:env:ready": "node scripts/java-test-environment.mjs ready",
+    "java:parser:up": "node scripts/java-parser-toolchain.mjs up",
+    "java:parser:ready": "node scripts/java-parser-toolchain.mjs ready",
+    "test:java": "npm run java:env:ready && npm run java:parser:ready && vitest run --config vitest.java.config.ts",
+    "test:java:integration": "node scripts/test-environment.ts ready && npm run java:env:ready && npm run java:parser:ready && vitest run --config vitest.java.integration.config.ts",
+    "extract:java": "node scripts/extract-java.mjs"
   },
   "engines": {
     "node": "24.6.0",

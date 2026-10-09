@@ -1,0 +1,8 @@
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({test: {
+  name: "java-conformance", environment: "node",
+  include: ["tests/conformance/java-spring/**/*.test.ts"],
+  exclude: ["tests/conformance/java-spring/**/*.integration.test.ts"],
+  testTimeout: 90_000, hookTimeout: 90_000, maxWorkers: 1,
+}});

@@ -14,6 +14,7 @@ network request or branch enumeration is performed.
 | openapi3-document | 0.2.0 | 1.1.0 |
 | nodejs-swagger2-document | 0.15.0 | 1.1.0 |
 | nodejs-swagger-express-mw | 0.33.0 | 1.1.0 |
+| java-spring-mvc | 0.1.0 | 1.0.0 |
 
 These are bounded profiles; listing one does not certify the whole framework.
 The optional configuration IR field defaults to legacy 1.0.0, so Swagger
@@ -50,6 +51,8 @@ separately pinned job input before they can participate in durable reuse.
 This prevents an unpinned receipt from silently changing a cached contract.
 
 
-An installation may pin an ordered `resolution_inputs` array of `{ "kind": "type_manifest", "path": "api/swagger/swagger.yaml" }` in the analyzer selection. Paths are normalized, project-relative and contained within the configured service; at most 16 unique manifests are allowed. The host rejects selected-input substitution before reading source. Standalone calls that omit this optional selection retain adapter-specific validation. Durable D08 workers require explicit configuration for every extra manifest, require actual SHA-256 digests, and conservatively reanalyze the service on branch updates with extra inputs. Runtime observations remain rejected until their independent identity and trust metadata are pinned. Document-only orchestration is still unsupported; its local CLI is available.
+An installation may pin an ordered `resolution_inputs` array of `{ "kind": "type_manifest", "path": "api/swagger/swagger.yaml" }` in the analyzer selection. Paths are normalized, project-relative and contained within the configured service; at most 16 unique manifests are allowed. The host rejects selected-input substitution before reading source. Standalone calls that omit this optional selection retain adapter-specific validation. Durable D08 workers require explicit configuration for every extra manifest, require actual SHA-256 digests, and conservatively reanalyze the service on branch updates with extra inputs. Runtime observations remain rejected until their independent identity and trust metadata are pinned. Standalone Swagger/OpenAPI document orchestration is supported with one exact configured document input and full reanalysis.
 
 For the routing profile only, `production_entrypoint` explicitly selects a contained project-relative file. The host passes its detached selection to the adapter, which scopes registrations to the bounded runtime import graph. Other profiles reject this option. Changing the option invalidates configuration analysis identity. Static reachability does not prove deployment startup.
+
+Java analysis requires the explicitly prepared, verified project-local JDK and parser toolchain described in [the Java profile](../java-spring/README.md). Analysis never installs dependencies, compiles service source, or runs Maven/Gradle/startup hooks. The declaration-only profile remains partial; classpath, runtime registration, DTO validation, response status and security are unverified.

@@ -1,10 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2024",
-    "lib": ["ES2024"],
+    "lib": [
+      "ES2024"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node", "vitest/globals"],
+    "types": [
+      "node",
+      "vitest/globals"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -20,6 +25,8 @@
     "packages/**/*.ts",
     "apps/**/*.ts",
     "analyzers/**/*.ts",
-    "connectors/**/*.ts"
+    "connectors/**/*.ts",
+    "vitest.java.config.ts",
+    "vitest.java.integration.config.ts"
   ]
 }

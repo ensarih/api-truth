@@ -47,7 +47,7 @@ provider or enterprise pilot claim.
 | P3-LOGS | In progress | Sanitization, unambiguous environment URL correlation and safe examples. |
 | P4-SEMANTICS | In progress | Grounded selected-operation intent discovery and authorized provider adapters; undocumented code context, corpus retrieval, persistence/review and evaluation remain open. |
 | D12-S0/S2 | Open | Live provider facts, artifacts, ordering, authentication and environment wiring. |
-| P2-JAVA | Open | Spring analyzer, two-ecosystem conformance and downstream lifecycle. |
+| P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
 | D13-S2 / P6-OPS | Open | Release hygiene, capacity/recovery/access audits and reproducible operating gates. |
 
@@ -818,3 +818,12 @@ An optional lazy provider factory binds tenant, provider, model and credential r
 The explicit Java setup prepares checksum-pinned Temurin `21.0.12.1+1` under the project cache on macOS/Linux x64/arm64. Offline verification compares the retained verified archive and complete runtime tree before an environment-isolated JVM version probe. Partial caches, symlink paths, oversized metadata and redirected downloads fail closed. Eleven deterministic tests and an actual macOS arm64 offline verification pass. This prerequisite does not execute service code or establish Java analyzer coverage.
 
 GitHub private vulnerability reporting is enabled and verified; `SECURITY.md` documents its route without a response-time promise. The main check workflow pins action commits and adds a read-only Playwright Chromium job. Governance designation, license/distribution authority, full fixture/artifact review and protected lifecycle/release gates remain open.
+
+
+### Spring MVC AST and actual Git worker — P2-JAVA first slice (2026-10-09)
+
+The exact `java-spring-mvc@0.1.0` IR 1.0 profile reads contained UTF-8 Java sources through a checksum-pinned JavaParser helper on the verified local JDK. It extracts explicit imported controllers, literal class/method paths and bounded selectors with exact source spans and revision evidence. Dynamic property/SpEL paths, conflicting routes, unsupported mappings, local annotation shadowing and inherited routes stay unresolved. All output remains partial: startup binding, classpath, DTO validation, status and security are unverified. Setup compiles only the fixed helper with annotation processing disabled; analysis neither compiles service source nor executes build/startup code.
+
+The configured host and local Git connector accept only that exact profile and one digest-bound source tree. A real PostgreSQL test materializes two immutable Git commits through D08, persists both snapshots and advances the configured branch pointer. Separate Java gates fail on absent prerequisites rather than skipping; the default offline suite needs no JDK. Broader Spring parameter/DTO/schema extraction, runtime framework conformance and the two-ecosystem downstream/pilot gates remain open.
+
+Validation for the first Java slice: clean tracked-source install, typecheck and 1,397 offline tests; 293 PostgreSQL tests; 11 dedicated Java tests and one Java Git/worker PostgreSQL scenario passed. The first Linux Java CI execution is still required; these results do not certify all supported setup architectures.

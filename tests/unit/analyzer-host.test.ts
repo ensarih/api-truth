@@ -40,7 +40,8 @@ test("configured identity is detached and rejects request substitution before so
  await expect(analyzer.analyze(request(profiles[3]))).rejects.toThrow("ANALYZER_REQUEST_MISMATCH");
 });
 test("profile inventory is immutable and describes exact bounded versions",()=>{
- expect(configuredAnalyzerProfiles).toHaveLength(5);
+ expect(configuredAnalyzerProfiles).toHaveLength(6);
+ expect(configuredAnalyzerProfiles).toContainEqual({adapter_id:"java-spring-mvc",adapter_version:"0.1.0",ir_version:"1.0.0"});
  expect(Object.isFrozen(configuredAnalyzerProfiles)).toBe(true);
  for(const profile of configuredAnalyzerProfiles)expect(Object.isFrozen(profile)).toBe(true);
 });
