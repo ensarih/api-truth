@@ -52,7 +52,7 @@ test("synthetic examples use the displayed environment pin, show actual scope as
     await expect(button).toBeEnabled();
     await page.locator("#examples input[name=policyId]").fill("create-order");
     await button.click();
-    await expect(page.locator("#example-status")).toContainText("synthetic");
+    await expect(page.locator("#example-status")).toHaveText("Synthetic, non-normative example for endpoint ep-get.");
     await expect(page.locator("#example-result")).toContainText("ep-get");
     await expect(page.locator("#example-result")).toContainText("<img src=x");
     expect(await page.locator("#example-result img").count()).toBe(0);
