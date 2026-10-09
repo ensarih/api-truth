@@ -134,9 +134,8 @@ and one per service are admitted.
 
 Claims search a bounded window filtered to the worker's configured scope and
 the current configuration epoch. `no_work` reports partial coverage; it does
-not assert that no other authorized work exists. Jobs from an old epoch stay
-queued but cannot be claimed; cancellation and quota cleanup for stale jobs
-remain separate work. The lease store itself does not invoke the byte verifier
+not assert that no other authorized work exists. Jobs from an old epoch cannot
+be claimed. The lease store itself does not invoke the byte verifier
 or write 0007; the runner below performs those steps with a live lease fence.
 
 `createCaptureVerificationRunner` supplies that bounded executor. A trusted
@@ -160,6 +159,20 @@ expire and may be retried within the three-attempt bound. These records do
 not establish API-document correspondence, deployment enforcement, catalog
 facts, or serving pointers. Host-provided key and receipt readers must remain
 protected inputs, not paths read from the source checkout.
+
+`createCaptureVerificationMaintenance` cancels a bounded batch of old-epoch
+queued or leased capture jobs after a configuration change. Its host fixes
+tenant, manager principal, repository/service scope and batch size (1–100).
+The separate `capture.verify.manage` preflight runs before database access;
+a DB-local manager-grant check authorizes each old job even when its service
+was removed from the current configuration. Migration 0011 records
+`CAPTURE_CONFIG_SUPERSEDED`, clears any live lease token, and releases the
+existing active-job quota. A late worker cannot append 0007 with that token.
+Current-epoch jobs and successful verification records remain intact. The
+result contains only a cancellation count and explicit partial/batch-limited
+coverage; denied candidates can occupy a bounded scan window, so zero does
+not mean all old jobs were examined. No protected receipt/key references are
+read, and no catalog, deployment or D08 state is changed.
 
 ## Local validation
 

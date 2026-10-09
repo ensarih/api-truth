@@ -39,6 +39,10 @@ export type { CaptureVerificationLeaseOptions, CaptureVerificationLease,
 export { createCaptureVerificationRunner, CaptureVerificationRunnerError } from "./capture-verification-runner.js";
 export type { CaptureVerificationRunnerOptions, CaptureVerificationRunnerBinding,
   CaptureVerificationRunResult } from "./capture-verification-runner.js";
+export { createCaptureVerificationMaintenance, CaptureVerificationMaintenanceError }
+  from "./capture-verification-maintenance.js";
+export type { CaptureVerificationMaintenanceOptions, CaptureVerificationCancellationBinding,
+  CaptureVerificationMaintenanceResult } from "./capture-verification-maintenance.js";
 export { createReconciliationScheduler } from "./reconciliation-scheduler.js";
 export type { ScheduledReconciliationRequest } from "./reconciliation-scheduler.js";
 export { createOrchestrationWorker } from "./worker.js";
