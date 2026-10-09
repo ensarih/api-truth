@@ -77,3 +77,5 @@ and artifact audit, define supported platforms and release/rollback ownership,
 and decide whether the open D12/D13-S1 gates have actually passed. Only then
 should a version/tag or public release be created. Until that decision and the
 full Phase 1 evidence exist, keep v0.1 unpublished and D13-S2 open.
+
+The read-only [root-lock dependency metadata inventory](DEPENDENCY_INVENTORY.md) is implemented. Its scoped metadata-completeness result is not a license audit or publication approval; isolated fixtures and Java toolchains still require separate review.

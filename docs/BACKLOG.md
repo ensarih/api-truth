@@ -847,3 +847,12 @@ Keyword search and semantic context accept exactly `java-spring-mvc@0.1.0` route
 Actual Java AST-to-catalog tests exercise distinct selector variants, candidate matching, provider context and hostile evidence mutations. Query advances to 0.1.0 and semantics to 0.6.0 with coordinated exact workspace dependencies. Broader Java contract extraction and runtime proof remain open.
 
 Validation: independent review, clean tracked-source install/typecheck and 1,429 offline tests; all 22 dedicated Java tests (including 11 discovery scenarios) and 42 query/portal/semantic PostgreSQL tests passed.
+
+
+### Root-lock dependency metadata inventory — release hygiene slice (2026-10-09)
+
+`dependencies:inventory` reads bounded root npm lockfile and installed manifest metadata without importing packages, contacting registries or changing files. It reports exact versions, installation mismatches, optional dependencies and recognized license-expression metadata. Paths and credential-bearing registry URLs are withheld. The current root lock contains 117 third-party entries and 21 workspaces, with no unresolved root-lock license metadata.
+
+This is a scoped metadata check, not legal acceptance or release approval. Isolated framework fixture lockfiles, JDK/parser artifacts, full license texts, ownership and distribution obligations remain open release gates.
+
+Validation: clean tracked-source install, typecheck and 1,438 offline tests passed, including nine hostile-input inventory scenarios. The inventory was run on the clean installed tree and reported complete root-lock metadata without contacting a registry.
