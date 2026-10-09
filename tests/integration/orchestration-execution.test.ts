@@ -13,6 +13,7 @@ import { createAccessPolicyStore, contractSnapshotFromAnalyzerResult } from "../
 import { applyOrchestrationMigrations, createOrchestrationRepository, createOrchestrationWorker,
   createReconciliationScheduler } from "../../packages/orchestration/src/index.js";
 import type { OrchestrationObservation, ScheduledReconciliationRequest } from "../../packages/orchestration/src/index.js";
+import {canonicalOrchestrationHash} from "../../packages/orchestration/src/canonical.js";
 import { createCatalogTestDatabase, quoteCatalogTestSchema } from "./support/database.js";
 
 const tenantId = "tenant-execution";
@@ -443,6 +444,14 @@ test("a branch update promotes once and a content-identical new revision reuses 
     expect(first?.kind).toBe("branch_analysis");
     expect(await worker.runJob(workerIdentity, first!.lease, { resolver,
       analyzer: { analyze: async () => firstResult } })).toMatchObject({ state: "succeeded" });
+    // Simulate a pre-0012 association: its unknown input vector must not break the existing source-only reuse path.
+    const schema = quoteCatalogTestSchema(database.schema);
+    await database.pool.query(`ALTER TABLE ${schema}.orchestration_revision_snapshots
+      DISABLE TRIGGER orchestration_revision_snapshots_immutable`);
+    await database.pool.query(`UPDATE ${schema}.orchestration_revision_snapshots
+      SET resolution_inputs_fingerprint=NULL WHERE tenant_id=$1 AND immutable_revision=$2`, [tenantId, firstRevision]);
+    await database.pool.query(`ALTER TABLE ${schema}.orchestration_revision_snapshots
+      ENABLE TRIGGER orchestration_revision_snapshots_immutable`);
     await repository.ingestEvent(context, branchEvent("branch-second", "2", secondRevision));
     const [second] = await worker.claimJobs(workerIdentity, { limit: 1 });
     expect(second?.jobId).not.toBe(first?.jobId);
@@ -452,7 +461,6 @@ test("a branch update promotes once and a content-identical new revision reuses 
       .toMatchObject({ state: "succeeded" });
     expect(analyzerCalls).toBe(0);
     expect(selectedBases).toEqual([undefined, firstRevision]);
-    const schema = quoteCatalogTestSchema(database.schema);
     const pointer = await database.pool.query<{ snapshot_id: string; pointer_version: string }>(
       `SELECT snapshot_id,pointer_version::text FROM ${schema}.catalog_branch_pointers
        WHERE tenant_id=$1 AND repository_id='commerce' AND service_id='orders' AND branch='main'`, [tenantId],
@@ -465,6 +473,16 @@ test("a branch update promotes once and a content-identical new revision reuses 
     expect(associations.rows).toEqual([
       { immutable_revision: firstRevision, snapshot_id: firstResult.snapshot_id, association_kind: "analyzed" },
       { immutable_revision: secondRevision, snapshot_id: firstResult.snapshot_id, association_kind: "reused" },
+    ]);
+    const inputFingerprints = await database.pool.query<{ immutable_revision: string; resolution_inputs_fingerprint: string | null }>(
+      `SELECT immutable_revision,resolution_inputs_fingerprint FROM ${schema}.orchestration_revision_snapshots
+       WHERE tenant_id=$1 ORDER BY immutable_revision`, [tenantId],
+    );
+    const expectedInputFingerprint = canonicalOrchestrationHash({version: "orchestration-resolution-inputs-1",
+      resolutionInputs: [{kind: "source_tree", path: ".", digest: firstResult.source.source_digest}]});
+    expect(inputFingerprints.rows).toEqual([
+      {immutable_revision: firstRevision, resolution_inputs_fingerprint: null},
+      {immutable_revision: secondRevision, resolution_inputs_fingerprint: expectedInputFingerprint},
     ]);
     const snapshots = await database.pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${schema}.catalog_snapshots WHERE tenant_id=$1`, [tenantId],
@@ -1306,34 +1324,133 @@ test("configured Swagger IR 1.1 reaches durable catalog and rejects resolver wir
   })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
   expect(calls).toBe(0);
   await expect(worker.runJob(workerIdentity,claim!.lease,{
+   resolver:{resolve:async()=>({request:{...request,resolution_inputs:[...request.resolution_inputs].reverse()},changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
+  })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
+  await expect(worker.runJob(workerIdentity,claim!.lease,{
+   resolver:{resolve:async()=>({request:{...request,resolution_inputs:[request.resolution_inputs[0]!,
+    {...request.resolution_inputs[1]!,digest:`sha256:${"f".repeat(64)}`} ]},changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
+  })).rejects.toMatchObject({code:"JOB_EXECUTION_FAILED"});
+  expect(calls).toBe(1); // The configured adapter rejects the selected document's byte digest.
+  await expect(worker.runJob(workerIdentity,claim!.lease,{
    resolver:{resolve:async()=>({request,changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
   })).resolves.toMatchObject({state:"succeeded"});
   const sql=quoteCatalogTestSchema(database.schema);
   const stored=await database.pool.query(`SELECT job.ir_version,association.snapshot_id FROM ${sql}.orchestration_jobs job JOIN ${sql}.orchestration_revision_snapshots association ON association.producing_job_id=job.job_id AND association.tenant_id=job.tenant_id WHERE job.job_id=$1`,[claim!.jobId]);
   expect(stored.rows[0]).toMatchObject({ir_version:"1.1.0",snapshot_id:expect.any(String)});
+  const fingerprint=(inputs:AnalyzerRequest["resolution_inputs"])=>canonicalOrchestrationHash({
+   version:"orchestration-resolution-inputs-1",resolutionInputs:inputs});
+  const exactFingerprint=fingerprint(request.resolution_inputs);
+  const changedPath=request.resolution_inputs.map((input,index)=>index===1&&input.kind==="type_manifest"
+   ?{...input,path:"api/swagger/other.yaml"}:input);
+  const changedDigest=request.resolution_inputs.map((input,index)=>index===1&&"digest"in input
+   ?{...input,digest:`sha256:${"f".repeat(64)}`}:input);
+  expect(new Set([exactFingerprint,fingerprint([...request.resolution_inputs].reverse()),
+   fingerprint(changedPath),fingerprint(changedDigest)])).toHaveProperty("size",4);
+  const firstAssociation=await database.pool.query<{resolution_inputs_fingerprint:string}>(
+   `SELECT resolution_inputs_fingerprint FROM ${sql}.orchestration_revision_snapshots WHERE immutable_revision=$1`,[revision]);
+  expect(firstAssociation.rows).toEqual([{resolution_inputs_fingerprint:exactFingerprint}]);
+  await expect(database.pool.query(`UPDATE ${sql}.orchestration_revision_snapshots
+   SET resolution_inputs_fingerprint=$1 WHERE immutable_revision=$2`,[`sha256:${"f".repeat(64)}`,revision]))
+   .rejects.toThrow();
+  // Legacy pre-0012 rows have NULL. They remain unknown, so branch updates still analyze in full.
+  await database.pool.query(`ALTER TABLE ${sql}.orchestration_revision_snapshots
+   DISABLE TRIGGER orchestration_revision_snapshots_immutable`);
+  await database.pool.query(`UPDATE ${sql}.orchestration_revision_snapshots
+   SET resolution_inputs_fingerprint=NULL WHERE immutable_revision=$1`,[revision]);
+  await database.pool.query(`ALTER TABLE ${sql}.orchestration_revision_snapshots
+   ENABLE TRIGGER orchestration_revision_snapshots_immutable`);
+  // A pre-0012 exact association stays replayable, but NULL is not upgraded into a guessed identity.
+  await repository.ingestEvent(context,branchEvent("swagger-legacy-replay","2",revision));
+  const [legacyClaim]=await worker.claimJobs(workerIdentity,{limit:1});
+  await expect(worker.runJob(workerIdentity,legacyClaim!.lease,{
+   resolver:{resolve:async()=>({request,changedPaths:[],changedPathsComplete:false})},analyzer:analyzerPort,
+  })).resolves.toMatchObject({state:"succeeded"});
+  expect(calls).toBe(3);
+  const legacyReplay=await database.pool.query<{resolution_inputs_fingerprint:string|null}>(
+   `SELECT resolution_inputs_fingerprint FROM ${sql}.orchestration_revision_snapshots WHERE immutable_revision=$1`,[revision]);
+  expect(legacyReplay.rows).toEqual([{resolution_inputs_fingerprint:null}]);
   const branchRevision="e".repeat(40);
-  await repository.ingestEvent(context,branchEvent("swagger-main","2",branchRevision));
+  await repository.ingestEvent(context,branchEvent("swagger-main","3",branchRevision));
   const [branchClaim]=await worker.claimJobs(workerIdentity,{limit:1});
   const branchRequest={...request,request_id:"swagger-main",source:{...request.source,immutable_revision:branchRevision},
-    extraction_mode:"baseline" as const};
+    extraction_mode:"fallback_full_service" as const};
   await expect(worker.runJob(workerIdentity,branchClaim!.lease,{
    resolver:{resolve:async()=>({request:branchRequest,changedPaths:[],changedPathsComplete:true})},analyzer:analyzerPort,
   })).resolves.toMatchObject({state:"succeeded"});
-  expect(calls).toBe(2);
+  expect(calls).toBe(4);
+  const branchInputs=await database.pool.query<{resolution_inputs_fingerprint:string}>(
+   `SELECT resolution_inputs_fingerprint FROM ${sql}.orchestration_revision_snapshots WHERE immutable_revision=$1`,[branchRevision]);
+  expect(branchInputs.rows).toEqual([{resolution_inputs_fingerprint:exactFingerprint}]);
   const branchStored=await database.pool.query(`SELECT snapshot_id FROM ${sql}.orchestration_revision_snapshots WHERE immutable_revision=$1`,[branchRevision]);
   expect(branchStored.rows).toHaveLength(1);
   expect(branchStored.rows[0].snapshot_id).not.toBe(stored.rows[0].snapshot_id);
   const nextRevision="f".repeat(40);
-  await repository.ingestEvent(context,branchEvent("swagger-main-next","3",nextRevision));
+  await repository.ingestEvent(context,branchEvent("swagger-main-next","4",nextRevision));
   const [nextClaim]=await worker.claimJobs(workerIdentity,{limit:1});
   const nextRequest={...branchRequest,request_id:"swagger-main-next",source:{...request.source,immutable_revision:nextRevision},
     extraction_mode:"fallback_full_service" as const};
   await expect(worker.runJob(workerIdentity,nextClaim!.lease,{
    resolver:{resolve:async()=>({request:nextRequest,changedPaths:[],changedPathsComplete:true})},analyzer:analyzerPort,
   })).resolves.toMatchObject({state:"succeeded"});
-  expect(calls).toBe(3); // Same source bytes still reanalyze the explicitly configured manifest input.
+  expect(calls).toBe(5); // Same source bytes still reanalyze the explicitly configured manifest input.
   const nextStored=await database.pool.query(`SELECT snapshot_id FROM ${sql}.orchestration_revision_snapshots WHERE immutable_revision=$1`,[nextRevision]);
   expect(nextStored.rows).toHaveLength(1);
   expect(nextStored.rows[0].snapshot_id).not.toBe(branchStored.rows[0].snapshot_id);
  }finally{await database.cleanup();}
+});
+
+test("a conflicting validated input vector cannot replace an immutable revision association", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const revision = "7".repeat(40);
+    const { result, request: sourceRequest } = await preparedAnalysis(revision);
+    const config = structuredClone(configuration);
+    Object.assign(config.document.repositories[0]!.services[0]!.analyzer, {
+      resolution_inputs: [{ kind: "type_manifest", path: "schemas/api.json" }],
+    });
+    config.fingerprint = "exec-config-with-manifest";
+    await applyOrchestrationMigrations(database.pool, { schema: database.schema });
+    const repository = createOrchestrationRepository(database.pool, { schema: database.schema });
+    await repository.registerConfiguration(admin, config);
+    await repository.activateInitialConfiguration(admin, { fingerprint: config.fingerprint });
+    const access = createAccessPolicyStore(database.pool, { schema: database.schema });
+    const converted = contractSnapshotFromAnalyzerResult(result, config.fingerprint);
+    for (const scopeId of converted.requiredScopeIds) await access.putScope({ tenantId }, { scopeId, active: true });
+    const worker = createOrchestrationWorker(database.pool, { schema: database.schema });
+    const firstInputs: AnalyzerRequest["resolution_inputs"] = [
+      ...sourceRequest.resolution_inputs,
+      { kind: "type_manifest", path: "schemas/api.json", digest: `sha256:${"1".repeat(64)}` },
+    ];
+    const secondInputs: AnalyzerRequest["resolution_inputs"] = [
+      ...sourceRequest.resolution_inputs,
+      { kind: "type_manifest", path: "schemas/api.json", digest: `sha256:${"2".repeat(64)}` },
+    ];
+    const run = async (eventId: string, sequence: string, inputs: AnalyzerRequest["resolution_inputs"], baseline = false) => {
+      await repository.ingestEvent(context, baseline
+        ? baselineEvent(revision) : branchEvent(eventId, sequence, revision));
+      const [claim] = await worker.claimJobs(workerIdentity, { limit: 1 });
+      const request = { ...sourceRequest, resolution_inputs: inputs };
+      return worker.runJob(workerIdentity, claim!.lease, {
+        resolver: { resolve: async () => ({ request, changedPaths: [], changedPathsComplete: false }) },
+        // The trusted adapter port accepts the resolver's already-validated bytes and returns the same result.
+        analyzer: { analyze: async () => result },
+      });
+    };
+    await expect(run("manifest-input-a", "1", firstInputs, true)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(run("manifest-input-b", "2", secondInputs))
+      .rejects.toMatchObject({ code: "REVISION_ASSOCIATION_CONFLICT" });
+    const schema = quoteCatalogTestSchema(database.schema);
+    const rows = await database.pool.query<{ resolution_inputs_fingerprint: string | null; associations: string; snapshots: string }>(
+      `SELECT association.resolution_inputs_fingerprint,
+         (SELECT count(*)::text FROM ${schema}.orchestration_revision_snapshots WHERE tenant_id=$1) AS associations,
+         (SELECT count(*)::text FROM ${schema}.catalog_snapshots WHERE tenant_id=$1) AS snapshots
+       FROM ${schema}.orchestration_revision_snapshots association
+       WHERE association.tenant_id=$1 AND association.immutable_revision=$2`, [tenantId, revision],
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]).toMatchObject({ associations: "1", snapshots: "1" });
+    expect(rows.rows[0]!.resolution_inputs_fingerprint).toBe(canonicalOrchestrationHash({
+      version: "orchestration-resolution-inputs-1", resolutionInputs: firstInputs,
+    }));
+  } finally { await database.cleanup(); }
 });

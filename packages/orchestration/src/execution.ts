@@ -55,7 +55,7 @@ type Materialized = {
   analyzerStatus: "success" | "partial"; associationKind: "analyzed" | "reused";
   update?: UpdateExecutionResult;
   baseSelection?: { selectedRevision: string; snapshotId: string; pointerVersion?: string;
-    associationKey: string };
+    associationKey: string; resolutionInputsFingerprint: string | null };
 };
 
 export type AnalysisWorkerPorts = Readonly<{
@@ -221,7 +221,7 @@ const analyzeBaseline = async (request: AnalyzerRequest, ports: AnalysisWorkerPo
 
 const baseForBranch = async (pool: Pool, options: { schema: string }, prepared: Prepared): Promise<{
   stored: StoredSnapshot; selectedRevision: string; exchangeVersion: string;
-  pointerVersion: string; associationKey: string;
+  pointerVersion: string; associationKey: string; resolutionInputsFingerprint: string | null;
 } | undefined> => {
   const { job } = prepared;
   const reader = createCatalogOrchestrationReader(pool, options);
@@ -232,6 +232,7 @@ const baseForBranch = async (pool: Pool, options: { schema: string }, prepared: 
   const selected = await withOrchestrationTransaction(pool, options, (client) => client.query<{
     last_successful_selected_revision: string | null; last_successful_snapshot_id: string | null;
     last_successful_association_key: string | null; immutable_revision: string | null;
+    resolution_inputs_fingerprint: string | null;
     snapshot_id: string | null; source_digest: string | null; service_root: string | null;
     analyzer_adapter_id: string | null; analyzer_adapter_version: string | null;
     exchange_version: string | null; ir_version: string | null; identity_version: string | null;
@@ -239,6 +240,7 @@ const baseForBranch = async (pool: Pool, options: { schema: string }, prepared: 
   }>(
     `SELECT checkpoint.last_successful_selected_revision,checkpoint.last_successful_snapshot_id,
        checkpoint.last_successful_association_key,association.immutable_revision,
+       association.resolution_inputs_fingerprint,
        association.snapshot_id,association.source_digest,association.service_root,
        association.analyzer_adapter_id,association.analyzer_adapter_version,
        association.exchange_version,association.ir_version,association.identity_version,
@@ -273,7 +275,7 @@ const baseForBranch = async (pool: Pool, options: { schema: string }, prepared: 
     if (row.last_successful_association_key === key) {
       return { stored: branch.stored, selectedRevision: row.immutable_revision,
         exchangeVersion: row.exchange_version, pointerVersion: branch.pointer.pointerVersion,
-        associationKey: key };
+        associationKey: key, resolutionInputsFingerprint: row.resolution_inputs_fingerprint };
     }
   }
   return undefined;
@@ -281,17 +283,18 @@ const baseForBranch = async (pool: Pool, options: { schema: string }, prepared: 
 
 const baseForPreview = async (pool: Pool, options: { schema: string }, prepared: Prepared): Promise<{
   stored: StoredSnapshot; selectedRevision: string; exchangeVersion: string;
-  associationKey: string;
+  associationKey: string; resolutionInputsFingerprint: string | null;
 }> => {
   const { job } = prepared;
   const selected = await withOrchestrationTransaction(pool, options, (client) => client.query<{
     immutable_revision: string; source_digest: string; snapshot_id: string; service_root: string;
     analyzer_adapter_id: string; analyzer_adapter_version: string; exchange_version: string;
     ir_version: string; identity_version: string; config_version: string; config_fingerprint: string;
+    resolution_inputs_fingerprint: string | null;
   }>(
     `SELECT immutable_revision,source_digest,snapshot_id,service_root,analyzer_adapter_id,
             analyzer_adapter_version,exchange_version,ir_version,identity_version,config_version,
-            config_fingerprint FROM orchestration_revision_snapshots
+            config_fingerprint,resolution_inputs_fingerprint FROM orchestration_revision_snapshots
      WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND immutable_revision=$4
        AND service_root=$5 AND analyzer_adapter_id=$6 AND analyzer_adapter_version=$7
        AND exchange_version=$8 AND ir_version=$9 AND identity_version=$10
@@ -318,6 +321,7 @@ const baseForPreview = async (pool: Pool, options: { schema: string }, prepared:
     || stored.snapshot.config.config_version !== row.config_version
     || stored.snapshot.config.config_fingerprint !== row.config_fingerprint) fail("JOB_EXECUTION_FAILED");
   return { stored, selectedRevision: row.immutable_revision, exchangeVersion: row.exchange_version,
+    resolutionInputsFingerprint: row.resolution_inputs_fingerprint,
     associationKey: canonicalOrchestrationHash([job.tenant_id, job.repository_id, job.service_id,
       row.service_root, row.immutable_revision, row.source_digest, row.analyzer_adapter_id,
       row.analyzer_adapter_version, row.exchange_version, row.ir_version, row.identity_version,
@@ -381,7 +385,8 @@ const materialize = async (prepared: Prepared,
       associationKind: "reused", update: result,
       baseSelection: { selectedRevision: baseSelection.selectedRevision, snapshotId: base.snapshotId,
         ...("pointerVersion" in baseSelection ? { pointerVersion: baseSelection.pointerVersion } : {}),
-        associationKey: baseSelection.associationKey } };
+        associationKey: baseSelection.associationKey,
+        resolutionInputsFingerprint: baseSelection.resolutionInputsFingerprint } };
   }
   if (result.analyzer_result === undefined) fail("JOB_EXECUTION_FAILED");
   let converted: ReturnType<typeof contractSnapshotFromAnalyzerResult>;
@@ -392,7 +397,8 @@ const materialize = async (prepared: Prepared,
     analyzerStatus: converted.analyzerStatus, associationKind: "analyzed", update: result,
     baseSelection: { selectedRevision: baseSelection.selectedRevision, snapshotId: base.snapshotId,
       ...("pointerVersion" in baseSelection ? { pointerVersion: baseSelection.pointerVersion } : {}),
-      associationKey: baseSelection.associationKey } };
+      associationKey: baseSelection.associationKey,
+      resolutionInputsFingerprint: baseSelection.resolutionInputsFingerprint } };
 };
 
 const provider = (row: { provider: string; provider_reference: string;
@@ -516,6 +522,10 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
     job.target_revision!, material.request.source.source_digest, job.analyzer_adapter_id,
     job.analyzer_adapter_version, job.exchange_version, job.ir_version, job.identity_version,
     job.config_version, job.config_fingerprint] as const;
+  const resolutionInputsFingerprint = canonicalOrchestrationHash({
+    version: "orchestration-resolution-inputs-1",
+    resolutionInputs: material.request.resolution_inputs,
+  });
   const associationKey = canonicalOrchestrationHash(association);
   if (material.update !== undefined && (material.update.plan.service.target_revision !== job.target_revision
     || material.update.plan.service.target_source_digest !== material.request.source.source_digest
@@ -557,19 +567,22 @@ const completion = async (pool: Pool, options: { schema: string }, worker: Worke
     `INSERT INTO orchestration_revision_snapshots
        (tenant_id,repository_id,service_id,service_root,immutable_revision,source_digest,
         analyzer_adapter_id,analyzer_adapter_version,exchange_version,ir_version,identity_version,
-        config_version,config_fingerprint,snapshot_id,analyzer_status,association_kind,producing_job_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        config_version,config_fingerprint,resolution_inputs_fingerprint,snapshot_id,analyzer_status,association_kind,producing_job_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      ON CONFLICT DO NOTHING`,
-    [...association, snapshot.snapshot_id, material.analyzerStatus, material.associationKind, job.job_id],
+    [...association, resolutionInputsFingerprint, snapshot.snapshot_id, material.analyzerStatus, material.associationKind, job.job_id],
   );
-  const storedAssociation = await client.query<{ snapshot_id: string; analyzer_status: string; association_kind: string }>(
-    `SELECT snapshot_id,analyzer_status,association_kind FROM orchestration_revision_snapshots
+  const storedAssociation = await client.query<{ resolution_inputs_fingerprint: string | null; snapshot_id: string; analyzer_status: string; association_kind: string }>(
+    `SELECT resolution_inputs_fingerprint,snapshot_id,analyzer_status,association_kind FROM orchestration_revision_snapshots
      WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND service_root=$4 AND immutable_revision=$5
        AND source_digest=$6 AND analyzer_adapter_id=$7 AND analyzer_adapter_version=$8 AND exchange_version=$9
        AND ir_version=$10 AND identity_version=$11 AND config_version=$12 AND config_fingerprint=$13`,
     [...association],
   );
-  if (storedAssociation.rows[0]?.snapshot_id !== snapshot.snapshot_id
+  if ((storedAssociation.rows[0]?.resolution_inputs_fingerprint !== null
+      && storedAssociation.rows[0]?.resolution_inputs_fingerprint !== undefined
+      && storedAssociation.rows[0].resolution_inputs_fingerprint !== resolutionInputsFingerprint)
+    || storedAssociation.rows[0]?.snapshot_id !== snapshot.snapshot_id
     || storedAssociation.rows[0]?.analyzer_status !== material.analyzerStatus
     || storedAssociation.rows[0]?.association_kind !== material.associationKind) fail("REVISION_ASSOCIATION_CONFLICT");
   if (job.kind === "branch_analysis") {

@@ -1036,3 +1036,12 @@ Git connector 0.10.0 adds a separate `swagger-document-value-1` port. A trusted 
 The result carries separate capture, source, document and profile identities, bounded matches and fixed diagnostics. Temporary trees are disposed before final authorization and pin rechecks. The version-1 receipt does not attest which document the runtime loaded; this comparison does not prove deployment, normative contracts or future dispatch. It does not write capture result summaries, catalog snapshots, serving pointers or query surfaces. Arbitrary JSON/YAML document selectors and qualified downstream persistence remain later work.
 
 Validation: independent review found and resolved operation-reference and raw-byte hashing defects. A clean locked root install/typecheck passed all 1,552 offline tests; seven relevant PostgreSQL assembly/lifecycle tests and all 60 pinned framework cases passed. The actual framework capture fixture now exercises this correspondence port while checking that verification performs no extra service execution. A pending-authorization deadline regression confirms fixed failure and session release. The preceding `58f1d31` main/development CI and main synthetic lifecycle gates are green.
+
+
+### Ordered analysis-input fingerprints — NB1 reuse prerequisite (2026-10-09)
+
+Migration 0012 adds a nullable fingerprint to immutable revision associations. Baseline, branch and preview completion hash the exact validated ordered resolution-input vector with a versioned canonical representation. Completion checks any existing non-null value inside the same transaction; a different input vector cannot replace an existing association. Branch and preview base selection retain that fingerprint for the next reuse gate.
+
+Existing associations remain NULL, meaning unknown. An otherwise exact replay remains compatible and leaves NULL unchanged. This slice preserves existing source-only reuse and still performs full analysis for extra manifests and document profiles. It neither enables partial extraction/pruning nor treats a source digest alone as proof of unchanged additional inputs.
+
+Validation: independent review and a clean locked install/typecheck passed. All 1,552 offline and 358 PostgreSQL tests pass, including real completion replay/conflict checks, legacy NULL compatibility and preserved source-only reuse. Two migration-ledger assertions were updated for the twelfth migration. The preceding `775eda9` main/development checks and main synthetic lifecycle passed all CI gates.
