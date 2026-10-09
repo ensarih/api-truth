@@ -26,17 +26,22 @@ test("serialization yields distinct endpoint-scoped evidence for shared handlers
     const first = result.endpoints.find((endpoint) => endpoint.application_path === "/first")!;
     const second = result.endpoints.find((endpoint) => endpoint.application_path === "/second")!;
     const silent = result.endpoints.find((endpoint) => endpoint.application_path === "/silent")!;
-    const scoped = (endpointId: string) => result.evidence.filter((item) => item.scope.endpoint_id === endpointId);
-    const firstProof = scoped(first.endpoint_id);
-    const secondProof = scoped(second.endpoint_id);
+    const responseProof = (endpointId: string) => {
+      const claimIds = new Set(result.claims.filter((claim) => claim.subject.endpoint_id === endpointId
+        && claim.predicate === "response.serialization").flatMap((claim) => claim.evidence_ids));
+      return result.evidence.filter((item) => item.scope.endpoint_id === endpointId
+        && claimIds.has(item.evidence_id));
+    };
+    const firstProof = responseProof(first.endpoint_id);
+    const secondProof = responseProof(second.endpoint_id);
     expect(firstProof).toHaveLength(1);
     expect(secondProof).toHaveLength(1);
     expect(firstProof[0]!.evidence_id).not.toBe(secondProof[0]!.evidence_id);
     expect(firstProof[0]!.location).toEqual(secondProof[0]!.location);
     expect(first.evidence_ids).toContain(firstProof[0]!.evidence_id);
     expect(second.evidence_ids).toContain(secondProof[0]!.evidence_id);
-    expect(scoped(silent.endpoint_id)).toEqual([]);
-    expect(silent.evidence_ids.every((id) => result.evidence.find((item) => item.evidence_id === id)
-      ?.scope.endpoint_id === undefined)).toBe(true);
+    expect(responseProof(silent.endpoint_id)).toEqual([]);
+    expect(result.claims.some((claim) => claim.subject.endpoint_id === silent.endpoint_id
+      && claim.predicate === "response.serialization")).toBe(false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

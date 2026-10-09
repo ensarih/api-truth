@@ -7,7 +7,7 @@ import { parseAnalyzerRequest, parseAnalyzerResult, deriveEndpointIdentity,
   type AnalyzerRequest, type AnalyzerResult, type Endpoint, type Evidence, type ApiSchema, type Claim,
 } from "../../../packages/ir/src/index.js";
 
-export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.5.1" };
+export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.6.0" };
 const walk = (node: ts.Node, visit: (node: ts.Node) => void) => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
 const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 
@@ -220,6 +220,46 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     if (decl && ts.isVariableDeclaration(decl) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) return decl.initializer;
     return undefined;
   };
+  const directLocalNamedHandler = (node: ts.Expression, source: ts.SourceFile): ts.FunctionDeclaration | undefined => {
+    if (!ts.isIdentifier(node)) return undefined;
+    const binding = checker.getSymbolAtLocation(node);
+    if (!binding || (binding.flags & ts.SymbolFlags.Alias)) return undefined;
+    const declaration = binding.valueDeclaration;
+    if (!declaration || !ts.isFunctionDeclaration(declaration) || !declaration.name
+      || declaration.name.text !== node.text || !declaration.body
+      || declaration.getSourceFile() !== source) return undefined;
+    const writesBinding = (target: ts.Node): boolean => {
+      if (ts.isIdentifier(target)) return checker.getSymbolAtLocation(target) === binding;
+      if (ts.isParenthesizedExpression(target) || ts.isAsExpression(target)
+        || ts.isTypeAssertionExpression(target) || ts.isNonNullExpression(target)
+        || ts.isSatisfiesExpression(target) || ts.isSpreadElement(target)
+        || ts.isSpreadAssignment(target)) return writesBinding(target.expression);
+      if (ts.isArrayLiteralExpression(target)) return target.elements.some(writesBinding);
+      if (ts.isObjectLiteralExpression(target)) return target.properties.some(writesBinding);
+      if (ts.isPropertyAssignment(target)) return writesBinding(target.initializer);
+      if (ts.isShorthandPropertyAssignment(target))
+        return checker.getShorthandAssignmentValueSymbol(target) === binding || writesBinding(target.name);
+      return false;
+    };
+    let reassigned = false;
+    walk(source, candidate => {
+      if (reassigned) return;
+      if (ts.isCallExpression(candidate) && ts.isIdentifier(candidate.expression)
+        && candidate.expression.text === "eval") { reassigned = true; return; }
+      if (ts.isBinaryExpression(candidate)
+        && candidate.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+        && candidate.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+        reassigned = writesBinding(candidate.left);
+      else if ((ts.isPrefixUnaryExpression(candidate) || ts.isPostfixUnaryExpression(candidate))
+        && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(candidate.operator))
+        reassigned = writesBinding(candidate.operand);
+      else if ((ts.isForInStatement(candidate) || ts.isForOfStatement(candidate))
+        && !ts.isVariableDeclarationList(candidate.initializer))
+        reassigned = writesBinding(candidate.initializer);
+    });
+    if (reassigned) return undefined;
+    return declaration;
+  };
   const directGuardModule = (receiver: Receiver, registration: RouteRegistration,
     guard: ts.FunctionLikeDeclaration): boolean => {
     const { call } = registration;
@@ -282,12 +322,13 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     return [...factoryScopes].find(([, scope]) => scope === factory)?.[0];
   };
   const claim = (endpoint: Endpoint, predicate: string, value: Claim["value"], node: ts.Node,
-    method: Evidence["method"], pointer?: string, evidenceId?: string) => {
+    method: Evidence["method"], pointer?: string, evidenceId?: string, extraEvidenceIds: string[] = []) => {
     const ev = evidenceId ?? evidence(node, method);
     const id = `claim-${hash(`${endpoint.endpoint_id}:${predicate}:${pointer ?? ""}:${ev}:${JSON.stringify(value)}`).slice(0, 24)}`;
     if (!result.claims.some(c => c.claim_id === id)) result.claims.push({ claim_id: id,
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id, ...(pointer ? { schema_pointer: pointer } : {}) },
-      predicate, value, verification: method === "type_declaration" ? "declared" : "established_by_analysis", evidence_ids: [ev] });
+      predicate, value, verification: method === "type_declaration" ? "declared" : "established_by_analysis",
+      evidence_ids: [...new Set([ev, ...extraEvidenceIds])] });
   };
   const schemaFrom = (node: ts.TypeNode | undefined, endpoint: Endpoint): ApiSchema => {
     if (!node) return {};
@@ -600,6 +641,23 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         parameters: [...applicationPath.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)].map(match => ({ name: match[1]!, in: "path", presence: { state: "required", evidence_ids: [ev] }, schema: { type: "string" }, serialization: { style: "simple" } })),
         request_bodies: [], responses: [], security: { alternatives: [] }, evidence_ids: builderEvidence ? [ev, builderEvidence] : [ev] };
       result.endpoints.push(endpoint);
+      const routeEvidenceIds = [...new Set([call, ...context.filter(ts.isCallExpression),
+        ...(registration.builder ? [registration.builder] : [])]
+        .map(node => evidence(node, "deterministic_analysis", [], endpoint.endpoint_id)))];
+      claim(endpoint, "route.registration", {method: identity.method, path: applicationPath}, call,
+        "deterministic_analysis", undefined, routeEvidenceIds[0], routeEvidenceIds.slice(1));
+      for (const routeEvidenceId of routeEvidenceIds) result.dependencies.push({from_endpoint_id: endpoint.endpoint_id,
+        to: {kind: "evidence", id: routeEvidenceId}, evidence_ids: [routeEvidenceId]});
+      if (registration.handlers.length === 1) {
+        const handler = directLocalNamedHandler(registration.handlers[0]!, call.getSourceFile());
+        if (handler?.name) {
+          const handlerEvidenceId = evidence(handler.name, "deterministic_analysis", [], endpoint.endpoint_id);
+          claim(endpoint, "handler.symbol", {symbol: handler.name.text}, handler.name,
+            "deterministic_analysis", undefined, handlerEvidenceId);
+          result.dependencies.push({from_endpoint_id: endpoint.endpoint_id,
+            to: {kind: "evidence", id: handlerEvidenceId}, evidence_ids: [handlerEvidenceId]});
+        }
+      }
       claim(endpoint, "analyzer.toolchain", { compiler: "typescript", compiler_version: ts.version, config_version: "1.0.0", extraction_mode: effectiveExtractionMode }, receiver.node, "deterministic_analysis");
       for (const node of [...context, receiver.node, ...(registration.builder ? [registration.builder] : []), call]) dependency(endpoint, node);
       const shared = scopedMiddleware(receiver, call, path);

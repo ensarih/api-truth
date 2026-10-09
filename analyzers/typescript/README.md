@@ -61,3 +61,8 @@ defaulted to OpenAPI-friendly values.
 Version `0.5.1` proves a header API-key requirement only for a single directly registered route in an otherwise exact minimal Express module. The first middleware must compare `req.get("X-API-Key")` with a nonempty static value, return `res.status(401).end()` on mismatch, and call `next()` on a match. The analyzer records the header name and evidence, never the expected key. This synthetic bounded shape establishes source guard semantics under the standard Express API; it does not establish deployed configuration or observed enforcement.
 
 Extra imports, middleware, routes, receiver mutations, imported guards, asynchronous guards, dynamic credentials and alternate control flow keep security unknown. An absent guard does not imply anonymous access. Local function, const-arrow and inline guards are supported only within the exact module shape. The guarded source-to-catalog-to-OpenAPI preparation test passes without invented evidence; broader authentication remains unsupported.
+
+
+## Source identifiers (profile 0.6.0)
+
+`route.registration` records the composed application method/path with route and mount evidence. `handler.symbol` records only a directly bound named function declaration in the same file when the binding has no writes; aliases, imports, anonymous handlers and direct eval withhold it. Claims contain identifiers and evidence, never handler source or literal request/response values. Names do not establish workflow semantics or authoritative deployed binding.

@@ -10,8 +10,8 @@ vi.mock("@api-truth/analyzer-typescript",async importOriginal=>{
 });
 import {createConfiguredAnalyzer} from "../../analyzers/host/src/index.js";
 test("an adapter cannot replace its request scope and pass the result identity gate",async()=>{
- const host=createConfiguredAnalyzer({projectRoot:resolve("fixtures/typescript/orders/baseline/src"),selection:{adapter_id:"typescript-express",adapter_version:"0.5.1"}});
- const request:AnalyzerRequest={exchange_version:"1.0.0",ir_version:"1.0.0",request_id:"host-boundary",analyzer:{analyzer_id:"typescript-express",analyzer_version:"0.5.1"},
+ const host=createConfiguredAnalyzer({projectRoot:resolve("fixtures/typescript/orders/baseline/src"),selection:{adapter_id:"typescript-express",adapter_version:"0.6.0"}});
+ const request:AnalyzerRequest={exchange_version:"1.0.0",ir_version:"1.0.0",request_id:"host-boundary",analyzer:{analyzer_id:"typescript-express",analyzer_version:"0.6.0"},
   source:{repository_id:"synthetic",service_id:"orders",service_root:".",immutable_revision:"a".repeat(40),source_digest:"pending",access_label:"read"},
   resolution_inputs:[{kind:"source_tree",path:".",digest:"pending"}],prior_dependencies:[],changed_paths:[],extraction_mode:"baseline",
   limits:{timeout_ms:30000,max_files:100,max_output_bytes:10000000},execution_policy:{network_access:false,side_effects:"none"}};

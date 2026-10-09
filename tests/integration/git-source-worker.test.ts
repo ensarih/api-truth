@@ -22,7 +22,7 @@ const configuration: { fingerprint: string; document: InstallationConfig } = { f
   config_version: "1.0.0", access_scopes: [{ access_scope_id: "engineering", label: "Engineering" }],
   repositories: [{ repository_id: "commerce", provider: "github", locator: "acme/commerce",
     access_scope_id: "engineering", services: [{ service_id: "orders", root: "services/api",
-      analyzer: { adapter_id: "typescript-express", adapter_version: "0.5.1", ir_version: "1.0.0" },
+      analyzer: { adapter_id: "typescript-express", adapter_version: "0.6.0", ir_version: "1.0.0" },
       intended_branches: ["main"], environments: [] }] }],
   inference: { enabled: false }, logs: { enabled: false },
 } };

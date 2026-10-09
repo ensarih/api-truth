@@ -4,7 +4,7 @@ import {createConfiguredAnalyzer,configuredAnalyzerProfiles} from "../../analyze
 import {ANALYZER as expressIdentity} from "../../analyzers/typescript/src/index.js";
 import type {AnalyzerRequest} from "../../packages/ir/src/index.js";
 const profiles=[
- {id:"typescript-express",version:"0.5.1",ir:"1.0.0",root:"fixtures/typescript/orders/baseline/src",inputs:[{kind:"source_tree",path:".",digest:"pending"}]},
+ {id:"typescript-express",version:"0.6.0",ir:"1.0.0",root:"fixtures/typescript/orders/baseline/src",inputs:[{kind:"source_tree",path:".",digest:"pending"}]},
  {id:"nodejs-routing-controllers",version:"0.8.0",ir:"1.0.0",root:"fixtures/nodejs/routing-controllers/orders/src",inputs:[{kind:"source_tree",path:".",digest:"pending"}]},
  {id:"nodejs-swagger2-document",version:"0.15.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/orders",inputs:[{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
  {id:"nodejs-swagger-express-mw",version:"0.33.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/middleware/src",inputs:[{kind:"source_tree",path:".",digest:"pending"},{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
@@ -26,14 +26,14 @@ test.each([
  {adapter_id:"unknown",adapter_version:"private-marker"},
  {adapter_id:"typescript-express",adapter_version:"latest"},
  {adapter_id:"nodejs-swagger-express-mw",adapter_version:"0.33.0"},
- {adapter_id:"typescript-express",adapter_version:"0.5.1",ir_version:"1.1.0"},
- {adapter_id:"typescript-express",adapter_version:"0.5.1",secret:"private-marker"},
+ {adapter_id:"typescript-express",adapter_version:"0.6.0",ir_version:"1.1.0"},
+ {adapter_id:"typescript-express",adapter_version:"0.6.0",secret:"private-marker"},
  null,new Proxy({},{ownKeys(){throw new Error("private-marker");}})
 ])("unsupported selections fail safely before reading source",selection=>{
  expect(()=>createConfiguredAnalyzer({projectRoot:"/does-not-exist",selection})).toThrow("UNSUPPORTED_ANALYZER_SELECTION");
 });
 test("configured identity is detached and rejects request substitution before source access",async()=>{
- const selection={adapter_id:"typescript-express",adapter_version:"0.5.1"};
+ const selection={adapter_id:"typescript-express",adapter_version:"0.6.0"};
  const analyzer=createConfiguredAnalyzer({projectRoot:"/does-not-exist",selection});
  selection.adapter_id="unknown";
  await expect(analyzer.analyze({...request(profiles[0]),ir_version:"1.1.0"})).rejects.toThrow("ANALYZER_REQUEST_MISMATCH");

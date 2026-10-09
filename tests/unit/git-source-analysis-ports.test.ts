@@ -26,7 +26,7 @@ async function repository(files: Record<string, string>) {
   return { root, revision };
 }
 
-const selection = { adapter_id: "typescript-express", adapter_version: "0.5.1", ir_version: "1.0.0" as const };
+const selection = { adapter_id: "typescript-express", adapter_version: "0.6.0", ir_version: "1.0.0" as const };
 const limits = { maxFiles: 100, maxBytes: 1_000_000, timeoutMs: 10_000, maxOutputBytes: 1_000_000 };
 function input(revision: string, analyzer: AnalyzerSelection = selection) {
   return {

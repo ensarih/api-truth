@@ -764,3 +764,8 @@ The optional portal form and `api_truth_discover_api` MCP tool compare a bounded
 Validation: clean installation with zero audited vulnerabilities, typecheck, 1,254 offline tests, 269 PostgreSQL tests, and four real-browser tests. Actual Swagger 2/OpenAPI 3 snapshots prove summary/description evidence reaches the provider.
 
 This slice does not search an entire enterprise corpus. Undocumented source context, bounded candidate retrieval, durable inference/review, revocation-aware caching, curated question evaluation and live model acceptance remain open. The actual PostgreSQL service is exercised through both HTTP and MCP, including evidence-grant revocation; no fixture-only semantic host substitutes for that boundary.
+
+
+### Direct Express identifiers — P4-S2 input (2026-10-09)
+
+Express `0.6.0` records composed route registration and a directly bound local named function as narrow, source-backed identifier claims. Aliases, imports, anonymous handlers, reassigned bindings (including shorthand destructuring), and direct eval withhold handler names. Exact source spans, endpoint scope and mount dependencies retain lineage. These facts support later tentative source-metadata inference; they do not describe business workflows or prove deployed handler binding. Actual Git worker and analyzer-backed portal/MCP/publication lifecycle regressions pass with the new exact profile.

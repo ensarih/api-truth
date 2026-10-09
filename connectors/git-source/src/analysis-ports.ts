@@ -26,7 +26,7 @@ const normalizedProjectPath = (path: string): boolean => path === "."
   || /^[A-Za-z0-9_@+.-]+(?:\/[A-Za-z0-9_@+.-]+)*$/.test(path)
     && !path.split("/").some(part => part === "." || part === "..");
 const supportedAdapters = new Set([
-  "typescript-express@0.5.1",
+  "typescript-express@0.6.0",
   "nodejs-routing-controllers@0.8.0",
   "nodejs-swagger-express-mw@0.33.0",
   "nodejs-swagger2-document@0.15.0",
@@ -64,7 +64,7 @@ function validateSelection(input: ResolveInput): { expectedInputs: Array<{ kind:
   if (selection.production_entrypoint !== undefined
     && (adapterKey !== "nodejs-routing-controllers@0.8.0" || !normalizedProjectPath(selection.production_entrypoint)
       || !(root === "." || selection.production_entrypoint.startsWith(`${root}/`)))) fail();
-  if (adapterKey === "typescript-express@0.5.1" && (expectedInputs.length || selection.production_entrypoint)) fail();
+  if (adapterKey === "typescript-express@0.6.0" && (expectedInputs.length || selection.production_entrypoint)) fail();
   if (adapterKey === "nodejs-routing-controllers@0.8.0" && expectedInputs.length > 1) fail();
   if (adapterKey === "nodejs-routing-controllers@0.8.0" && expectedInputs.some(item => !item.path.endsWith(".json"))) fail();
   if (adapterKey === "nodejs-swagger-express-mw@0.33.0") {
