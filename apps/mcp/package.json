@@ -8,7 +8,7 @@
     "@modelcontextprotocol/server": "2.2.0",
     "zod": "4.2.0",
     "@api-truth/semantics": "0.6.0",
-    "@api-truth/observations": "0.5.2"
+    "@api-truth/observations": "0.6.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.2.0"

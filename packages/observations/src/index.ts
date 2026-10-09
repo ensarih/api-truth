@@ -9,3 +9,7 @@ export type {SyntheticExampleDiagnostic, SyntheticExamplePolicy, SyntheticExampl
 export type {SyntheticExamplePolicyBinding} from "./example-service.js";
 export {projectObservedFieldPresence, FieldPresenceInputError} from "./field-presence.js";
 export type {ObservedFieldPresencePolicy, FieldPresenceDiagnostic, FieldPresenceResult} from "./field-presence.js";
+export {createFieldPresenceService, FieldPresenceServiceError} from "./field-presence-service.js";
+export type {FieldPresenceSelectorPolicy, FieldPresencePolicyBinding, FieldPresenceSourcePin,
+  FieldPresenceAttestation, FieldPresenceRead, FieldPresenceContext, FieldPresenceAuthorization,
+  FieldPresenceReadPort} from "./field-presence-service.js";

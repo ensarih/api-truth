@@ -265,7 +265,7 @@ const schemaAtPath = (root: unknown, segments: readonly string[]): Record<string
     const terminal = index === segments.length - 1;
     if (terminal) {
       const type = own(current, "type");
-      if (!["string", "number", "integer", "boolean", "null"].includes(String(type))
+      if (typeof type !== "string" || !["string", "number", "integer", "boolean", "null"].includes(type)
         || Object.keys(current).some(candidate => !simpleSchemaKeys.has(candidate))) return undefined;
       return current;
     }
@@ -329,7 +329,8 @@ export const projectObservedFieldPresence = (input: unknown): FieldPresenceResul
   if (!plain(root) || !hasExactKeys(root, ["pin", "snapshot", "policy", "payloadText", "payloadCompleteness"])) return fail();
   const policy = parsePolicy(own(root, "policy"));
   const payloadCompleteness = own(root, "payloadCompleteness");
-  if (!["complete_unredacted", "truncated", "redacted", "unknown"].includes(String(payloadCompleteness))) return fail();
+  if (typeof payloadCompleteness !== "string"
+    || !["complete_unredacted", "truncated", "redacted", "unknown"].includes(payloadCompleteness)) return fail();
   const parsedSnapshot = parseContractSnapshot(own(root, "snapshot"));
   if (!parsedSnapshot.ok || !matchesScope(own(root, "pin"), parsedSnapshot.value, policy)) return withheld("scope_or_snapshot_mismatch");
   const schema = findSelectedSchema(parsedSnapshot.value, policy);

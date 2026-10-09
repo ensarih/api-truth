@@ -63,3 +63,46 @@ The raw payload parser also withholds unsafe integral numbers and fractions or
 underflow values that JavaScript would round to integers, preventing false
 integer type correspondence. Exact integral decimal/exponent forms remain
 supported. This is conservative numeric type checking, not value validation.
+
+## Host-authorized field-presence reads
+
+`createFieldPresenceService({queryReader, policies, authorize, readObservation})`
+exposes `read(context, {selection, policyId, observationId})`. The host fixes the
+authenticated tenant/principal, configured owner policies and trusted source
+ports. The selection must name an environment and expected serving checkpoint.
+The request cannot supply bodies, paths or a policy. Record IDs must be UUIDv4;
+the trusted source adapter must generate them independently from content. Format
+validation alone cannot establish that provenance.
+
+Policies are detached and immutable within one service instance. Each binds
+tenant/repository/service/environment to a static endpoint, direction, JSON media
+type, selected property paths and exact response status when applicable. Current
+snapshot/revision/source/configuration/checkpoint fields are injected from an
+authorized QueryReader result. Qualified selected/evidence revision views remain
+unsupported. The schema/path preflight runs after independent authorization and
+before the body read; unsupported paths do not trigger source access.
+
+The trusted source port returns bounded raw JSON text, completeness and an exact
+attestation binding the record ID, full source pin (including pointer version
+when present), endpoint, direction, media type and response status. The adapter
+must establish these fields from independently verified transport and metadata
+correlation. Copying application/body fields into an attestation is insufficient.
+The port must enforce the 256 KiB source-read bound itself; returned text is checked
+again. This module supplies neither a live log adapter nor transport verification.
+
+The independent `authorize` port runs before source access and again after the
+final fresh QueryReader read and full pin comparison. It must atomically verify
+the expected current environment pin and catalog, source, record and owner-policy
+authority under the host's own transaction/locks on **every invocation**. A
+source-only permission check is insufficient. The final authorization is the last
+awaited external operation; there is no later source/query call before returning
+the sanitized result. These are trusted host obligations, not database authority
+implemented by this package.
+
+External authorization/source callbacks have fixed ten-second deadlines and an
+AbortSignal. Timers clear on completion; timed-out late results are ignored. The
+QueryReader remains responsible for its ordinary bounded database execution.
+Denied, stale, invalid or failed reads use fixed error codes and never include
+raw bodies, record IDs or callback exception text. No raw source content is
+persisted, sent to a provider, or delivered to portal/MCP by this service. Durable
+body imports, reviewed samples and retention remain separate backlog gates.

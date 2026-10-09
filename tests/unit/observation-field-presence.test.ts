@@ -87,3 +87,8 @@ for (const numeric of ["1.0000","1e3","1.200e1","0e-999"]) test(`retains exact i
   expect(projectObservedFieldPresence(value)).toMatchObject({status:"projected",fields:[
     {path:"/customer/id",state:"absent"},{path:"/password",state:"absent"},{path:"/count",state:"present"}]});
 });
+
+test("rejects inert malformed completeness with the fixed public input error",()=>{
+  const value={...input(),payloadCompleteness:{toString:"PRIVATE_CANARY"}};
+  expect(()=>projectObservedFieldPresence(value)).toThrow(FieldPresenceInputError);
+});

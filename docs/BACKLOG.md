@@ -44,7 +44,7 @@ provider or enterprise pilot claim.
 | NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
-| P3-LOGS | In progress | Sanitization, unambiguous environment URL correlation and safe examples. |
+| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary is implemented; live adapters, durable reviewed samples and retention remain separate gates. |
 | P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
@@ -1132,3 +1132,24 @@ numbers and numeric underflow being accepted as integer type evidence. The
 projector now checks safe integral representations and lexical decimal/exponent
 scale before correspondence. Exact integral exponent/decimal forms remain
 supported. This does not infer constraints or normative requiredness.
+
+### Host-authorized observed field-presence reads — P3 boundary (2026-10-10)
+
+Observations 0.6.0 adds a read-only host service with immutable scoped selector
+policies, exact environment/checkpoint selection and caller-selected opaque
+record IDs. Independent authority precedes schema preflight and body access.
+Source attestations must match full pin, endpoint, direction, media type and
+response status. A fresh final contract read and full pin comparison precede
+independent final authorization; the host must atomically revalidate current
+pin and all relevant grants. Callback deadlines suppress late results.
+
+The service's host contracts are not a live log adapter or database authority.
+No bodies, samples, retention tables, providers or catalog contracts are written.
+Standalone projection input checking was also tightened after a failing test
+showed malformed completeness could escape as a generic coercion error.
+
+Validation: independent source review and public-export review passed; a clean
+locked install/typecheck passed all 1,633 offline tests. Fourteen service tests
+cover source denial, cross-operation attestations, exact response status,
+qualified and changed pins, immutable policies, final-query revocation and
+timeout suppression. Live transport and host database authority remain unproved.
