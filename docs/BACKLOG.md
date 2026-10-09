@@ -741,3 +741,7 @@ The first Phase 3 kernel correlates a bounded inert log record with an existing 
 ### Signed-file imports and current-pin metadata reads (2026-10-09)
 
 An offline normalized-file connector verifies an externally configured Ed25519 signer, exact import/source/environment pin, bounded UTF-8 JSON and explicit file selection. Trusted routing mappings remain outside the file envelope. The real signed-file → import store → PostgreSQL tests verify privacy, tampering and grant revocation. Shared query reads expose only sanitized metadata for the current environment checkpoint; historical branch/revision reads are rejected and older checkpoint records are excluded. Optional portal and MCP capabilities use the same authorized reader and bounded environment selector. This does not infer normative schemas/security, establish an actual log provider, or supply request/response examples. Retention, examples, provider wiring and operational gates remain open.
+
+### Dependency hygiene checkpoint (2026-10-09)
+
+A clean installation exposed GHSA-68fv-2mgg-jv7q in the locked development dependency `source-map-js@1.2.1`. The lock now selects patched 1.2.2 within existing dependency ranges, preserving all other packages and platform artifacts. This closes that advisory only; release governance, capacity, recovery and production deployment checks remain open.
