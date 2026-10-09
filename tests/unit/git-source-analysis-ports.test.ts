@@ -120,7 +120,7 @@ test("pins a routing-controller manifest with the adapter's service-relative dig
     "services/api/controller.ts": `import { JsonController, Get } from "@example/route-kit";\n@JsonController('/items') export class Items { @Get('/') all() { return []; } }\n`,
     "services/api/api-truth.routing.json": profile,
   });
-  const routing = { adapter_id: "nodejs-routing-controllers", adapter_version: "0.8.0", ir_version: "1.0.0" as const,
+  const routing = { adapter_id: "nodejs-routing-controllers", adapter_version: "0.9.0", ir_version: "1.0.0" as const,
     resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/api-truth.routing.json" }] };
   const ports = createLocalGitAnalysisPorts({ repositories: [{ tenantId: "tenant-a", repositoryId: "repo-a", repoPath: repo.root }], limits });
   try {

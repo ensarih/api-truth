@@ -1,6 +1,6 @@
 # routing-controllers analyzer profile
 
-`nodejs-routing-controllers@0.8.0` reads a bounded service source tree and emits
+`nodejs-routing-controllers@0.9.0` reads a bounded service source tree and emits
 a D03 analyzer result. It never executes project code or resolves packages.
 
 Run it locally with `npm run extract:routing-controllers -- --source <service-tree>
@@ -18,10 +18,15 @@ annotations produce declared schemas. The known JSON behavior of
 `@JsonController` supplies JSON media type; no status is inferred from the
 HTTP method or a return type.
 
-`@QueryParams()` and `@HeaderParams()` with inline object types emit declared
-query and header fields. Their runtime requiredness remains unknown, including
-for fields without TypeScript's optional marker. A class or imported type is
-not expanded by this slice. A field also declared through the matching named
+Inline object schemas retain TypeScript declaration shape: properties without
+`?` appear in the schema's `required` list, and optional properties do not.
+This describes declared types only; it does not claim runtime validation.
+`@QueryParams()` and `@HeaderParams()` still emit top-level parameter presence
+as unknown, even when a property is required in the declared schema. A class or
+imported type is not expanded by this slice. Unions, duplicate properties,
+computed/index signatures, methods, and unsupported member types produce
+diagnostics; incomplete objects omit their `required` list, and unsupported
+properties are withheld. A field also declared through the matching named
 decorator is marked unresolved rather than choosing one of the declarations.
 Header name collisions are compared without case sensitivity.
 

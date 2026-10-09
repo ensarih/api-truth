@@ -27,7 +27,7 @@ const normalizedProjectPath = (path: string): boolean => path === "."
     && !path.split("/").some(part => part === "." || part === "..");
 const supportedAdapters = new Set([
   "typescript-express@0.6.0",
-  "nodejs-routing-controllers@0.8.0",
+  "nodejs-routing-controllers@0.9.0",
   "nodejs-swagger-express-mw@0.33.0",
   "nodejs-swagger2-document@0.15.0",
   "openapi3-document@0.2.0",
@@ -62,11 +62,11 @@ function validateSelection(input: ResolveInput): { expectedInputs: Array<{ kind:
   if (expectedInputs.some(item => item.kind !== "type_manifest" || !normalizedProjectPath(item.path)
     || !(root === "." || item.path.startsWith(`${root}/`)))) fail();
   if (selection.production_entrypoint !== undefined
-    && (adapterKey !== "nodejs-routing-controllers@0.8.0" || !normalizedProjectPath(selection.production_entrypoint)
+    && (adapterKey !== "nodejs-routing-controllers@0.9.0" || !normalizedProjectPath(selection.production_entrypoint)
       || !(root === "." || selection.production_entrypoint.startsWith(`${root}/`)))) fail();
   if (adapterKey === "typescript-express@0.6.0" && (expectedInputs.length || selection.production_entrypoint)) fail();
-  if (adapterKey === "nodejs-routing-controllers@0.8.0" && expectedInputs.length > 1) fail();
-  if (adapterKey === "nodejs-routing-controllers@0.8.0" && expectedInputs.some(item => !item.path.endsWith(".json"))) fail();
+  if (adapterKey === "nodejs-routing-controllers@0.9.0" && expectedInputs.length > 1) fail();
+  if (adapterKey === "nodejs-routing-controllers@0.9.0" && expectedInputs.some(item => !item.path.endsWith(".json"))) fail();
   if (adapterKey === "nodejs-swagger-express-mw@0.33.0") {
     const expectedDocument = root === "." ? "api/swagger/swagger.yaml" : `${root}/api/swagger/swagger.yaml`;
     if (selection.production_entrypoint !== undefined || expectedInputs.length !== 1

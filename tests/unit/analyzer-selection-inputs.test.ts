@@ -14,7 +14,7 @@ test("rejects duplicate, runtime, unknown and unbounded input configuration",()=
 });
 
 test("production entrypoint selection is explicit and normalized",()=>{
- expect(parseAnalyzerSelection({adapter_id:"nodejs-routing-controllers",adapter_version:"0.8.0",production_entrypoint:"src/app.ts"})).toMatchObject({ok:true});
+ expect(parseAnalyzerSelection({adapter_id:"nodejs-routing-controllers",adapter_version:"0.9.0",production_entrypoint:"src/app.ts"})).toMatchObject({ok:true});
  for(const production_entrypoint of ["../app.ts","/app.ts","src/./app.ts","src\\app.ts",""])
   expect(parseAnalyzerSelection({...base,production_entrypoint})).toMatchObject({ok:false});
 });

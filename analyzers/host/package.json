@@ -1,6 +1,6 @@
 {
   "name": "@api-truth/analyzer-host",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,7 +9,7 @@
   "dependencies": {
     "@api-truth/ir": "0.0.0",
     "@api-truth/analyzer-typescript": "0.6.0",
-    "@api-truth/analyzer-routing-controllers": "0.8.0",
+    "@api-truth/analyzer-routing-controllers": "0.9.0",
     "@api-truth/analyzer-nodejs-swagger2-document": "0.38.0",
     "@api-truth/analyzer-openapi3-document": "0.2.0"
   }

@@ -185,7 +185,7 @@ profile slice, not the completed NB5 conformance gate.
 
 The Node.js backlog is a detailed child backlog. Its NB1 contract and
 authority decisions are prerequisites for full document/decorator conformance; current
-`typescript-express@0.5.1` support does not imply broader adapter coverage. Java and Confluence remain planned. Runtime metadata imports and document-grounded semantic adapters have bounded implementations documented below; payload examples, broad retrieval and live-provider acceptance remain open.
+`typescript-express@0.6.0` support does not imply broader adapter coverage. Java and Confluence remain planned. Runtime metadata imports and document-grounded semantic adapters have bounded implementations documented below; payload examples, broad retrieval and live-provider acceptance remain open.
 
 ## Backlog maintenance
 
@@ -801,3 +801,8 @@ Optional explicit migrations and opt-in semantic history now retain append-only 
 ### Shared analyzer boundary matrix — NB3 bounded slice (2026-10-09)
 
 Thirty conformance cases exercise the five current compiled analyzer profiles with actual source/document inputs. They check scoped provenance, profile/input selection, path and symlink containment, supplied digest mismatch, network policy, malformed content, source nonexecution, resource bounds and changed-byte fingerprints. This proves full-rerun fingerprint invalidation; incremental prior-dependency pruning and broader framework/runtime conformance remain open.
+
+
+### Inline decorator DTO declarations — NB5 bounded slice (2026-10-09)
+
+Routing-controllers `0.9.0` preserves required and optional properties of supported inline TypeScript object types, including nested objects/arrays. Type-declaration evidence explicitly does not establish runtime validation; top-level query/header presence remains unknown. Unsupported shapes and every duplicate declared name, including an unresolved first member, withhold ambiguous properties and the complete required list. Own JSON property insertion preserves `__proto__` and `constructor` without prototype mutation. Exact analyzer-host and local Git profile pins advance together. Named DTO resolution, inheritance, serialization, validation-group and runtime conformance gates remain open. Forty-seven analyzer/CLI tests pass, including red-to-green duplicate and special-key regressions.

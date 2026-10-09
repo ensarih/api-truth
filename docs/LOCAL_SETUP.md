@@ -177,7 +177,7 @@ unresolved dynamic routes, conditional registrations, unsupported type
 members, unknown presence/status/media, and security guarantees as unknown or
 diagnostics. See the [detailed analyzer matrix](../analyzers/typescript/README.md#support-matrix).
 
-Other explicit profiles are `nodejs-routing-controllers@0.8.0`, standalone
+Other explicit profiles are `nodejs-routing-controllers@0.9.0`, standalone
 Swagger 2 `0.15.0`, Swagger middleware `0.33.0`, and OpenAPI 3.0
 `0.2.0`. Document profiles read only an explicitly selected contained
 JSON/YAML document; OpenAPI 3.1 input remains unsupported. These profiles have

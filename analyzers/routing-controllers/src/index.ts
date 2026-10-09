@@ -12,7 +12,7 @@ import { matchControllerGlob, resolveStaticExpression, resolveStaticPath } from 
 import { buildProductionGraph, type ProductionGraph } from "./production-entrypoint.js";
 
 /** Literal legacy decorators with directly resolved routing-controllers registration. */
-export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.8.0" };
+export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.9.0" };
 const literal = (node: ts.Node | undefined) => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const decorators = (node: ts.Node) => ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
@@ -129,30 +129,64 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       subject: { service_id: request.source.service_id, endpoint_id: endpoint.endpoint_id }, predicate,
       value: value as any, verification, evidence_ids: [ev, ...extraEvidenceIds] });
   };
-  const schema = (type: ts.TypeNode | undefined, owner: ts.Node, endpoint: Endpoint): ApiSchema => {
-    if (!type) return {};
-    if (ts.isParenthesizedTypeNode(type)) return schema(type.type, owner, endpoint);
-    switch (type.kind) {
-      case ts.SyntaxKind.StringKeyword: return { type: "string" };
-      case ts.SyntaxKind.NumberKeyword: return { type: "number" };
-      case ts.SyntaxKind.BooleanKeyword: return { type: "boolean" };
-      case ts.SyntaxKind.NullKeyword: return { type: "null" };
-      case ts.SyntaxKind.VoidKeyword: return { type: "null" };
+  type SchemaProjection=Readonly<{value:ApiSchema;complete:boolean}>;
+  const schemaCache=new WeakMap<ts.TypeNode,Map<string,SchemaProjection>>();
+  const projectSchema=(type:ts.TypeNode|undefined,owner:ts.Node,endpoint:Endpoint):SchemaProjection=>{
+    if(!type)return {value:{},complete:false};
+    const cached=schemaCache.get(type)?.get(endpoint.endpoint_id);
+    if(cached)return cached;
+    const finish=(value:ApiSchema,complete:boolean):SchemaProjection=>{
+      const projection=Object.freeze({value,complete});
+      const byEndpoint=schemaCache.get(type)??new Map<string,SchemaProjection>();
+      byEndpoint.set(endpoint.endpoint_id,projection);schemaCache.set(type,byEndpoint);
+      return projection;
+    };
+    if(ts.isParenthesizedTypeNode(type)){
+      const inner=projectSchema(type.type,owner,endpoint);
+      return finish(inner.value,inner.complete);
     }
-    if (ts.isArrayTypeNode(type)) return { type: "array", items: schema(type.elementType, owner, endpoint) };
-    if (ts.isTypeLiteralNode(type)) {
-      const properties: Record<string, ApiSchema> = {};
-      for (const member of type.members) {
-        if (!ts.isPropertySignature(member) || !member.name || !(ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))) {
-          diagnostic("dto_member_unsupported", member, endpoint); continue;
+    switch(type.kind){
+      case ts.SyntaxKind.StringKeyword:return finish({type:"string"},true);
+      case ts.SyntaxKind.NumberKeyword:return finish({type:"number"},true);
+      case ts.SyntaxKind.BooleanKeyword:return finish({type:"boolean"},true);
+      case ts.SyntaxKind.NullKeyword:return finish({type:"null"},true);
+      case ts.SyntaxKind.VoidKeyword:return finish({type:"null"},true);
+    }
+    if(ts.isArrayTypeNode(type)){
+      const item=projectSchema(type.elementType,owner,endpoint);
+      return finish({type:"array",items:item.value},item.complete);
+    }
+    if(ts.isTypeLiteralNode(type)){
+      const properties:Record<string,ApiSchema>={};
+      const required:string[]=[];
+      const seenNames=new Set<string>();
+      let complete=true;
+      for(const member of type.members){
+        if(!ts.isPropertySignature(member)||!member.name
+          ||!(ts.isIdentifier(member.name)||ts.isStringLiteral(member.name))){
+          complete=false;diagnostic("dto_member_unsupported",member,endpoint);continue;
         }
-        properties[member.name.text] = schema(member.type, member, endpoint);
+        const name=member.name.text;
+        if(seenNames.has(name)){
+          delete properties[name];
+          const index=required.indexOf(name);if(index>=0)required.splice(index,1);
+          complete=false;diagnostic("dto_member_duplicate",member,endpoint);continue;
+        }
+        seenNames.add(name);
+        if(!member.type){complete=false;diagnostic("dto_member_type_unresolved",member,endpoint);continue;}
+        const projected=projectSchema(member.type,member,endpoint);
+        if(!projected.complete){complete=false;continue;}
+        Object.defineProperty(properties,name,{value:projected.value,enumerable:true,writable:true,configurable:true});
+        if(!member.questionToken)required.push(name);
       }
-      return { type: "object", properties };
+      return finish({type:"object",properties,
+        ...(complete&&required.length>0?{required:required.sort()}: {})},complete);
     }
-    diagnostic("type_metadata_unresolved", owner, endpoint);
-    return {};
+    diagnostic("type_metadata_unresolved",owner,endpoint);
+    return finish({},false);
   };
+  const schema=(type:ts.TypeNode|undefined,owner:ts.Node,endpoint:Endpoint):ApiSchema=>
+    projectSchema(type,owner,endpoint).value;
   const sourcePaths = [...files.keys()].filter(path => /\.(?:[cm]?[jt]s|tsx|jsx)$/.test(path));
   // The compiler host sees only collected files. Symbols still bind lexical imports,
   // but external modules and source code are never loaded or executed.

@@ -353,6 +353,97 @@ test("literal Body required options establish request body presence", async () =
   expect(parseAnalyzerResult(result).ok).toBe(true);
 });
 
+test("inline DTO schemas retain declared required and optional properties", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Post, Body, createExpressServer } from "routing-controllers";
+    @JsonController("/orders") class Orders {
+      @Post() create(@Body() input: { title: string; note?: string; address: { city: string; line2?: string }; tags: string[] }): { id: string; label?: string } {
+        return { id: input.title, label: input.note };
+      }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  expect(result.endpoints[0]?.request_bodies[0]?.schema).toMatchObject({
+    type: "object", required: ["address", "tags", "title"], properties: {
+      title: {type: "string"}, note: {type: "string"},
+      address: {type: "object", required: ["city"], properties: {city: {type: "string"}, line2: {type: "string"}}},
+      tags: {type: "array", items: {type: "string"}},
+    },
+  });
+  expect(result.endpoints[0]?.responses[0]?.content[0]?.schema).toMatchObject({
+    type: "object", required: ["id"], properties: {id: {type: "string"}, label: {type: "string"}},
+  });
+  expect(result.claims.filter(claim => ["request.body.declaration", "response.declaration"].includes(claim.predicate)))
+    .toEqual(expect.arrayContaining([expect.objectContaining({verification: "declared", evidence_ids: expect.any(Array)})]));
+  const declarationIds = result.claims.filter(claim => ["request.body.declaration", "response.declaration"].includes(claim.predicate))
+    .flatMap(claim => claim.evidence_ids);
+  expect(result.evidence.filter(item => declarationIds.includes(item.evidence_id)).every(item =>
+    item.method === "type_declaration" && item.limitations.includes("declaration does not establish runtime validation"))).toBe(true);
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("unsupported inline DTO members keep requiredness unknown and diagnose collisions and unions", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Post, Body, createExpressServer } from "routing-controllers";
+    type Choice = string | number;
+    const dynamicKey = "computed";
+    @JsonController("/orders") class Orders {
+      @Post() create(@Body() input: { id: string; id: number; choice: Choice; [dynamicKey]: boolean; [key: string]: unknown }): string { return String(input.id); }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  const schema = result.endpoints[0]?.request_bodies[0]?.schema;
+  expect(schema).not.toHaveProperty("required");
+  expect(schema).not.toHaveProperty("properties.id");
+  expect(schema).not.toHaveProperty("properties.choice");
+  expect(result.diagnostics.map(item => item.code)).toEqual(expect.arrayContaining([
+    "dto_member_duplicate", "dto_member_unsupported", "type_metadata_unresolved",
+  ]));
+  expect(result.status).toBe("partial");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("an unresolved first DTO declaration cannot hide a duplicate valid declaration", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Post, Body, createExpressServer } from "routing-controllers";
+    @JsonController("/orders") class Orders {
+      @Post() create(@Body() input: { choice: UnknownType; choice: string; known: boolean }): string { return "ok"; }
+    }
+    createExpressServer({ controllers: [Orders] });
+  ` });
+  const result = await adapter.analyze(request());
+  const schema = result.endpoints[0]?.request_bodies[0]?.schema;
+  expect(schema?.properties).toEqual({known:{type:"boolean"}});
+  expect(schema).not.toHaveProperty("required");
+  expect(result.diagnostics.map(item=>item.code)).toEqual(expect.arrayContaining([
+    "type_metadata_unresolved","dto_member_duplicate"]));
+  expect(result.status).toBe("partial");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
+test("inline DTO special keys stay own JSON properties and quoted collisions are withheld", async () => {
+  const { adapter } = await service({ "controller.ts": `
+    import { JsonController, Post, Body, createExpressServer } from "routing-controllers";
+    @JsonController("/keys") class Keys {
+      @Post() create(@Body() input: { __proto__: string; constructor: number; "duplicate": string; 'duplicate': boolean }): string { return input.constructor.toString(); }
+    }
+    createExpressServer({ controllers: [Keys] });
+  ` });
+  const result = await adapter.analyze(request());
+  const schema = result.endpoints[0]?.request_bodies[0]?.schema;
+  const properties = schema?.properties as Record<string, unknown>;
+  expect(Object.hasOwn(properties, "__proto__")).toBe(true);
+  expect(Object.hasOwn(properties, "constructor")).toBe(true);
+  expect(properties.__proto__).toEqual({type: "string"});
+  expect(properties.constructor).toEqual({type: "number"});
+  expect(Object.hasOwn(properties, "duplicate")).toBe(false);
+  expect(schema).not.toHaveProperty("required");
+  expect(result.diagnostics.map(item => item.code)).toContain("dto_member_duplicate");
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+});
+
 test("whole-object QueryParams expands literal fields without inferring runtime requiredness", async () => {
   const { adapter } = await service({ "controller.ts": `
     import { JsonController, Get, QueryParams, QueryParam, createExpressServer } from "routing-controllers";
@@ -369,6 +460,8 @@ test("whole-object QueryParams expands literal fields without inferring runtime 
     { in: "query", name: "q", presence: { state: "unknown" }, schema: { type: "string" } },
     { in: "query", name: "sort", presence: { state: "unknown" }, schema: { type: "string" } },
   ]);
+  expect(endpoint?.parameters.find(item=>item.name==="q")?.presence.state).toBe("unknown");
+  expect(endpoint?.parameters.find(item=>item.name==="q")?.schema).toMatchObject({type:"string"});
   expect(result.diagnostics.map(item => item.code)).not.toContain("parameter_binding_unsupported");
   expect(parseAnalyzerResult(result).ok).toBe(true);
 });

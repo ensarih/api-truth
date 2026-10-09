@@ -13,7 +13,7 @@ default or statically configured CommonJS handler source candidates with separat
 Optional trusted captures establish observed handler binding for one exact
 source revision, environment and session. Production startup, future dispatch,
 response enforcement and installed framework verification remain unverified.
-`nodejs-routing-controllers@0.8.0` extracts a bounded literal decorator subset
+`nodejs-routing-controllers@0.9.0` extracts a bounded literal decorator subset
 and binds direct controller registrations. An opt-in, source-bound declaration
 profile can identify wrapper imports and emit unregistered candidate routes with
 owner-asserted prefix evidence, but cannot prove the startup entry point or
