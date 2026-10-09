@@ -8,6 +8,8 @@ import {
 import {readSelectedDocument} from "../../nodejs/src/source.js";
 import {parseStrictJson, StrictJsonError} from "../../nodejs/src/strict-json.js";
 import {parseStrictYaml, StrictYamlError} from "../../nodejs/src/strict-yaml.js";
+import {ParsedDocumentCache, isParsedDocumentCache, snapshotParsedDocumentCacheScope,
+  type ParsedDocumentCacheScope} from "../../nodejs/src/parsed-document-cache.js";
 
 /** A selected API document declares a contract; no server URL is treated as an in-process route. */
 export const ANALYZER = {analyzer_id: "openapi3-document", analyzer_version: "0.2.0"};
@@ -30,12 +32,20 @@ const allowedParameter = new Set(["name", "in", "description", "required", "depr
 const allowedMedia = new Set(["schema", "example", "examples", "encoding"]);
 const isMediaType = (value: string): boolean => /^(?:\*|[A-Za-z0-9!#$&^_.+-]+)\/(?:\*|[A-Za-z0-9!#$&^_.+*-]+)(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=(?:[A-Za-z0-9!#$&^_.+-]+|"[^"\r\n]*"))*$/.test(value);
 
-export function createAnalyzer(options: {projectRoot: string}) {
+export function createAnalyzer(options: {projectRoot: string; parsedDocumentCache?: ParsedDocumentCache;
+  parsedDocumentCacheScope?: ParsedDocumentCacheScope}) {
   return createAnalyzerForDocumentProfile(options, ANALYZER, "3.0");
 }
 
-export function createAnalyzerForDocumentProfile(options: {projectRoot: string}, analyzer: typeof ANALYZER | typeof OPENAPI31_ANALYZER,
+export function createAnalyzerForDocumentProfile(options: {projectRoot: string; parsedDocumentCache?: ParsedDocumentCache;
+  parsedDocumentCacheScope?: ParsedDocumentCacheScope}, analyzer: typeof ANALYZER | typeof OPENAPI31_ANALYZER,
   profile: OpenApiDocumentProfile) {
+  const parsedDocumentCache = options.parsedDocumentCache;
+  const parsedDocumentCacheScope = options.parsedDocumentCacheScope === undefined ? undefined
+    : snapshotParsedDocumentCacheScope(options.parsedDocumentCacheScope);
+  if ((parsedDocumentCache === undefined) !== (parsedDocumentCacheScope === undefined)
+    || parsedDocumentCache !== undefined && !isParsedDocumentCache(parsedDocumentCache))
+    throw new Error("Invalid trusted document cache");
   return {async analyze(input: unknown): Promise<AnalyzerResult> {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
@@ -55,7 +65,12 @@ export function createAnalyzerForDocumentProfile(options: {projectRoot: string},
     const normalized: AnalyzerRequest = {...request, source: {...request.source, source_digest: source.digest},
       resolution_inputs: [{...selected, digest: source.digest}]};
     if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
-    const result = extractOpenApiDocument(normalized, source.path, source.text, profile);
+    const parse = () => parsedDocumentCache && parsedDocumentCacheScope
+      ? parsedDocumentCache.parse({...parsedDocumentCacheScope, adapterId: analyzer.analyzer_id,
+        adapterVersion: analyzer.analyzer_version, irVersion: request.ir_version, documentPath: source.path,
+        digest: source.digest}, source.text)
+      : parseSelectedDocument(source.text, source.path);
+    const result = extractOpenApiDocumentFromParser(normalized, source.path, parse, profile);
     if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
@@ -69,14 +84,19 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 }
 
 export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
-  return extractOpenApiDocument(request, documentPath, text, "3.0");
+  return extractOpenApiDocumentFromParser(request, documentPath, () => parseSelectedDocument(text, documentPath), "3.0");
 }
 
 export function extractOpenApi31Document(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
-  return extractOpenApiDocument(request, documentPath, text, "3.1");
+  return extractOpenApiDocumentFromParser(request, documentPath, () => parseSelectedDocument(text, documentPath), "3.1");
 }
 
-function extractOpenApiDocument(request: AnalyzerRequest, documentPath: string, text: string, profile: OpenApiDocumentProfile): AnalyzerResult {
+function parseSelectedDocument(text: string, documentPath: string): unknown {
+  return /\.ya?ml$/.test(documentPath) ? parseStrictYaml(text) : parseStrictJson(text);
+}
+
+function extractOpenApiDocumentFromParser(request: AnalyzerRequest, documentPath: string, parseDocument: () => unknown,
+  profile: OpenApiDocumentProfile): AnalyzerResult {
   const fingerprint = hash(canonicalJsonStringify({request, parser: profile === "3.0" ? "openapi3-strict-json-yaml-1" : "openapi31-default-dialect-subset-1", documentPath}));
   const result: AnalyzerResult = {exchange_version: "1.0.0", ir_version: request.ir_version, identity_version: "1.0.0",
     request_id: request.request_id, result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`,
@@ -123,7 +143,7 @@ function extractOpenApiDocument(request: AnalyzerRequest, documentPath: string, 
     return result;
   };
   let raw: unknown;
-  try { raw = /\.ya?ml$/.test(documentPath) ? parseStrictYaml(text) : parseStrictJson(text); }
+  try { raw = parseDocument(); }
   catch (error) { diagnostic(error instanceof StrictYamlError || error instanceof StrictJsonError ? error.code : "invalid_document", "", "error"); return finish(true); }
   if (!obj(raw) || typeof raw.openapi !== "string" || !(profile === "3.0" ? /^3\.0\.[0-9]+$/.test(raw.openapi) : /^3\.1\.[01]$/.test(raw.openapi))
     || !obj(raw.info) || typeof raw.info.title !== "string" || typeof raw.info.version !== "string" || !obj(raw.paths)) {

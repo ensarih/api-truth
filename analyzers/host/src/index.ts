@@ -8,6 +8,8 @@ import {ANALYZER as middleware,createAnalyzer as createMiddleware} from "@api-tr
 
 import {ANALYZER as openapi31,createAnalyzer as createOpenapi31} from "@api-truth/analyzer-openapi31-document";
 import {ANALYZER as javaSpring,createAnalyzer as createJavaSpring} from "@api-truth/analyzer-java-spring";
+import {ParsedDocumentCache, isParsedDocumentCache, snapshotParsedDocumentCacheScope,
+  type ParsedDocumentCacheScope} from "../../nodejs/src/parsed-document-cache.js";
 
 /** Exact compiled-in profiles; no framework detection or source-selected plugins. */
 const registrations = [
@@ -23,7 +25,14 @@ export const configuredAnalyzerProfiles = Object.freeze(registrations.map(profil
   adapter_id:profile.identity.analyzer_id,adapter_version:profile.identity.analyzer_version,ir_version:profile.ir,
 })));
 
-export function createConfiguredAnalyzer(options:{projectRoot:string;selection:unknown;trustedRuntimePublicKey?:string}) {
+export function createConfiguredAnalyzer(options:{projectRoot:string;selection:unknown;trustedRuntimePublicKey?:string;
+  parsedDocumentCache?:ParsedDocumentCache; parsedDocumentCacheScope?:ParsedDocumentCacheScope}) {
+  const parsedDocumentCache = options.parsedDocumentCache;
+  const parsedDocumentCacheScope = options.parsedDocumentCacheScope === undefined ? undefined
+    : snapshotParsedDocumentCacheScope(options.parsedDocumentCacheScope);
+  if ((parsedDocumentCache === undefined) !== (parsedDocumentCacheScope === undefined)
+    || parsedDocumentCache !== undefined && !isParsedDocumentCache(parsedDocumentCache))
+    throw new Error("INVALID_TRUSTED_DOCUMENT_CACHE");
   let parsed:ReturnType<typeof parseAnalyzerSelection>;
   try{parsed=parseAnalyzerSelection(structuredClone(options.selection));}catch{throw new Error("UNSUPPORTED_ANALYZER_SELECTION");}
   if(!parsed.ok)throw new Error("UNSUPPORTED_ANALYZER_SELECTION");
@@ -36,6 +45,8 @@ export function createConfiguredAnalyzer(options:{projectRoot:string;selection:u
   const identity={...profile.identity};
   const adapter=profile.create({projectRoot:options.projectRoot,
     ...(selection.production_entrypoint===undefined?{}:{productionEntrypoint:selection.production_entrypoint}),
+    ...(parsedDocumentCache===undefined?{}:{parsedDocumentCache}),
+    ...(parsedDocumentCacheScope===undefined?{}:{parsedDocumentCacheScope}),
     ...(options.trustedRuntimePublicKey===undefined?{}:{trustedRuntimePublicKey:options.trustedRuntimePublicKey})});
   return {async analyze(input:unknown):Promise<AnalyzerResult>{
     let request:ReturnType<typeof parseAnalyzerRequest>;

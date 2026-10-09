@@ -1,6 +1,6 @@
 # Local Git source connector
 
-`@api-truth/connector-git-source@0.11.0` reads one explicit local repository,
+`@api-truth/connector-git-source@0.12.0` reads one explicit local repository,
 one immutable 40-character commit ID, and one normalized service-tree path. It
 reads the committed tree and blobs directly; working-tree edits, staged changes,
 untracked files, ignored files, branch names, and remote refs do not select
@@ -81,6 +81,28 @@ local source-to-analyzer bridge, not remote-provider acquisition, branch
 selection, or proof of deployment/runtime behavior.
 
 The exact `java-spring-mvc@0.1.0` profile accepts one source tree and no classpath, manifest or startup options. Its AST toolchain must be prepared explicitly in the host project before immutable Git sessions are analyzed. The source checkout cannot select a compiler or dependency runtime.
+
+## Optional parsed-document cache
+
+A trusted host may pass `parsedDocumentCache: {maxEntries, maxBytes}` to
+`createLocalGitAnalysisPorts`. It is disabled by default. Each ports instance
+owns its bounded in-memory cache and clears it after active work and source
+trees drain on disposal. Entry limits range from 1 to 256; the serialized
+parse-tree byte limit ranges from 1 to 64,000,000. This counts UTF-8 JSON size,
+not exact JavaScript heap usage; selected-file and strict-parser structure
+limits apply separately.
+
+The cache retains only successful strict JSON/YAML parse trees, isolated by
+tenant, repository, service/root, configuration, analyzer/IR/parser version,
+selected path and verified byte digest. Every analysis still rereads and
+verifies its current committed bytes, then rebuilds its result and evidence
+for the current revision. Frozen parser trees cannot be edited through the
+cache. Failed parses are retried; changed bytes or scope miss the cache.
+
+This saves syntax parsing only. It does not cache analyzer results or catalog
+snapshots, skip semantic projection, upgrade incomplete coverage, or establish
+runtime/deployment behavior. Parsed trees may contain document examples; the
+trusted host controls this explicit memory-retention choice.
 
 ## External runtime capture pin boundary
 

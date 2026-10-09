@@ -1065,3 +1065,12 @@ The query layer resolves an existing complete source-only D07 reuse association 
 Ordinary pins keep their existing shape. Legacy NULL fingerprints remain compatible only with the established complete source-only proof; extra manifests and partial document snapshots are excluded. Current publication and metadata observations are withheld for qualified selections. Keyword corpus matching and transaction consumers used by semantic services and observation imports fail closed until their contracts explicitly adopt both revisions. This does not enable document snapshot caching or deployment claims from branch pointers.
 
 Validation: the real-Git PostgreSQL regression exercises complete Express analysis followed by two actual D08 reuse completions, exact revision/branch/environment reads, stale checkpoint and revoked-grant rejection, legacy NULL compatibility, corrupted plan rejection and withheld downstream operations. A clean locked install/typecheck passed all 1,562 offline and 368 PostgreSQL tests.
+
+
+### Optional evidence-neutral document parse cache — NB1 bounded optimization (2026-10-09)
+
+Git connector 0.12.0 adds an explicit host opt-in bounded in-memory cache for successful strict JSON/YAML parser trees. Each ports instance owns its cache; LRU entry and serialized-byte bounds apply, and disposal clears retained trees after active work drains. Scope includes tenant/repository/service/root/configuration, adapter and IR/parser versions, selected path and verified digest. The concrete fixed parser rejects substitute/proxy cache objects; scope is inert, detached and frozen at factory creation.
+
+Swagger 2, OpenAPI 3.0 and OpenAPI 3.1 still reread and verify current selected bytes before lookup, run all projection/diagnostic/output checks, and rebuild evidence and result identities for the current request and revision. Failed parsing is not retained. Immutable parsed trees prevent later mutation from changing hits. The byte budget measures serialized JSON size rather than exact heap usage. This cache skips syntax parsing only; partial coverage, runtime unknowns and full D08 analysis remain unchanged. No snapshot reuse, migrations or deployment claims are added.
+
+Validation: independent review resolved proxy/parser substitution and mutable factory-scope findings. Focused tests cover all three profiles, byte/scope invalidation, bounded eviction, failed parsing, post-factory mutation, real Git sessions and disposal. A clean locked install/typecheck passed all 1,572 offline and 368 PostgreSQL tests.

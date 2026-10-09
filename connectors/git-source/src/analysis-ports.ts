@@ -9,6 +9,7 @@ import { createConfiguredAnalyzer, configuredAnalyzerProfiles } from "../../../a
 import { readSelectedDocument } from "../../../analyzers/nodejs/src/source.js";
 import { parseStrictJson } from "../../../analyzers/nodejs/src/strict-json.js";
 import { parseStrictYaml } from "../../../analyzers/nodejs/src/strict-yaml.js";
+import {ParsedDocumentCache} from "../../../analyzers/nodejs/src/parsed-document-cache.js";
 import type { AnalysisWorkerPorts } from "../../../packages/orchestration/src/execution.js";
 import { materializeGitSource, type MaterializedGitSource } from "./index.js";
 
@@ -138,10 +139,16 @@ async function selectedDocumentDelta(repoPath: string, baseRevision: string | un
 export function createLocalGitAnalysisPorts(options: {
   repositories: readonly RepositoryBinding[];
   limits: Limits;
+  parsedDocumentCache?: Readonly<{maxEntries: number; maxBytes: number}>;
 }): LocalGitAnalysisPorts {
   if (!Array.isArray(options.repositories) || options.repositories.length < 1 || options.repositories.length > 128
     || !boundedLimits(options.limits)) fail();
   const limits: Limits = Object.freeze({ ...options.limits });
+  let parsedDocumentCache: ParsedDocumentCache | undefined;
+  if (options.parsedDocumentCache !== undefined) {
+    try { parsedDocumentCache = new ParsedDocumentCache(options.parsedDocumentCache); }
+    catch { fail(); }
+  }
   const bindings = new Map<string, string>();
   for (const binding of options.repositories) {
     if (!binding || typeof binding.tenantId !== "string" || !binding.tenantId
@@ -244,7 +251,11 @@ export function createLocalGitAnalysisPorts(options: {
         try {
           tree = await materializeGitSource({ repoPath, revision: rawInput.immutableRevision,
             serviceRoot: rawInput.service.root, limits: { maxFiles: limits.maxFiles, maxBytes: limits.maxBytes } });
-          const host = createConfiguredAnalyzer({ projectRoot: tree.projectRoot, selection: rawInput.service.analyzer });
+          const host = createConfiguredAnalyzer({ projectRoot: tree.projectRoot, selection: rawInput.service.analyzer,
+            ...(parsedDocumentCache === undefined ? {} : {parsedDocumentCache,
+              parsedDocumentCacheScope: {tenantId: rawInput.tenantId, repositoryId: rawInput.repository.repository_id,
+                serviceId: rawInput.service.service_id, serviceRoot: rawInput.service.root,
+                configFingerprint: rawInput.configFingerprint}})});
           const source = {
             repository_id: rawInput.repository.repository_id,
             service_id: rawInput.service.service_id,
@@ -354,14 +365,16 @@ export function createLocalGitAnalysisPorts(options: {
       if (reservations > 0) await reservationsDrained;
       if (activeAnalyses > 0) await analysesDrained;
       await Promise.allSettled([...releasing.values()].map(item => item.promise));
-      for (const [requestId, session] of sessions) {
-        await cleanup(requestId, session.tree);
-        sessions.delete(requestId);
-      }
-      for (const [requestId, tree] of pendingCleanup) {
-        await cleanup(requestId, tree);
-        pendingSessionCleanup.delete(requestId);
-      }
+      try {
+        for (const [requestId, session] of sessions) {
+          await cleanup(requestId, session.tree);
+          sessions.delete(requestId);
+        }
+        for (const [requestId, tree] of pendingCleanup) {
+          await cleanup(requestId, tree);
+          pendingSessionCleanup.delete(requestId);
+        }
+      } finally { parsedDocumentCache?.clear(); }
     },
   };
   return ports;

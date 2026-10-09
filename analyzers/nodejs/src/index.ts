@@ -13,6 +13,8 @@ import { declaredSchemaConstraints } from "./schema-constraints.js";
 import { readSelectedDocument } from "./source.js";
 import { parseStrictJson, StrictJsonError } from "./strict-json.js";
 import { parseStrictYaml, StrictYamlError } from "./strict-yaml.js";
+import {ParsedDocumentCache, isParsedDocumentCache, snapshotParsedDocumentCacheScope,
+  type ParsedDocumentCacheScope} from "./parsed-document-cache.js";
 import { parseSwagger2Document, type Swagger2Diagnostic, type Swagger2Operation } from "./swagger2-document.js";
 import { declaredPresence, parameterSerialization, supportedFormField, formFieldEncoding } from "./swagger2-serialization.js";
 import type { StartupResolution } from "./startup.js";
@@ -34,7 +36,14 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 const pointerPart = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
 const safePointer = (pointer: string) => pointer || "/";
 
-export function createAnalyzer(options: { projectRoot: string }) {
+export function createAnalyzer(options: { projectRoot: string; parsedDocumentCache?: ParsedDocumentCache;
+  parsedDocumentCacheScope?: ParsedDocumentCacheScope }) {
+  const parsedDocumentCache = options.parsedDocumentCache;
+  const parsedDocumentCacheScope = options.parsedDocumentCacheScope === undefined ? undefined
+    : snapshotParsedDocumentCacheScope(options.parsedDocumentCacheScope);
+  if ((parsedDocumentCache === undefined) !== (parsedDocumentCacheScope === undefined)
+    || parsedDocumentCache !== undefined && !isParsedDocumentCache(parsedDocumentCache))
+    throw new Error("Invalid trusted document cache");
   return { async analyze(input: unknown): Promise<AnalyzerResult> {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
@@ -58,7 +67,12 @@ export function createAnalyzer(options: { projectRoot: string }) {
       ...request, source: { ...request.source, source_digest: source.digest },
       resolution_inputs: [{ ...selected, digest: source.digest }],
     };
-    const result = extractSwagger2Document(normalized, source.path, source.text);
+    const parse = () => parsedDocumentCache && parsedDocumentCacheScope
+      ? parsedDocumentCache.parse({...parsedDocumentCacheScope, adapterId: ANALYZER.analyzer_id,
+        adapterVersion: ANALYZER.analyzer_version, irVersion: request.ir_version, documentPath: source.path,
+        digest: source.digest}, source.text)
+      : parseSelectedDocument(source.text, source.path);
+    const result = extractSwagger2DocumentFromParser(normalized, source.path, parse);
     if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
@@ -72,6 +86,15 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 }
 
 export function extractSwagger2Document(request: AnalyzerRequest, documentPath: string, text: string,
+  middleware?: MiddlewareContext): AnalyzerResult {
+  return extractSwagger2DocumentFromParser(request, documentPath, () => parseSelectedDocument(text, documentPath), middleware);
+}
+
+function parseSelectedDocument(text: string, documentPath: string): unknown {
+  return /\.ya?ml$/.test(documentPath) ? parseStrictYaml(text) : parseStrictJson(text);
+}
+
+function extractSwagger2DocumentFromParser(request: AnalyzerRequest, documentPath: string, parseDocument: () => unknown,
   middleware?: MiddlewareContext): AnalyzerResult {
   const fingerprint = middleware === undefined
     ? hash(canonicalJsonStringify({ request, analyzer: ANALYZER, parser: "swagger2-json-yaml-11", documentPath }))
@@ -184,7 +207,7 @@ export function extractSwagger2Document(request: AnalyzerRequest, documentPath: 
     return failed(result, documentPath);
   }
   let document: unknown;
-  try { document = /\.ya?ml$/.test(documentPath) ? parseStrictYaml(text) : parseStrictJson(text); }
+  try { document = parseDocument(); }
   catch (error) {
     diagnostic(error instanceof StrictJsonError || error instanceof StrictYamlError ? error.code : "invalid_document", "", "error");
     return failed(result, documentPath);
