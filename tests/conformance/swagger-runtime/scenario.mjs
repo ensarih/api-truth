@@ -1,4 +1,4 @@
-import {generateKeyPairSync} from "node:crypto";
+import {createHash, generateKeyPairSync} from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,10 +8,16 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const scenario = process.argv[2];
-const supported = new Set(["default", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
+const supported = new Set(["default", "protected-capture", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
   "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match", "runtime-binding-body-additional-match", "runtime-binding-body-additional-extra", "runtime-binding-body-additional-reference", "runtime-binding-body-shorthand-match", "runtime-binding-body-shorthand-type", "runtime-binding-body-shorthand-required", "runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-precedence", "runtime-binding-body-schema-missing-example"]);
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
+const protectedScenario = scenario === "protected-capture";
+const executionMarker = join(tmpdir(), "protected-capture-execution-marker");
+const sha256 = value => `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const canonical = value => JSON.stringify(JSON.parse(JSON.stringify(value)), (_key, item) =>
+  item && !Array.isArray(item) && typeof item === "object"
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item);
 let server;
 try {
   const put = async (path, value) => {
@@ -88,6 +94,11 @@ try {
   }
   await put("api/swagger/swagger.yaml", JSON.stringify(doc));
   await put("api/controllers/orders.js", handler("orders"));
+  if (protectedScenario) await put("api/controllers/orders.js", `const fs = require("node:fs");
+    exports.getOrder = function(req, res) {
+      fs.appendFileSync(${JSON.stringify(executionMarker)}, "x");
+      res.json({controller:"orders", id:req.swagger.params.id.value});
+    };`);
   if (scenario.startsWith("runtime-binding-response-") || scenario.startsWith("runtime-binding-body-")) await put("api/controllers/orders.js",
     'exports.getOrder = function(req, res) { return res.status(201).json({controller:"orders"}); };');
   if (scenario.startsWith("runtime-binding-body-local-")) await put("api/controllers/orders.js",
@@ -172,17 +183,26 @@ try {
   const run = promisify(execFile);
   const analyzerNode = process.env.API_TRUTH_ANALYZER_NODE;
   if (!analyzerNode) throw new Error("Analyzer runtime missing");
-  const captureScenario = scenario.startsWith("runtime-binding");
+  let revision = "a".repeat(40);
+  if (protectedScenario) {
+    await run("git", ["init", "-q", "-b", "main"], {cwd: root});
+    await run("git", ["add", "-A"], {cwd: root});
+    await run("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "pinned fixture"], {cwd: root});
+    revision = (await run("git", ["rev-parse", "HEAD"], {cwd: root})).stdout.trim();
+  }
+  const captureScenario = scenario.startsWith("runtime-binding") || protectedScenario;
   const cliArgs = [fileURLToPath(new URL("../../../scripts/extract-swagger2-middleware.mjs", import.meta.url)),
-    "--source", root, "--service", "synthetic", "--revision", "a".repeat(40)];
+    "--source", root, "--service", "synthetic", "--revision", revision];
   const cliOptions = {timeout: 10000, maxBuffer: 1_000_000,
-    env: {PATH: process.env.PATH, NODE_ENV: "test", SUPPRESS_NO_CONFIG_WARNING: "true"}};
+    env: {PATH: process.env.PATH, NODE_ENV: "test", SUPPRESS_NO_CONFIG_WARNING: "true",
+      TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP}};
   let capture;
+  let baseline;
   if (captureScenario) {
-    const baseline = JSON.parse((await run(analyzerNode, cliArgs, cliOptions)).stdout);
+    baseline = JSON.parse((await run(analyzerNode, cliArgs, cliOptions)).stdout);
     const collector = require(fileURLToPath(new URL("../../../analyzers/nodejs/src/runtime-binding-capture.cjs", import.meta.url)));
     capture = collector.installSwaggerRuntimeBindingCapture({serviceRoot: root, repository_id: "local", service_id: "synthetic",
-      immutable_revision: "a".repeat(40), source_digest: baseline.source.source_digest, environment: "test", session_id: "runtime-fixture"});
+      immutable_revision: revision, source_digest: baseline.source.source_digest, environment: "test", session_id: "runtime-fixture"});
   }
   const express = require("express");
   const wrapper = require("swagger-express-mw");
@@ -199,25 +219,52 @@ try {
   await withoutPrefix.arrayBuffer();
   const {stdout: analyzerVersion} = await run(analyzerNode, ["--version"]);
   let keyDirectory;
+  let protectedCapture;
+  let keys;
   if (capture) {
     const payload = capture.receipt(); capture.stop();
-    const keys = generateKeyPairSync("ed25519");
+    keys = generateKeyPairSync("ed25519");
     keyDirectory = await mkdtemp(join(tmpdir(), "api-truth-runtime-key-"));
     const keyPath = join(keyDirectory, "public.pem");
     await writeFile(keyPath, keys.publicKey.export({format: "pem", type: "spki"}));
     const privatePath = join(keyDirectory, "private.pem"), capturePath = join(keyDirectory, "capture.json");
     await writeFile(privatePath, keys.privateKey.export({format: "pem", type: "pkcs8"}), {mode: 0o600});
     await writeFile(capturePath, JSON.stringify(payload));
+    const signedPath = protectedScenario ? join(keyDirectory, "signed-receipt.json") : join(root, "api-truth.runtime-binding.json");
     await run(analyzerNode, [fileURLToPath(new URL("../../../scripts/sign-runtime-binding.mjs", import.meta.url)),
-      "--capture", capturePath, "--private-key", privatePath, "--output", join(root, "api-truth.runtime-binding.json")], cliOptions);
+      "--capture", capturePath, "--private-key", privatePath, "--output", signedPath], cliOptions);
     if (scenario === "runtime-binding-stale") await put("api/controllers/orders.js", 'exports.getOrder = function() { return "private-stale-marker"; };');
-    cliArgs.push("--binding-receipt", "api-truth.runtime-binding.json", "--binding-public-key", keyPath);
+    if (!protectedScenario) cliArgs.push("--binding-receipt", "api-truth.runtime-binding.json", "--binding-public-key", keyPath);
   }
   let stdout;
-  try { ({stdout} = await run(analyzerNode, cliArgs, cliOptions)); }
+  try {
+    ({stdout} = await run(analyzerNode, cliArgs, cliOptions));
+    if (protectedScenario) {
+      const signedPath = join(keyDirectory, "signed-receipt.json"), keyPath = join(keyDirectory, "public.pem");
+      const scope = {tenantId:"tenant", repositoryId:"local", serviceId:"synthetic", immutableRevision:revision,
+        sourceDigest:baseline.source.source_digest, environment:"test"};
+      const expectedReceiptDigest = sha256(await readFile(signedPath));
+      const expectedSignerSpkiDigest = sha256(keys.publicKey.export({type:"spki",format:"der"}));
+      const expectedCaptureIdentityDigest = sha256(canonical({policyVersion:"runtime-capture-pin-1",scope,
+        artifactRef:"capture:verified-fixture",configuredKeyRef:"key:verified-fixture",
+        receiptDigest:expectedReceiptDigest,signerSpkiDigest:expectedSignerSpkiDigest}));
+      const expectedHandlerDigest = sha256(await readFile(join(root,"api/controllers/orders.js")));
+      const verifyConfigPath = join(keyDirectory, "verify-config.json");
+      await writeFile(verifyConfigPath, JSON.stringify({repoPath:root,scope,receiptPath:signedPath,keyPath,
+        expectedReceiptDigest,expectedSignerSpkiDigest,expectedCaptureIdentityDigest,expectedHandlerDigest}));
+      const committed = (await run("git", ["ls-tree", "-r", "--name-only", revision], {cwd:root})).stdout;
+      const executionMarkerBefore = await readFile(executionMarker,"utf8");
+      const verified = JSON.parse((await run(analyzerNode,
+        [fileURLToPath(new URL("./protected-verify.mjs",import.meta.url)),verifyConfigPath],cliOptions)).stdout);
+      protectedCapture = {...verified,externalArtifactNotCommitted:!committed.includes("api-truth.runtime-binding.json")
+        && !committed.includes("signed-receipt.json") && !committed.includes("public.pem"),
+      executionMarkerBefore,executionMarkerAfter:await readFile(executionMarker,"utf8")};
+    }
+  }
   finally { if (keyDirectory) await rm(keyDirectory, {recursive: true, force: true}); }
   const analysis = JSON.parse(stdout);
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
+    ...(protectedCapture ? {protectedCapture} : {}),
     analysis: {status: analysis.status,
       securityState: analysis.endpoints[0]?.security.state,
       securityDeclaration: analysis.claims.find(item => item.predicate === "security.declaration"),

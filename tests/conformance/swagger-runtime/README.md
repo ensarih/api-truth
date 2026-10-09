@@ -229,3 +229,19 @@ The standalone document profile remains `0.13.0`.
 Validation: 1,000 offline tests and 58 pinned runtime cases. Runtime cases cover
 matching closed objects, extra fields and reusable definition provenance.
 Independent review found no blocker.
+
+
+### External protected capture verification
+
+The `protected-capture` case commits the synthetic service to a real Git revision
+before measuring its source digest and dispatching a request in the pinned Node
+22.19.0/Swagger environment. The fixture signs the captured receipt outside the
+checkout, then Node 24.6.0 pins that external receipt and verifies its handler
+bytes against committed Git blobs. The exact capture identity, revision, source
+and handler hashes, artifact separation, owned temporary-tree cleanup and
+unchanged execution marker are asserted. The verifier does not execute the
+service again or emit IR claims. Document-operation correspondence, production
+capture authorization and deployment remain separate gates.
+
+This remains an opt-in isolated framework suite; it adds no service dependencies
+or network requests to the default offline tests.

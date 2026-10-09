@@ -43,6 +43,7 @@ const cases = [
   ["npm-router-mock", 200, "production-mock"],
   ["npm-router-mock-disabled", 200, "orders"],
   ["runtime-binding", 200, "orders"],
+  ["protected-capture", 200, "orders"],
   ["runtime-binding-missing", 500, undefined],
   ["runtime-binding-mock", 200, "mock"],
   ["runtime-binding-stale", 200, "orders"],
@@ -193,6 +194,24 @@ for (const [scenario, status, marker] of cases) {
     } else {
       assert.equal(result.analysis.securityState, "unknown");
       assert.equal(result.analysis.securityDeclaration, undefined);
+    }
+    if (scenario === "protected-capture") {
+      assert.match(result.protectedCapture.revision, /^[a-f0-9]{40}$/);
+      assert.notEqual(result.protectedCapture.revision, "a".repeat(40));
+      assert.equal(result.protectedCapture.revision, result.protectedCapture.scope.immutableRevision);
+      assert.equal(result.protectedCapture.sourceDigest, result.protectedCapture.scope.sourceDigest);
+      assert.equal(result.protectedCapture.captureIdentityDigest, result.protectedCapture.expectedCaptureIdentityDigest);
+      assert.deepEqual(result.protectedCapture.handlers, [{method:"GET", applicationPath:"/api/v1/orders/{id}",
+        controller:"orders", operationId:"getOrder", handlerPath:"api/controllers/orders.js",
+        handlerDigest:result.protectedCapture.expectedHandlerDigest, exportName:"getOrder"}]);
+      assert.equal(result.protectedCapture.externalArtifactNotCommitted, true);
+      assert.equal(result.protectedCapture.ownedTempCleaned, true);
+      assert.equal(result.protectedCapture.executionMarkerBefore, "x");
+      assert.equal(result.protectedCapture.executionMarkerAfter, "x");
+      assert.deepEqual(result.protectedCapture.limitations,
+        ["Document operation correspondence and deployment are unverified"]);
+      assert.equal("snapshot_id" in result.protectedCapture, false);
+      assert.equal("claims" in result.protectedCapture, false);
     }
     assert.equal(result.analysis.status, "partial");
     if (["runtime-binding", "runtime-binding-precedence"].includes(scenario) || scenario.startsWith("runtime-binding-response-") || scenario.startsWith("runtime-binding-body-")) {

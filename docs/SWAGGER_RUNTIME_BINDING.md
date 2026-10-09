@@ -144,6 +144,12 @@ constraints, deterministic fingerprints and handler/receipt dependencies.
 Fresh-process runtime cases cover actual dispatch, missing exports, mocks,
 stale source and first-directory precedence. The fixture driver invokes the
 framework directly; it does not certify a production application's entrypoint.
+The protected-capture conformance case also uses an actual immutable Git commit,
+external receipt/key storage and the protected byte verifier. It checks that
+verification does not invoke the already captured handler again. Its fixture
+authorization is synthetic; live capture-job authority and document mapping
+remain separate gates.
+
 
 
 ## Optional source response-status inspection

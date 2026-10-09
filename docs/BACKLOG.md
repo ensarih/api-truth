@@ -951,7 +951,7 @@ Validation: independent review, clean tracked-source install/typecheck and all 1
 
 Linux PostgreSQL CI exposed a concurrent drain clearing an unexpired reconciliation lease after its owning worker applied the provider checkpoint but before it finished the task. Checkpoint cleanup now leaves active leases to their owner; expired abandoned leases remain eligible for cleanup. Configuration removal and new checkpoint-generation supersession retain their separate behavior. The regression gates the actual provider reconciliation after checkpoint application, then runs the competing drain; the active token survives and the owner resolves the task.
 
-Validation: the deterministic regression failed before the fix and passed afterward. Independent review, clean tracked-source install/typecheck, all 1,529 offline tests and all 310 PostgreSQL tests passed. The focused environment suite passed 40 tests, including active-lease preservation and expired abandoned-lease cleanup. Linux CI remains the final concurrency regression gate. No timeout or expected result is weakened.
+Validation: the deterministic regression failed before the fix and passed afterward. Independent review, clean tracked-source install/typecheck, all 1,529 offline tests and all 310 PostgreSQL tests passed. The focused environment suite passed 40 tests, including active-lease preservation and expired abandoned-lease cleanup. The corrected main commit passed all Linux CI gates, including PostgreSQL, pinned Swagger, browser, offline and Java checks. No timeout or expected result is weakened.
 
 
 ### Protected capture handler-byte verification — NB1 source boundary (2026-10-09)
@@ -961,3 +961,10 @@ Git connector 0.9.0 adds a separate protected-capture-verification port. A trust
 The `verified_handler_bytes` result does not prove document-operation correspondence, deployment, future dispatch or collector integrity. No IR, catalog snapshot, job or branch/environment pointer is written; D08 runtime inputs stay rejected. External callback phases are deadline bounded, while Git materialization retains its own 120-second bound and is awaited to prevent late-tree leaks. Capture-qualified analysis records and authorized scheduling remain open.
 
 Validation: independent review, clean tracked-source install/typecheck and all 1,537 offline tests passed. All 36 focused runtime/pin/verification tests passed, including real Git materialization, changed protected references, stale source/handler bytes, reserved receipt poison, distinct capture identities, session limits and cleanup-time revocation. Actual pinned-framework capture-to-protected-verifier conformance remains a separate gate.
+
+
+### Actual capture to external pin and Git verifier — NB1 conformance (2026-10-09)
+
+The pinned Swagger fixture now commits its complete synthetic source before measuring the digest and capturing actual request dispatch with Node 22.19.0. The signed receipt and key stay outside the Git service tree. A Node 24.6.0 helper independently computes the configured capture identity, verifies protected provenance, and matches signed handler bytes to that commit. Exact commit/source/handler hashes, external artifact separation, unchanged execution marker and owned temporary-tree cleanup are asserted. The verifier emits no IR claim payload; document mapping, deployment and live host authorization remain unverified.
+
+Validation: independent review and the focused protected scenario passed. An exact clean tracked-source tree installed locked root and isolated fixture dependencies and passed all 60 pinned framework cases with no skips or failures. The default offline suite remains separate and needs no legacy framework dependencies.
