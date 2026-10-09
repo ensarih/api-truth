@@ -1,6 +1,6 @@
 # Controlled Swagger runtime handler binding
 
-Middleware profile `nodejs-swagger-express-mw@0.32.0` accepts an optional signed
+Middleware profile `nodejs-swagger-express-mw@0.33.0` accepts an optional signed
 runtime observation. It emits `handler.binding` with verification `observed`
 for matching operations actually dispatched to a normal handler in that capture.
 The claim is scoped to the named environment, session, timestamp and runtime
@@ -28,6 +28,23 @@ not isolate instrumentation from hostile service code.
 Keep private signing keys outside the service process and checkout. The collector
 needs no key. Transfer its unsigned output to a trusted signing step outside the
 service process. Store unsigned output outside the analyzed service tree.
+
+## Protected host receipt boundary
+
+The Git connector exposes `@api-truth/connector-git-source/runtime-capture-pin`
+for an external receipt store and independently configured public-key resolver.
+A trusted host supplies one exact scope, opaque artifact/key references and
+expected receipt/SPKI hashes. `createRuntimeCapturePinResolver` authorizes before
+protected reads and again before returning, verifies the signed envelope, and
+bounds the entire operation. Host ports must honor its cancellation signal.
+A repository-committed receipt or key cannot select these trust references.
+
+Its `pinned_envelope` result proves envelope provenance only. Tenant and policy
+are host-bound; repository, service, revision, source digest and environment are
+signed. The boundary does not verify handler bytes or a deployment. The local
+CLI below remains an explicit controlled-capture workflow; D08 still rejects
+runtime observation inputs until a separate authorized capture association and
+full handler verification gate is connected.
 
 ## Supported capture
 

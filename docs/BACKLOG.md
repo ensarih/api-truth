@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for seven bounded profiles; configured source-manifest paths are pinned and multi-input full-service branch updates pass through D07/D08. Bounded standalone Swagger/OpenAPI document orchestration is also supported with one exact config-pinned input and full reanalysis. Independent runtime receipt/key identity and safe multi-input reuse remain open. Runtime observations are rejected by D08 until separately pinned. |
+| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for seven bounded profiles; configured source-manifest paths are pinned and multi-input full-service branch updates pass through D07/D08. Bounded standalone Swagger/OpenAPI document orchestration is also supported with one exact config-pinned input and full reanalysis. External receipt/signer pinning and separate append-only provenance associations are implemented; authorized capture scheduling, full handler verification and safe multi-input reuse remain open. Runtime observations remain rejected by D08. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
@@ -936,3 +936,12 @@ Git source connector 0.8.0 exposes a separate runtime-capture-pin subpath. Trust
 The returned `pinned_envelope` identifies only a verified external signed envelope. Repository/service/revision/source digest/environment are signed; tenant and policy remain independently host-bound. Handler source bytes, actual registration, deployment and capture-process identity are not established. D08 still rejects runtime observations; separate durable capture associations, authorized scheduling and full handler verification remain open. Existing revision snapshots and analysis checkpoints are not reused for receipts.
 
 Validation: independent boundary review, clean tracked-source install/typecheck and all 1,529 offline tests passed. Focused authorization/revocation, proxy, substitution, signature, hostile JSON and stalled-port regressions passed. No live capture or deployment is certified.
+
+
+### Separate capture provenance associations — NB1 durable identity (2026-10-09)
+
+Migration 0006 records external receipt provenance in a separate append-only table keyed by tenant and capture identity. The trusted store recomputes the exact identity, authorizes before resolving protected artifacts, and locks/checks writer grants through a DB-local authorization port inside insertion. Exact replay returns the existing association; an identity collision is rejected. Captures at the same source revision retain distinct receipt/signer identities. Source revision snapshots, analysis checkpoints and branch/environment pointers are untouched.
+
+This association is not a runtime analysis job or a verified handler contract. Protected host authorization/grant provisioning, separate capture scheduling and full source/handler verification remain open; D08 runtime input rejection remains in place.
+
+Validation: independent review, clean tracked-source install/typecheck and all 1,529 offline tests passed. All 304 PostgreSQL tests passed, including seven new capture-association cases covering migration/replay, identity collision, denied/revoked writer, hostile input, append-only rows, concurrent duplicate collapse, separate authorized tenants and grant-lock serialization. No capture-specific job or deployed handler claim is enabled.

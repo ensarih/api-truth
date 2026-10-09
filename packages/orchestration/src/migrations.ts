@@ -183,6 +183,7 @@ const orchestrationMigrationManifest = async (): Promise<OrchestrationMigration[
   "0003_durable_workers",
   "0004_atomic_execution",
   "0005_revision_target_uniqueness",
+  "0006_observed_capture_associations",
 ].map(async (version) => ({
   version,
   sql: await readFile(new URL(`../migrations/${version}.sql`, import.meta.url), "utf8"),

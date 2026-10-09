@@ -53,6 +53,24 @@ error text, and observer failures cannot change orchestration results. The
 transactional outbox separately carries durable integration notifications;
 its delivery requires a worker capability.
 
+## External capture provenance associations
+
+`createObservedCaptureAssociationStore` appends protected receipt provenance to
+`orchestration_observed_capture_associations`. Its trusted host pin resolver
+verifies an externally stored signed envelope; callers supply only an exact
+source/environment scope. Writer authorization runs before resolution and again
+in the insertion transaction. The transaction authorization port must lock and
+check its grant rows using the supplied client, with no network I/O; host ports
+and the PostgreSQL pool must enforce their own connection/callback deadlines.
+SQL statements have a local ten-second timeout.
+
+Capture identities contain tenant, source scope, protected artifact/key references,
+policy version and receipt/signer hashes. Two captures of the same revision remain
+separate. Exact replays are idempotent; mismatched stored identities fail closed.
+Rows are append-only. This records `pinned_envelope` provenance only: it does not
+verify handler bytes, schedule runtime analysis, or promote branch/environment
+pointers. D08 continues rejecting runtime observation inputs.
+
 ## Local validation
 
 From the repository root:

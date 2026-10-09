@@ -26,6 +26,9 @@ export {
 } from "./migrations.js";
 export type { OrchestrationMigration } from "./migrations.js";
 export { createOrchestrationRepository } from "./repository.js";
+export { createObservedCaptureAssociationStore, ObservedCaptureAssociationError } from "./observed-captures.js";
+export type { ObservedCaptureScope, ObservedCapturePin, ObservedCaptureAssociationOptions,
+  ObservedCaptureAssociationReceipt } from "./observed-captures.js";
 export { createReconciliationScheduler } from "./reconciliation-scheduler.js";
 export type { ScheduledReconciliationRequest } from "./reconciliation-scheduler.js";
 export { createOrchestrationWorker } from "./worker.js";
