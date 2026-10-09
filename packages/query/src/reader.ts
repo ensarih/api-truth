@@ -1,9 +1,11 @@
 import type { Pool, PoolClient } from "pg";
 import {isProxy} from "node:util/types";
-import { parseConfig, parseContractSnapshot, type ContractSnapshot, type InstallationConfig } from "@api-truth/ir";
+import { configuredAnalyzerIrVersion, parseConfig, parseContractSnapshot,
+  type ContractSnapshot, type InstallationConfig } from "@api-truth/ir";
 import { canonicalOrchestrationHash } from "@api-truth/orchestration";
 import { snapshotContentSha256, snapshotIdentitySha256 } from "../../catalog/src/canonical.js";
-import { compareContractSnapshots, type ContractDifferenceSet } from "@api-truth/updates";
+import { compareContractSnapshots, parseContractDifferenceSet, parseUpdatePlan,
+  type ContractDifferenceSet } from "@api-truth/updates";
 import { OpenApiStorageError, readCurrentOpenApiWithClient, readPublicationOpenApiWithClient,
   type OpenApiPublicationSelector, type PublicationKey } from "@api-truth/openapi";
 import { quoteEnvironmentSchema } from "../../environment/src/migrations.js";
@@ -23,6 +25,8 @@ export class QueryReadError extends Error {
 
 export type QueryPin = Readonly<{
   snapshotId: string; revision: string; configFingerprint: string;
+  /** Present only when a complete source snapshot is selected by a later, proven reused revision. */
+  selectedRevision?: string;
   pointerVersion?: string; checkpointVersion?: string;
 }>;
 export type QueryPublication = Readonly<{ status: "current"; publicationId: string;
@@ -249,14 +253,162 @@ const resolved = (selector: QuerySelection, row: SnapshotRow, pinExtra: Partial<
       configFingerprint: row.config_fingerprint, ...pinExtra }), snapshot });
 };
 
+type ReusedAssociationRow = {
+  snapshot_id: string; immutable_revision: string; source_digest: string; service_root: string;
+  analyzer_adapter_id: string; analyzer_adapter_version: string; ir_version: string;
+  exchange_version: string; identity_version: string; config_version: string; config_fingerprint: string;
+  resolution_inputs_fingerprint: string | null; config_document_sha256: string; config_document: unknown;
+  base_selected_revision: string; plan_version: string | null; difference_version: string | null;
+  plan_document: unknown; difference_document: unknown;
+};
+type ReusedSnapshot = { row: SnapshotRow; selectedRevision: string; associationKey: string };
+
+/** Resolve only a completed D07 source-tree reuse; the original snapshot and its evidence stay untouched. */
+const readAuthorizedSourceReuse = async (client: PoolClient, selector: QuerySelection, principalId: string,
+  selectedRevision: string, snapshotId?: string, configFingerprint?: string,
+  maxDocumentBytes?: number, validatedConfiguration?:ValidatedActiveConfiguration): Promise<ReusedSnapshot[]> => {
+  const selected = await client.query<ReusedAssociationRow>(`
+    SELECT association.snapshot_id,association.immutable_revision,association.source_digest,association.service_root,
+      association.analyzer_adapter_id,association.analyzer_adapter_version,association.ir_version,
+      association.exchange_version,association.identity_version,association.config_version,association.config_fingerprint,
+      association.resolution_inputs_fingerprint,configuration.document_sha256 AS config_document_sha256,
+      CASE WHEN $8::boolean OR octet_length(configuration.document::text)>4194304
+        THEN NULL ELSE configuration.document END AS config_document,result.base_selected_revision,
+      result.plan_version,result.difference_version,
+      CASE WHEN octet_length(result.plan_document::text)<=65536 THEN result.plan_document ELSE NULL END AS plan_document,
+      CASE WHEN octet_length(result.difference_document::text)<=65536
+        THEN result.difference_document ELSE NULL END AS difference_document
+    FROM orchestration_revision_snapshots association
+    JOIN catalog_snapshots snapshot ON snapshot.tenant_id=association.tenant_id
+      AND snapshot.repository_id=association.repository_id AND snapshot.service_id=association.service_id
+      AND snapshot.snapshot_id=association.snapshot_id
+    JOIN orchestration_jobs job ON job.tenant_id=association.tenant_id
+      AND job.job_id=association.producing_job_id AND job.state='succeeded'
+      AND job.kind IN ('branch_analysis','pr_preview_analysis')
+      AND job.repository_id=association.repository_id AND job.service_id=association.service_id
+      AND job.service_root=association.service_root AND job.target_revision=association.immutable_revision
+      AND job.result_snapshot_id=association.snapshot_id AND job.config_fingerprint=association.config_fingerprint
+      AND job.config_version=association.config_version
+      AND job.analyzer_adapter_id=association.analyzer_adapter_id
+      AND job.analyzer_adapter_version=association.analyzer_adapter_version
+      AND job.exchange_version=association.exchange_version
+      AND job.ir_version=association.ir_version AND job.identity_version=association.identity_version
+    JOIN orchestration_job_results result ON result.tenant_id=job.tenant_id AND result.job_id=job.job_id
+      AND result.repository_id=association.repository_id AND result.service_id=association.service_id
+      AND result.target_snapshot_id=association.snapshot_id AND result.base_snapshot_id=association.snapshot_id
+      AND result.base_selected_revision IS NOT NULL AND result.coverage_status='complete'
+      AND result.plan_document->>'action'='reuse_base_snapshot'
+    JOIN orchestration_configurations configuration ON configuration.tenant_id=association.tenant_id
+      AND configuration.config_fingerprint=association.config_fingerprint
+      AND configuration.config_version=association.config_version
+    WHERE association.tenant_id=$1 AND association.repository_id=$2 AND association.service_id=$3
+      AND association.immutable_revision=$4 AND association.association_kind='reused'
+      AND association.analyzer_status='success' AND snapshot.analyzer_status='success'
+      AND snapshot.immutable_revision<>association.immutable_revision
+      AND ($6::text IS NULL OR association.snapshot_id=$6)
+      AND ($7::text IS NULL OR association.config_fingerprint=$7)
+      AND ${granted(5)}
+      AND EXISTS (SELECT 1 FROM orchestration_revision_snapshots base
+        WHERE base.tenant_id=association.tenant_id AND base.repository_id=association.repository_id
+          AND base.service_id=association.service_id AND base.service_root=association.service_root
+          AND base.immutable_revision=result.base_selected_revision
+          AND base.source_digest=association.source_digest
+          AND base.analyzer_adapter_id=association.analyzer_adapter_id
+          AND base.analyzer_adapter_version=association.analyzer_adapter_version
+          AND base.exchange_version=association.exchange_version
+          AND base.ir_version=association.ir_version AND base.identity_version=association.identity_version
+          AND base.config_version=association.config_version
+          AND base.config_fingerprint=association.config_fingerprint
+          AND base.snapshot_id=result.base_snapshot_id)
+    ORDER BY association.snapshot_id COLLATE "C" LIMIT 2`,
+    [selector.tenantId,selector.repositoryId,selector.serviceId,selectedRevision,principalId,
+      snapshotId??null,configFingerprint??null,validatedConfiguration!==undefined]);
+  const matches: ReusedSnapshot[] = [];
+  for (const association of selected.rows) {
+    const parsedConfig = validatedConfiguration===undefined ? parseConfig(association.config_document)
+      : {ok:true as const,value:validatedConfiguration.document};
+    if (!parsedConfig.ok || validatedConfiguration!==undefined
+        && validatedConfiguration.configFingerprint!==association.config_fingerprint
+      || canonicalOrchestrationHash(parsedConfig.value) !== association.config_document_sha256
+      || parsedConfig.value.config_version !== association.config_version) return storage();
+    const repository = parsedConfig.value.repositories.find(item => item.repository_id === selector.repositoryId);
+    const service = repository?.services.find(item => item.service_id === selector.serviceId);
+    if (!repository || !service || service.root !== association.service_root
+      || (service.analyzer.resolution_inputs ?? []).length !== 0
+      || service.analyzer.adapter_id !== association.analyzer_adapter_id
+      || service.analyzer.adapter_version !== association.analyzer_adapter_version
+      || configuredAnalyzerIrVersion(service.analyzer) !== association.ir_version
+      || !await hasScopes(client, selector.tenantId, principalId, [repository.access_scope_id])) return denied();
+    const rows = await selectAuthorized(client, selector, principalId,
+      "snapshot.snapshot_id=$4", [association.snapshot_id], maxDocumentBytes);
+    if (rows.length !== 1) return storage();
+    const row = rows[0]!;
+    if (maxDocumentBytes !== undefined && (row.document === null || Number(row.document_bytes) > maxDocumentBytes))
+      throw new CorpusBudgetExceeded();
+    const snapshot = verifySnapshot(row, selector);
+    const plan = parseUpdatePlan(association.plan_document);
+    const differences = parseContractDifferenceSet(association.difference_document);
+    if (!plan.ok || !differences.ok || plan.value.update_plan_version !== association.plan_version
+      || differences.value.contract_difference_version !== association.difference_version
+      || plan.value.action !== "reuse_base_snapshot" || plan.value.dependency_coverage !== "complete"
+      || plan.value.changed_paths.length !== 0 || plan.value.affected_endpoint_ids.length !== 0
+      || plan.value.service.repository_id !== selector.repositoryId
+      || plan.value.service.service_id !== selector.serviceId
+      || plan.value.service.service_root !== association.service_root
+      || plan.value.service.base_snapshot_id !== association.snapshot_id
+      || plan.value.service.base_revision !== snapshot.source.immutable_revision
+      || plan.value.service.target_revision !== selectedRevision
+      || plan.value.service.base_source_digest !== association.source_digest
+      || plan.value.service.target_source_digest !== association.source_digest
+      || plan.value.analysis.target.analyzer.analyzer_id !== association.analyzer_adapter_id
+      || plan.value.analysis.target.analyzer.analyzer_version !== association.analyzer_adapter_version
+      || plan.value.analysis.target.analyzer_exchange_version !== association.exchange_version
+      || plan.value.analysis.target.ir_version !== association.ir_version
+      || plan.value.analysis.target.identity_version !== association.identity_version
+      || plan.value.analysis.target.config_version !== association.config_version
+      || plan.value.analysis.target.config_fingerprint !== association.config_fingerprint
+      || differences.value.service_id !== selector.serviceId
+      || differences.value.comparison_status !== "complete"
+      || differences.value.incomplete_reason_codes.length !== 0
+      || differences.value.differences.length !== 0
+      || differences.value.base.snapshot_id !== association.snapshot_id
+      || differences.value.target.snapshot_id !== association.snapshot_id
+      || differences.value.base.immutable_revision !== snapshot.source.immutable_revision
+      || differences.value.target.immutable_revision !== snapshot.source.immutable_revision
+      || !bounded(association.base_selected_revision)) return storage();
+    const expectedInputs = canonicalOrchestrationHash({version: "orchestration-resolution-inputs-1",
+      resolutionInputs: [{kind: "source_tree", path: association.service_root,
+        digest: association.source_digest}]});
+    if (snapshot.coverage.status !== "complete" || snapshot.source.source_digest !== association.source_digest
+      || snapshot.service.root !== association.service_root
+      || snapshot.analyzer.analyzer_id !== association.analyzer_adapter_id
+      || snapshot.analyzer.analyzer_version !== association.analyzer_adapter_version
+      || snapshot.ir_version !== association.ir_version
+      || snapshot.identity_version !== association.identity_version
+      || snapshot.config.config_version !== association.config_version
+      || snapshot.config.config_fingerprint !== association.config_fingerprint
+      || association.resolution_inputs_fingerprint !== null
+        && association.resolution_inputs_fingerprint !== expectedInputs) return storage();
+    const associationKey = canonicalOrchestrationHash([selector.tenantId, selector.repositoryId,
+      selector.serviceId, association.service_root, selectedRevision, association.source_digest,
+      association.analyzer_adapter_id, association.analyzer_adapter_version, association.exchange_version,
+      association.ir_version, association.identity_version, association.config_version,
+      association.config_fingerprint]);
+    matches.push({row,selectedRevision,associationKey});
+  }
+  return matches;
+};
+
 const readRevision = async (client: PoolClient, selector: QuerySelection,
   principalId: string): Promise<QueryCoreResult> => {
   if (selector.selector.kind !== "revision") return storage();
   const rows = await selectAuthorized(client, selector, principalId,
     "snapshot.immutable_revision=$4", [selector.selector.revision]);
-  if (rows.length === 0) return denied();
-  if (rows.length > 1) return resultState(selector, "ambiguous");
-  return resolved(selector, rows[0]!);
+  const reused = await readAuthorizedSourceReuse(client, selector, principalId, selector.selector.revision);
+  if (rows.length + reused.length === 0) return denied();
+  if (rows.length + reused.length > 1) return resultState(selector, "ambiguous");
+  return rows.length === 1 ? resolved(selector, rows[0]!)
+    : resolved(selector, reused[0]!.row, {selectedRevision: reused[0]!.selectedRevision});
 };
 
 const readBranch = async (client: PoolClient, selector: QuerySelection,
@@ -269,8 +421,10 @@ const readBranch = async (client: PoolClient, selector: QuerySelection,
   )).rows[0];
   if (!pointer) return denied();
   const checkpoint = (await client.query<{ desired_state: string; desired_revision: string | null;
-    last_successful_snapshot_id: string | null; latest_outcome: string | null }>(
-    `SELECT desired_state,desired_revision,last_successful_snapshot_id,latest_outcome
+    last_successful_snapshot_id: string | null; last_successful_selected_revision: string | null;
+    last_successful_association_key: string | null; latest_outcome: string | null }>(
+    `SELECT desired_state,desired_revision,last_successful_snapshot_id,
+       last_successful_selected_revision,last_successful_association_key,latest_outcome
      FROM orchestration_branch_checkpoints WHERE tenant_id=$1 AND repository_id=$2
        AND service_id=$3 AND branch=$4`,
     [selector.tenantId,selector.repositoryId,selector.serviceId,selector.selector.branch],
@@ -282,10 +436,19 @@ const readBranch = async (client: PoolClient, selector: QuerySelection,
     && selector.selector.expectedPointerVersion !== pointer.pointer_version)
     throw new QueryReadError("QUERY_STALE_SELECTION");
   if (checkpoint && (checkpoint.desired_state !== "present"
-    || checkpoint.desired_revision !== rows[0]!.immutable_revision
     || checkpoint.last_successful_snapshot_id !== pointer.snapshot_id
     || checkpoint.latest_outcome === "reconciliation_required"))
     throw new QueryReadError("QUERY_STALE_SELECTION");
+  if (checkpoint && checkpoint.desired_revision !== rows[0]!.immutable_revision) {
+    if (!checkpoint.desired_revision || checkpoint.last_successful_selected_revision !== checkpoint.desired_revision)
+      throw new QueryReadError("QUERY_STALE_SELECTION");
+    const reused = await readAuthorizedSourceReuse(client, selector, principalId,
+      checkpoint.desired_revision, pointer.snapshot_id, rows[0]!.config_fingerprint);
+    if (reused.length !== 1 || checkpoint.last_successful_association_key !== reused[0]!.associationKey)
+      throw new QueryReadError("QUERY_STALE_SELECTION");
+    return resolved(selector, rows[0]!, {pointerVersion: pointer.pointer_version,
+      selectedRevision: checkpoint.desired_revision});
+  }
   return resolved(selector, rows[0]!, { pointerVersion: pointer.pointer_version });
 };
 
@@ -360,14 +523,18 @@ const readEnvironment = async (client: PoolClient, selector: QuerySelection,
   const rows = await selectAuthorized(client, selector, principalId,
     "snapshot.immutable_revision=$4 AND snapshot.config_fingerprint=$5", [revision.revision, configFingerprint],
     maxDocumentBytes);
-  if (rows.length === 0) return resultState(selector, "unavailable");
-  if (rows.length > 1) return resultState(selector, "ambiguous");
-  if(maxDocumentBytes!==undefined&&(rows[0]!.document===null
-    ||Number(rows[0]!.document_bytes)>maxDocumentBytes))throw new CorpusBudgetExceeded();
+  const reused = await readAuthorizedSourceReuse(client, selector, principalId, revision.revision,
+    undefined, configFingerprint, maxDocumentBytes, validatedConfiguration);
+  if (rows.length + reused.length === 0) return resultState(selector, "unavailable");
+  if (rows.length + reused.length > 1) return resultState(selector, "ambiguous");
+  const chosen = rows[0] ?? reused[0]!.row;
+  if(maxDocumentBytes!==undefined&&(chosen.document===null
+    ||Number(chosen.document_bytes)>maxDocumentBytes))throw new CorpusBudgetExceeded();
   if (selector.selector.expectedCheckpointVersion !== undefined
     && selector.selector.expectedCheckpointVersion !== checkpoint.version)
     throw new QueryReadError("QUERY_STALE_SELECTION");
-  return resolved(selector, rows[0]!, { checkpointVersion: checkpoint.version });
+  return resolved(selector, chosen, { checkpointVersion: checkpoint.version,
+    ...(reused.length ? {selectedRevision: revision.revision} : {}) });
 };
 
 const publicationKey = (selection: QuerySelection): PublicationKey => {
@@ -384,6 +551,7 @@ const readSelected = async (client: PoolClient, selector: QuerySelection,
       : await readEnvironment(client, selector, principalId);
   if (selected.status !== "resolved") return selected;
   let publication: QueryPublication = Object.freeze({ status: "absent" });
+  if (selected.pin.selectedRevision !== undefined) return Object.freeze({ ...selected, publication });
   try {
     const validated = await readCurrentOpenApiWithClient(client,
       { tenantId: selector.tenantId, principalId }, publicationKey(selector));
@@ -420,6 +588,7 @@ const readMetadataObservationsWithClient = async (client:PoolClient,selector:Que
   if(selector.selector.kind!=="environment")throw new QueryReadError("INVALID_QUERY_OBSERVATION");
   const selected=await readSelected(client,selector,principalId);
   if(selected.status!=="resolved")return Object.freeze({status:selected.status,selector});
+  if(selected.pin.selectedRevision!==undefined)return Object.freeze({status:"unknown",selector});
   if(options.endpointId!==undefined&&!selected.snapshot.endpoints.some(endpoint=>endpoint.endpoint_id===options.endpointId))return denied();
   const result=await client.query<ObservationDbRow>(
     `SELECT imported.import_id::text,observed.record_id::text,imported.source_id,imported.source_version,
@@ -675,7 +844,11 @@ export async function readQueryContractWithClient(client:PoolClient, options:{sc
   const schema=quoteEnvironmentSchema(options.schema);
   try {
     await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
-    return await readSelected(client,selector,principalId);
+    const selected=await readSelected(client,selector,principalId);
+    // Transaction consumers currently require one revision for both serving selection and evidence.
+    // They must opt in to this two-revision lineage before using it for imports or model egress.
+    return selected.status==="resolved"&&selected.pin.selectedRevision!==undefined
+      ? Object.freeze({status:"unknown",selector}) : selected;
   } catch(error) {
     if(error instanceof QueryReadError)throw error;
     throw new QueryReadError("QUERY_STORAGE_ERROR");

@@ -15,6 +15,29 @@ artifact binding, and exactly one authorized snapshot. Unknown, transitional,
 absent, and ambiguous states expose no contract. A supplied expected version
 fails if the pointer or checkpoint changed.
 
+## Selected revisions and evidence revisions
+
+A completed source-only D07 reuse can select a later immutable revision while
+retaining the original complete snapshot. Revision, branch and environment
+contract reads validate the immutable revision association, successful producing
+job, complete reuse plan/differences, exact profile/configuration/source identity
+and current grants before resolving it. Branch reads also bind the last
+successful selected revision and association key to the current checkpoint.
+
+For these qualified reads, `pin.revision` remains the snapshot's evidence
+revision; `pin.selectedRevision` names the later revision selected by the view.
+The snapshot and its evidence are never relabeled. Ordinary reads keep their
+existing pin shape. Legacy NULL input fingerprints remain compatible only with
+the proven complete source-only path; non-null fingerprints must match exactly.
+Extra manifests and partial document snapshots are not admitted by this path.
+
+Qualified reads currently withhold current OpenAPI publication and metadata
+observations. Keyword corpus matching, model services and observation imports
+still require their original single-revision contract and fail closed. The
+transaction helper used by imports and model services returns `unknown` for a
+qualified reuse selection before those consumers can use it. Adopting both
+revision fields across those surfaces is separate acceptance work.
+
 Service search scans configured repository/service IDs, not arbitrary branches.
 It returns no deployment claim unless the caller names an environment. Results
 are capped at 50, and configurations with more than 10,000 services or a result
