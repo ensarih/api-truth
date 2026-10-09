@@ -212,7 +212,8 @@ export function createCaptureVerificationAdmissionStore(pool: Pool, options: Cap
       let outcome: "queued" | "existing" = "existing";
       if (prior.rows.length === 0) {
         const quota = await client.query<{count: string}>(`SELECT count(*)::text AS count
-          FROM orchestration_capture_verification_jobs WHERE tenant_id=$1 AND state='queued'`, [context.tenantId]);
+          FROM orchestration_capture_verification_job_state
+          WHERE tenant_id=$1 AND state IN ('queued','leased','retry_wait')`, [context.tenantId]);
         if (quota.rows.length !== 1 || !/^[0-9]+$/.test(quota.rows[0]!.count))
           throw new CaptureVerificationAdmissionError("CAPTURE_ADMISSION_STORAGE_ERROR");
         if (BigInt(quota.rows[0]!.count) >= BigInt(maxQueued as number))

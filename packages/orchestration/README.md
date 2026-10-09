@@ -105,10 +105,32 @@ deployment, handler verification, or API-document match. The job identity
 includes the capture, verifier profile, service root and active configuration
 epoch. A tenant advisory lock serializes the bounded queued quota and replay;
 the active configuration and relevant grants remain share-locked through
-insertion. This slice contains only immutable `queued` rows. Its queued quota
-does not drain until a separately reviewed worker lifecycle exists. No worker
-is dispatched, and no 0007 result, catalog snapshot or serving pointer is
-written by admission.
+insertion. The immutable 0008 `queued` row records admission; the separate
+0009 state row is the current lifecycle state. The admission quota counts only
+queued, leased, and retry-waiting state rows, so terminal failure releases it.
+No 0007 result, catalog snapshot or serving pointer is written by admission.
+
+`createCaptureVerificationLeaseStore` claims at most one admitted job and
+renews its 30-second lease. The host fixes tenant, principal, worker and
+instance identities plus permitted repository/service IDs. Its separate
+`capture.verify.execute` preflight runs before database access. Claim and
+heartbeat lock the active configuration, validate its canonical document hash
+and activation checkpoint, recompute the 0006 and 0008 identities, lock
+source/environment reader grants, and require a DB-local host check of
+independent source, environment and protected-capture execution permissions.
+No network callback runs in the transaction. A lease token is returned to the
+worker; only its hash is stored. The database clock decides expiry, and a lost
+or expired token cannot be renewed. Expired leases may be reclaimed up to
+three attempts, then become failed. At most two live capture leases per tenant
+and one per service are admitted.
+
+Claims search a bounded window filtered to the worker's configured scope and
+the current configuration epoch. `no_work` reports partial coverage; it does
+not assert that no other authorized work exists. Jobs from an old epoch stay
+queued but cannot be claimed; cancellation and quota cleanup for stale jobs
+remain separate work. This lease slice does not invoke the byte verifier or
+write 0007. A future executor must fence the live lease, current grants and
+configuration in the same transaction that appends 0007 and commits success.
 
 ## Local validation
 
