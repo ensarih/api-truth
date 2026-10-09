@@ -136,9 +136,30 @@ Claims search a bounded window filtered to the worker's configured scope and
 the current configuration epoch. `no_work` reports partial coverage; it does
 not assert that no other authorized work exists. Jobs from an old epoch stay
 queued but cannot be claimed; cancellation and quota cleanup for stale jobs
-remain separate work. This lease slice does not invoke the byte verifier or
-write 0007. A future executor must fence the live lease, current grants and
-configuration in the same transaction that appends 0007 and commits success.
+remain separate work. The lease store itself does not invoke the byte verifier
+or write 0007; the runner below performs those steps with a live lease fence.
+
+`createCaptureVerificationRunner` supplies that bounded executor. A trusted
+host installs a capture-bound verifier factory; callers cannot provide its
+result. After claim, the runner rechecks the exact immutable 0006 association,
+0008 job, active configuration epoch, source/environment grants, independent
+capture-execution permission, and live worker token before handing references
+to the factory. Git materialization, signed-receipt checks and handler-byte
+verification run outside database transactions. The host verifier must finish
+its cleanup before returning. The runner renews the lease every ten seconds
+while verification is pending and waits for any in-flight heartbeat before
+persisting. A lost lease suppresses the result.
+
+The final 0007 append rechecks the same authority in its transaction. Its
+trusted finalizer changes the 0009 state to `succeeded` only while the
+database clock still sees the exact worker token as live. Migration 0010
+links that state to the owning 0008 job and exact 0007 result digest; a failed
+final update rolls back both writes. Explicit unverified content becomes a
+terminal, capture-only failure. Other verifier failures leave the lease to
+expire and may be retried within the three-attempt bound. These records do
+not establish API-document correspondence, deployment enforcement, catalog
+facts, or serving pointers. Host-provided key and receipt readers must remain
+protected inputs, not paths read from the source checkout.
 
 ## Local validation
 
