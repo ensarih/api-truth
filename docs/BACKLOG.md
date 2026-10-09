@@ -865,3 +865,12 @@ The observations 0.3.0 pure module generates deterministic non-normative placeho
 This module neither proves caller authorization nor reads traffic. A host must supply a fresh authorized query view and enforce authorization/current-pin checks at delivery. Observed/redacted examples, request/response correlation, retention/deletion and portal/MCP delivery remain open; generated placeholders cannot establish requiredness or deployed behavior.
 
 Validation: terminal-container constraint bypasses found during review were fixed with regressions. Independent review, exact clean install/typecheck and all 1,450 offline tests passed; 19 observation persistence/import/query PostgreSQL tests also passed.
+
+
+### Exact configured GitHub branch reader — D12 bounded port (2026-10-09)
+
+A read-only fixed-origin GitHub port binds tenant, repository identity and an explicit intended-branch allowlist before resolving a trusted token. It reads only the exact repository and singular configured reference; no branch enumeration or webhook-derived target is allowed. Responses have strict JSON, byte/node/depth and total-deadline bounds. Redirects and raw response/token errors are withheld; non-success streams are cancelled.
+
+Present results contain an immutable commit and an opaque provider reference without event order. Optional comparison describes only the two requested SHAs as identical/ahead/behind/diverged; it does not establish a former branch head or a history rewrite. A 404 remains unknown, never proof of absence. This standalone port is not a live D08 host: installation/token binding, host source authorization, current-config/lease fencing, provider-source materialization, deletion proof and live provider acceptance remain open.
+
+Validation: independent review, exact clean install/typecheck and all 1,480 offline tests passed. Thirty new reader scenarios cover configured-branch isolation, tenant/repository mismatches, inaccessible refs, response/ancestry inconsistencies, cancellation, byte limits and total timeout. Tests use deterministic transport; no live installation or deployment is certified.

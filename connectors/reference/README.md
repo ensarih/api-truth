@@ -54,3 +54,35 @@ query current provider state under its own authority, then produce an ordered
 fact for the durable event bridge. Treat the `VerifiedGitHubWebhookDelivery`
 TypeScript type as an integration contract, not as proof of authenticity if a
 caller constructs it without the verifier.
+
+## Bounded GitHub current branch read
+
+`createGitHubCurrentStateReader` binds one host-trusted tenant, repository ID,
+GitHub numeric repository ID and full name, and an exact branch allowlist. Its
+`readExactBranch` method queries only the selected branch. It first checks the
+repository identity and then uses GitHub's singular [Git-reference endpoint](https://docs.github.com/en/rest/git/refs); it
+never lists branches or follows response URLs or redirects. The GitHub REST
+origin and [API version](https://docs.github.com/en/rest/about-the-rest-api/api-versions) are fixed. This first reader accepts a bounded ASCII literal subset of Git branch names;
+bindings outside that subset are invalid configuration. A trusted host resolves a repository-bound
+Contents-read installation token after input validation. The reader does not
+mint tokens or verify the installation grant itself.
+
+The result is a current **point-in-time** commit SHA with opaque provider
+reference and no provider order. Optional [comparison](https://docs.github.com/en/rest/commits/commits) uses two immutable SHAs
+and reports their `identical`, `ahead`, `behind`, or `diverged` relationship,
+subject to the same response-size and total-time limits. The caller's prior
+SHA is not proven to have been a former head of the selected branch, so this
+relationship does not establish a branch rewrite. A branch `404` returns `unknown`, because missing permissions can also
+produce `404`; this first slice never confirms branch deletion. Invalid
+responses, oversized bodies, transport failures and timeouts produce fixed
+error codes without returning raw provider text or credentials.
+
+The durable D08 host must check the active configuration, exact repository and
+branch selection, source access grant, and reconciliation lease before the
+network call, then recheck them after the call in its final transaction. Only
+`present` can be adapted to `exactBranchReconciler.observe` as
+`{state:"present",repositoryId,branch,immutableRevision,providerEvidence}`;
+`unknown` leaves reconciliation pending for retry. A webhook trigger and its
+delivery ID never supply a branch revision or ordering token. Provider
+authentication installation, confirmed absence, pull-request state, source
+materialization and deployment/artifact proof remain separate integrations.
