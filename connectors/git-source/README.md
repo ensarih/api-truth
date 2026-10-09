@@ -1,6 +1,6 @@
 # Local Git source connector
 
-`@api-truth/connector-git-source@0.6.0` reads one explicit local repository,
+`@api-truth/connector-git-source@0.7.0` reads one explicit local repository,
 one immutable 40-character commit ID, and one normalized service-tree path. It
 reads the committed tree and blobs directly; working-tree edits, staged changes,
 untracked files, ignored files, branch names, and remote refs do not select

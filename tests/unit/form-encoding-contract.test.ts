@@ -52,3 +52,13 @@ test("legacy version cannot carry encoding while newer versions require an expli
   snapshot.ir_version = "1.2.0";
   expect(parseContractSnapshot(snapshot).ok).toBe(false);
 });
+
+test("embedded schema validation accepts type unions and prefixItems but rejects unknown union members", async () => {
+  const snapshot = await fixture();
+  delete snapshot.endpoints[0].request_bodies[0].encoding;
+  const component = snapshot.schemas[Object.keys(snapshot.schemas)[0]!];
+  component.schema = {type: ["array", "null"], prefixItems: [{const: "order"}, {type: "integer"}]};
+  expect(parseContractSnapshot(snapshot).ok).toBe(true);
+  component.schema.type = ["array", "mystery"];
+  expect(parseContractSnapshot(snapshot).ok).toBe(false);
+});

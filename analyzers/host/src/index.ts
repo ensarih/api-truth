@@ -6,6 +6,7 @@ import {ANALYZER as document,createAnalyzer as createDocument} from "@api-truth/
 import {ANALYZER as openapi3,createAnalyzer as createOpenapi3} from "@api-truth/analyzer-openapi3-document";
 import {ANALYZER as middleware,createAnalyzer as createMiddleware} from "@api-truth/analyzer-nodejs-swagger2-document/middleware";
 
+import {ANALYZER as openapi31,createAnalyzer as createOpenapi31} from "@api-truth/analyzer-openapi31-document";
 import {ANALYZER as javaSpring,createAnalyzer as createJavaSpring} from "@api-truth/analyzer-java-spring";
 
 /** Exact compiled-in profiles; no framework detection or source-selected plugins. */
@@ -16,6 +17,7 @@ const registrations = [
   {identity:Object.freeze({...openapi3}),ir:"1.1.0",create:createOpenapi3},
   {identity:Object.freeze({...middleware}),ir:"1.1.0",create:createMiddleware},
   {identity:Object.freeze({...javaSpring}),ir:"1.0.0",create:createJavaSpring},
+  {identity:Object.freeze({...openapi31}),ir:"1.1.0",create:createOpenapi31},
 ] as const;
 export const configuredAnalyzerProfiles = Object.freeze(registrations.map(profile=>Object.freeze({
   adapter_id:profile.identity.analyzer_id,adapter_version:profile.identity.analyzer_version,ir_version:profile.ir,

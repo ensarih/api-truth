@@ -1,6 +1,6 @@
 {
   "name": "@api-truth/connector-git-source",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,7 +8,7 @@
     "./analysis-ports": "./src/analysis-ports.ts"
   },
   "dependencies": {
-    "@api-truth/analyzer-host": "0.9.0",
+    "@api-truth/analyzer-host": "0.10.0",
     "@api-truth/ir": "0.0.0",
     "@api-truth/orchestration": "0.0.0"
   }

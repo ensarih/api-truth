@@ -187,7 +187,7 @@ const embeddedSchemaIssues = (snapshot: ContractSnapshot): ValidationIssue[] => 
     return [issue("/schemas", "semantic.invalid_api_schema", "embedded schema enum values must be unique")];
   }
   try {
-    const ajv = new Ajv2020({ strict: true, allErrors: true, validateFormats: false });
+    const ajv = new Ajv2020({ strict: true, strictTuples: false, allErrors: true, validateFormats: false, allowUnionTypes: true });
     if (!ajv.validateSchema(graph)) {
       return [issue("/schemas", "semantic.invalid_api_schema", "embedded schema graph is invalid")];
     }

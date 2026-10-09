@@ -9,6 +9,7 @@ const profiles=[
  {id:"nodejs-swagger2-document",version:"0.15.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/orders",inputs:[{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
  {id:"nodejs-swagger-express-mw",version:"0.33.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/middleware/src",inputs:[{kind:"source_tree",path:".",digest:"pending"},{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
  {id:"openapi3-document",version:"0.2.0",ir:"1.1.0",root:"fixtures/openapi3/orders",inputs:[{kind:"type_manifest",path:"openapi.yaml",digest:"pending"}]},
+ {id:"openapi31-document",version:"0.1.0",ir:"1.1.0",root:"fixtures/openapi31/orders",inputs:[{kind:"type_manifest",path:"openapi.yaml",digest:"pending"}]},
 ] as const;
 const request=(profile:typeof profiles[number]):AnalyzerRequest=>({exchange_version:"1.0.0",ir_version:profile.ir,request_id:"host-test",
  analyzer:{analyzer_id:profile.id,analyzer_version:profile.version},
@@ -40,7 +41,7 @@ test("configured identity is detached and rejects request substitution before so
  await expect(analyzer.analyze(request(profiles[3]))).rejects.toThrow("ANALYZER_REQUEST_MISMATCH");
 });
 test("profile inventory is immutable and describes exact bounded versions",()=>{
- expect(configuredAnalyzerProfiles).toHaveLength(6);
+ expect(configuredAnalyzerProfiles).toHaveLength(7);
  expect(configuredAnalyzerProfiles).toContainEqual({adapter_id:"java-spring-mvc",adapter_version:"0.1.0",ir_version:"1.0.0"});
  expect(Object.isFrozen(configuredAnalyzerProfiles)).toBe(true);
  for(const profile of configuredAnalyzerProfiles)expect(Object.isFrozen(profile)).toBe(true);

@@ -219,3 +219,5 @@ npm run test:java:integration
 ```
 
 Java tests have separate configurations so the default offline suite requires no installed JDK. Missing or invalid prerequisites fail the Java gates; they are not skipped. Extraction reads synthetic Java syntax using the fixed AST helper and never builds or runs the analyzed service. The CI Java job installs the pinned prerequisites, checks AST containment and uncertainty, and exercises actual Git revisions through the PostgreSQL worker. macOS arm64 is checked locally; the other installation targets require their own actual execution evidence.
+
+The opt-in `extract:openapi31` CLI targets the separate bounded OpenAPI 3.1.0/3.1.1 document profile. Its unit/CLI tests run in the ordinary offline gate; the Git document worker suite covers its actual PostgreSQL baseline, update and rejected malformed/deleted document revisions.

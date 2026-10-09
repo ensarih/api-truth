@@ -165,6 +165,14 @@ test.each([
     document: `openapi: 3.0.3\ninfo: { title: Example, version: '1' }\npaths:\n  /orders:\n    post:\n      responses:\n        '201': { description: created }\n`,
     endpoint: "/orders",
   },
+  {
+    name: "standalone OpenAPI 3.1",
+    selection: {adapter_id: "openapi31-document", adapter_version: "0.1.0", ir_version: "1.1.0" as const,
+      resolution_inputs: [{kind: "type_manifest" as const, path: "services/api/contracts/openapi.yaml"}]},
+    path: "services/api/contracts/openapi.yaml",
+    document: `openapi: 3.1.1\ninfo: {title: Example, version: '1'}\npaths:\n  /orders:\n    post:\n      responses:\n        '201': {description: created}\n`,
+    endpoint: "/orders",
+  },
 ])("normalizes $name as a selected document only", async ({ selection: selected, path, document, endpoint }) => {
   const repo = await repository({ [path]: document });
   const ports = createLocalGitAnalysisPorts({ repositories: [{ tenantId: "tenant-a", repositoryId: "repo-a", repoPath: repo.root }], limits });

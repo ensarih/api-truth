@@ -55,6 +55,10 @@ const documents = [
   },
 ];
 
+documents.push({...documents[1]!, name:"standalone OpenAPI 3.1", adapter_id:"openapi31-document", adapter_version:"0.1.0",
+  first:documents[1]!.first.replace("openapi: 3.0.3", "openapi: 3.1.1"),
+  second:documents[1]!.second.replace("openapi: 3.0.3", "openapi: 3.1.1")});
+
 const failedDocumentCases = documents.flatMap(profile => [
   { profile, failureCase: "malformed" as const },
   { profile, failureCase: "deleted" as const },

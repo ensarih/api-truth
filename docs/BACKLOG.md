@@ -41,7 +41,7 @@ provider or enterprise pilot claim.
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | Open | Cross-adapter hostile-input/invalidation matrix and complete bounded Swagger profile gate. |
 | NB5 | Open | Decorator framework conformance and source-to-downstream update gate. |
-| NB6 | In progress | Bounded OpenAPI 3.0 JSON/YAML document profile and CLI implemented with media, serialization, local-reference and server-declaration tests; 3.1 remains open. |
+| NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Sanitization, unambiguous environment URL correlation and safe examples. |
@@ -827,3 +827,14 @@ The exact `java-spring-mvc@0.1.0` IR 1.0 profile reads contained UTF-8 Java sour
 The configured host and local Git connector accept only that exact profile and one digest-bound source tree. A real PostgreSQL test materializes two immutable Git commits through D08, persists both snapshots and advances the configured branch pointer. Separate Java gates fail on absent prerequisites rather than skipping; the default offline suite needs no JDK. Broader Spring parameter/DTO/schema extraction, runtime framework conformance and the two-ecosystem downstream/pilot gates remain open.
 
 Validation for the first Java slice: clean tracked-source install, typecheck and 1,397 offline tests; 293 PostgreSQL tests; 11 dedicated Java tests and one Java Git/worker PostgreSQL scenario passed. The first Linux Java CI execution is still required; these results do not certify all supported setup architectures.
+
+
+### OpenAPI 3.1 selected-document profile — NB6 bounded slice (2026-10-09)
+
+The separate `openapi31-document@0.1.0` IR 1.1 profile accepts exactly OpenAPI 3.1.0/3.1.1 and the default base dialect, with ordinary supported schema fields, type unions, const values and bounded prefixItems. Unsupported boolean/custom-dialect/resource/dynamic-reference/reference-sibling semantics withhold the complete affected schema projection and its schema claims. Repeated diagnostics cannot restore withheld claims. Literal const JSON is never treated as a schema reference; tuple references retain component evidence dependencies. The 3.0 profile identity, fingerprint and bounded behavior remain unchanged; the shared package advances to 0.3.0.
+
+The configured host and immutable Git connector require one explicit contained document input. D07/D08 recognize the exact new profile and conservatively reanalyze its complete selected document on branch updates. Actual Git/PostgreSQL tests cover baseline, update, malformed document and deletion without promoting an invalid revision. IR validation now accepts already-represented type unions and prefixItems while rejecting invalid type members. Broader OpenAPI 3.1 and runtime binding remain separate gates.
+
+Validation: exact staged tracked-source archive, clean install, typecheck and 1,429 offline tests; all 295 PostgreSQL tests passed. Linux Java CI at `7caf3e1` also passed the first Java gate. OpenAPI compiler reference closure now traverses schema positions only, preserving literal enum/const JSON as data while retaining genuine nested component dependencies.
+
+Independent review also found percent-encoded local reference ambiguity; the 3.1 profile now rejects these fragments before emitting any endpoint or schema claim. Regression tests prove no wrong component is selected. Object-valued union members are diagnosed without coercing source JSON. The final six Git document worker cases passed again after these fixes.

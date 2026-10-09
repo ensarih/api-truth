@@ -1,0 +1,26 @@
+openapi: 3.1.1
+info: {title: Synthetic Orders, version: '1'}
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Create a synthetic order
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: [object, 'null']
+              properties:
+                kind: {const: order}
+                reference:
+                  type: array
+                  prefixItems: [{type: string}, {type: integer}]
+              required: [kind]
+      responses:
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema: {type: string}

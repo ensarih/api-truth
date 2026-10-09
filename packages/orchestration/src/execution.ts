@@ -73,6 +73,7 @@ const digest = /^sha256:[a-f0-9]{64}$/;
 const documentProfiles = new Set([
   "nodejs-swagger2-document@0.15.0",
   "openapi3-document@0.2.0",
+  "openapi31-document@0.1.0",
 ]);
 const isDocumentProfile = (analyzerId: string, version: string, irVersion: string): boolean =>
   irVersion === "1.1.0" && documentProfiles.has(`${analyzerId}@${version}`);

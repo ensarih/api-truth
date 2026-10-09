@@ -43,7 +43,8 @@
     "java:parser:ready": "node scripts/java-parser-toolchain.mjs ready",
     "test:java": "npm run java:env:ready && npm run java:parser:ready && vitest run --config vitest.java.config.ts",
     "test:java:integration": "node scripts/test-environment.ts ready && npm run java:env:ready && npm run java:parser:ready && vitest run --config vitest.java.integration.config.ts",
-    "extract:java": "node scripts/extract-java.mjs"
+    "extract:java": "node scripts/extract-java.mjs",
+    "extract:openapi31": "node scripts/extract-openapi31.mjs"
   },
   "engines": {
     "node": "24.6.0",

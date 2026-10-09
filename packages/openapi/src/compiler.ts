@@ -59,18 +59,34 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
         : exactEndpoint ? fact.scope.endpoint_id === endpointId
           : fact.scope.endpoint_id === undefined || fact.scope.endpoint_id === endpointId);
   });
-  const refs = (value: unknown, names: Set<string>) => {
-    if (Array.isArray(value)) { value.forEach((item) => refs(item, names)); return; }
-    if (value === null || typeof value !== "object") return;
-    for (const [key, item] of Object.entries(value)) {
-      if (key === "$ref" && typeof item === "string" && item.startsWith("#/schemas/")) names.add(item.slice(10));
-      else refs(item, names);
+  // Visit only ApiSchema positions. `const` and `enum` are arbitrary JSON values,
+  // including objects that happen to contain a key named `$ref`.
+  const refs = (schema: ApiSchema, names: Set<string>) => {
+    const pending: ApiSchema[] = [schema];
+    while (pending.length > 0) {
+      const node = pending.pop()!;
+      if (node.$ref?.startsWith("#/schemas/")) names.add(node.$ref.slice(10));
+      if (node.properties) for (const child of Object.values(node.properties)) pending.push(child);
+      if (node.items) pending.push(node.items);
+      if (node.not) pending.push(node.not);
+      if (node.additionalProperties && typeof node.additionalProperties === "object")
+        pending.push(node.additionalProperties);
+      for (const children of [node.prefixItems, node.oneOf, node.anyOf, node.allOf])
+        if (children) for (const child of children) pending.push(child);
+    }
+  };
+  const endpointRefs = (endpoint: Endpoint, names: Set<string>) => {
+    for (const parameter of endpoint.parameters) refs(parameter.schema, names);
+    for (const body of endpoint.request_bodies) refs(body.schema, names);
+    for (const response of endpoint.responses) {
+      for (const content of response.content) refs(content.schema, names);
+      for (const header of response.headers ?? []) refs(header.schema, names);
     }
   };
   const schemaUsers = new Map<string, Set<string>>();
   for (const endpoint of snapshot.endpoints) {
     const names = new Set<string>();
-    refs(endpoint.parameters, names); refs(endpoint.request_bodies, names); refs(endpoint.responses, names);
+    endpointRefs(endpoint, names);
     names.forEach((name) => {
       if (!schemaUsers.has(name)) schemaUsers.set(name, new Set());
       schemaUsers.get(name)!.add(endpoint.endpoint_id);
@@ -191,12 +207,13 @@ export const compileOpenApiSnapshot = (input: unknown, mode: OpenApiCompileMode)
     .forEach((item) => add(item.code, "/endpoints", item.endpointIds));
   const reachableSchemas = (endpoint: Endpoint): Set<string> => {
     const names = new Set<string>();
-    refs(endpoint.parameters, names); refs(endpoint.request_bodies, names); refs(endpoint.responses, names);
+    endpointRefs(endpoint, names);
     const queue = [...names];
     while (queue.length > 0) {
       const name = queue.shift()!;
       const children = new Set<string>();
-      refs(snapshot.schemas[name]?.schema, children);
+      const component = snapshot.schemas[name];
+      if (component) refs(component.schema, children);
       for (const child of children) if (!names.has(child)) { names.add(child); queue.push(child); }
     }
     return names;

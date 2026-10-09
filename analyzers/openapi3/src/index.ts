@@ -11,6 +11,8 @@ import {parseStrictYaml, StrictYamlError} from "../../nodejs/src/strict-yaml.js"
 
 /** A selected API document declares a contract; no server URL is treated as an in-process route. */
 export const ANALYZER = {analyzer_id: "openapi3-document", analyzer_version: "0.2.0"};
+export type OpenApiDocumentProfile = "3.0" | "3.1";
+export const OPENAPI31_ANALYZER = {analyzer_id: "openapi31-document", analyzer_version: "0.1.0"};
 type Obj = Record<string, unknown>;
 const obj = (value: unknown): value is Obj => value !== null && typeof value === "object" && !Array.isArray(value);
 const part = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
@@ -29,12 +31,17 @@ const allowedMedia = new Set(["schema", "example", "examples", "encoding"]);
 const isMediaType = (value: string): boolean => /^(?:\*|[A-Za-z0-9!#$&^_.+-]+)\/(?:\*|[A-Za-z0-9!#$&^_.+*-]+)(?:\s*;\s*[A-Za-z0-9!#$&^_.+-]+=(?:[A-Za-z0-9!#$&^_.+-]+|"[^"\r\n]*"))*$/.test(value);
 
 export function createAnalyzer(options: {projectRoot: string}) {
+  return createAnalyzerForDocumentProfile(options, ANALYZER, "3.0");
+}
+
+export function createAnalyzerForDocumentProfile(options: {projectRoot: string}, analyzer: typeof ANALYZER | typeof OPENAPI31_ANALYZER,
+  profile: OpenApiDocumentProfile) {
   return {async analyze(input: unknown): Promise<AnalyzerResult> {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
     const request = parsed.value;
-    if (request.ir_version !== "1.1.0" || request.analyzer.analyzer_id !== ANALYZER.analyzer_id
-      || request.analyzer.analyzer_version !== ANALYZER.analyzer_version) throw new Error("Unsupported analyzer contract");
+    if (request.ir_version !== "1.1.0" || request.analyzer.analyzer_id !== analyzer.analyzer_id
+      || request.analyzer.analyzer_version !== analyzer.analyzer_version) throw new Error("Unsupported analyzer contract");
     if (request.resolution_inputs.length !== 1 || request.resolution_inputs[0]?.kind !== "type_manifest")
       throw new Error("Exactly one selected document is required");
     const selected = request.resolution_inputs[0];
@@ -48,7 +55,7 @@ export function createAnalyzer(options: {projectRoot: string}) {
     const normalized: AnalyzerRequest = {...request, source: {...request.source, source_digest: source.digest},
       resolution_inputs: [{...selected, digest: source.digest}]};
     if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
-    const result = extractOpenApi3Document(normalized, source.path, source.text);
+    const result = extractOpenApiDocument(normalized, source.path, source.text, profile);
     if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded");
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
@@ -62,7 +69,15 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 }
 
 export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
-  const fingerprint = hash(canonicalJsonStringify({request, parser: "openapi3-strict-json-yaml-1", documentPath}));
+  return extractOpenApiDocument(request, documentPath, text, "3.0");
+}
+
+export function extractOpenApi31Document(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
+  return extractOpenApiDocument(request, documentPath, text, "3.1");
+}
+
+function extractOpenApiDocument(request: AnalyzerRequest, documentPath: string, text: string, profile: OpenApiDocumentProfile): AnalyzerResult {
+  const fingerprint = hash(canonicalJsonStringify({request, parser: profile === "3.0" ? "openapi3-strict-json-yaml-1" : "openapi31-default-dialect-subset-1", documentPath}));
   const result: AnalyzerResult = {exchange_version: "1.0.0", ir_version: request.ir_version, identity_version: "1.0.0",
     request_id: request.request_id, result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`,
     analyzer: request.analyzer, source: request.source, status: "success", completed_at: new Date().toISOString(),
@@ -110,9 +125,10 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
   let raw: unknown;
   try { raw = /\.ya?ml$/.test(documentPath) ? parseStrictYaml(text) : parseStrictJson(text); }
   catch (error) { diagnostic(error instanceof StrictYamlError || error instanceof StrictJsonError ? error.code : "invalid_document", "", "error"); return finish(true); }
-  if (!obj(raw) || typeof raw.openapi !== "string" || !/^3\.0\.[0-9]+$/.test(raw.openapi)
+  if (!obj(raw) || typeof raw.openapi !== "string" || !(profile === "3.0" ? /^3\.0\.[0-9]+$/.test(raw.openapi) : /^3\.1\.[01]$/.test(raw.openapi))
     || !obj(raw.info) || typeof raw.info.title !== "string" || typeof raw.info.version !== "string" || !obj(raw.paths)) {
-    diagnostic(obj(raw) && typeof raw.openapi === "string" && raw.openapi.startsWith("3.1") ? "openapi31_unsupported" : "invalid_openapi30_document", "", "error");
+    diagnostic(profile === "3.0" && obj(raw) && typeof raw.openapi === "string" && raw.openapi.startsWith("3.1")
+      ? "openapi31_unsupported" : profile === "3.1" ? "invalid_openapi31_document" : "invalid_openapi30_document", "", "error");
     return finish(true);
   }
   const document = raw;
@@ -129,7 +145,8 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
     if (typeof value.$ref === "string") {
       const ref = value.$ref;
       const at = `${pointer}/$ref`;
-      if (!ref.startsWith("#/")) diagnostic("external_ref", at, "error");
+      if (profile === "3.1" && ref.includes("%")) diagnostic("percent_encoded_reference_unsupported", at, "error");
+      else if (!ref.startsWith("#/")) diagnostic("external_ref", at, "error");
       else {
         const segments = ref.slice(2).split("/");
         let target: unknown = document;
@@ -146,14 +163,18 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
       const at = `${pointer}/${part(key)}`;
       if (["__proto__", "prototype", "constructor"].includes(key)) throw new Error("prototype_key_unsupported");
       if (key === "$ref" && typeof child !== "string") diagnostic("invalid_ref", at, "error");
-      if (!["example", "examples", "enum", "default", "value"].includes(key) && !key.startsWith("x-"))
+      const literalData = ["example", "examples", "enum", "default", "value", ...(profile === "3.1" ? ["const"] : [])];
+      if (!literalData.includes(key) && !key.startsWith("x-"))
         inspect(child, at, depth + 1);
     }
   };
   try { inspect(document, ""); }
   catch { diagnostic("document_structure_limit_exceeded", "", "error"); return finish(true); }
   if (result.diagnostics.some(d => d.severity === "error")) return finish(true);
-  noteUnknown(document, allowedTop, "");
+  noteUnknown(document, profile === "3.1" ? new Set([...allowedTop, "jsonSchemaDialect"]) : allowedTop, "");
+  const defaultDialect = "https://spec.openapis.org/oas/3.1/dialect/base";
+  const customDialect = profile === "3.1" && document.jsonSchemaDialect !== undefined && document.jsonSchemaDialect !== defaultDialect;
+  if (customDialect) diagnostic("custom_json_schema_dialect_unsupported", "/jsonSchemaDialect");
   const components = obj(document.components) ? document.components : {};
   if (document.components !== undefined && !obj(document.components)) diagnostic("components_unsupported", "/components");
   if (obj(document.components)) noteUnknown(document.components,
@@ -163,12 +184,110 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
   const schemaMap = obj(components.schemas) ? components.schemas : {};
   const schemaIds = new Map(Object.keys(schemaMap).sort().map(name => [name, `schema-${hash(name).slice(0, 24)}`]));
   const schemaNames = new Map([...schemaIds].map(([name, id]) => [id, name]));
+  const schema31Keys = new Set(["$ref", "type", "format", "title", "description", "properties", "required", "items",
+    "additionalProperties", "enum", "oneOf", "anyOf", "allOf", "not", "pattern", "minimum", "maximum", "minLength",
+    "maxLength", "minItems", "maxItems", "const", "prefixItems"]);
+  let schemaProjectionNodes = 0;
+  const schemaCanProject = (input: unknown, pointer: string, active = new Set<string>(), depth = 0): boolean => {
+    if (profile === "3.0") return true;
+    if (customDialect) return false;
+    if (++schemaProjectionNodes > 50_000) {diagnostic("schema_projection_limit_exceeded", pointer); return false;}
+    if (!obj(input) || depth > 32) {diagnostic("schema_projection_unsupported", pointer); return false;}
+    if (typeof input.$ref === "string") {
+      const token = input.$ref.match(/^#\/components\/schemas\/([^/]+)$/)?.[1];
+      const name = token && !/~(?![01])/.test(token) ? token.replaceAll("~1", "/").replaceAll("~0", "~") : undefined;
+      if (!name || Object.keys(input).some(key => key !== "$ref")) {diagnostic("schema_ref_unsupported", pointer); return false;}
+      if (active.has(name)) return true;
+      const target = Object.hasOwn(schemaMap, name) ? schemaMap[name] : undefined;
+      if (target === undefined) {diagnostic("schema_ref_unsupported", pointer); return false;}
+      active.add(name);
+      const safe = schemaCanProject(target, `/components/schemas/${part(name)}`, active, depth + 1);
+      active.delete(name);
+      return safe;
+    }
+    let safe = true;
+    for (const key of Object.keys(input)) {
+      if (!schema31Keys.has(key)) {diagnostic(key === "$id" || key === "$anchor" || key === "$dynamicRef" || key === "$dynamicAnchor" || key === "$schema"
+        ? "schema_resource_keyword_unsupported" : "schema_keyword_unsupported", `${pointer}/${part(key)}`); safe = false;}
+    }
+    if (input.type !== undefined && !(typeof input.type === "string" || Array.isArray(input.type))) {
+      diagnostic("schema_type_unsupported", `${pointer}/type`); safe = false;
+    }
+    if (Array.isArray(input.type) && (!input.type.length || input.type.length > 7 || new Set(input.type).size !== input.type.length
+      || input.type.some((x: unknown) => typeof x !== "string" || !["null", "boolean", "object", "array", "number", "integer", "string"].includes(x)))) {
+      diagnostic("schema_type_unsupported", `${pointer}/type`); safe = false;
+    }
+    if (typeof input.type === "string" && !["null", "boolean", "object", "array", "number", "integer", "string"].includes(input.type)) {
+      diagnostic("schema_type_unsupported", `${pointer}/type`); safe = false;
+    }
+    if (input.const !== undefined && !jsonValue(input.const)) {diagnostic("schema_const_unsupported", `${pointer}/const`); safe = false;}
+    for (const key of ["title", "description", "pattern"] as const)
+      if (input[key] !== undefined && typeof input[key] !== "string") {diagnostic("schema_keyword_unsupported", `${pointer}/${key}`); safe = false;}
+    if (input.format !== undefined && (typeof input.format !== "string" || !input.format)) {
+      diagnostic("schema_keyword_unsupported", `${pointer}/format`); safe = false;
+    }
+    for (const key of ["minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"] as const) {
+      const value = input[key];
+      if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value)
+        || (!["minimum", "maximum"].includes(key) && (!Number.isInteger(value) || value < 0)))) {
+        diagnostic("schema_keyword_unsupported", `${pointer}/${key}`); safe = false;
+      }
+    }
+    if (input.required !== undefined && (!Array.isArray(input.required)
+      || input.required.some((x: unknown) => typeof x !== "string" || !x)
+      || new Set(input.required).size !== input.required.length)) {
+      diagnostic("schema_required_unsupported", `${pointer}/required`); safe = false;
+    }
+    if (input.enum !== undefined && (!Array.isArray(input.enum) || !input.enum.length
+      || input.enum.some((x: unknown) => !jsonValue(x))
+      || new Set(input.enum.map((x: unknown) => canonicalJsonStringify(x))).size !== input.enum.length)) {
+      diagnostic("schema_enum_unsupported", `${pointer}/enum`); safe = false;
+    }
+    for (const key of ["properties", "items", "additionalProperties", "prefixItems", "oneOf", "anyOf", "allOf", "not"] as const) {
+      const child = input[key];
+      if (child === undefined) continue;
+      const children: unknown[] = key === "properties" && obj(child) ? Object.entries(child).map(([name, value]) => [name, value])
+        : key === "prefixItems" || key === "oneOf" || key === "anyOf" || key === "allOf" ? Array.isArray(child) ? child : [child]
+          : [child];
+      if (key === "properties" && !obj(child)) {diagnostic("schema_properties_unsupported", `${pointer}/properties`); safe = false;}
+      if (["prefixItems", "oneOf", "anyOf", "allOf"].includes(key) && !Array.isArray(child)) {
+        diagnostic("schema_composition_unsupported", `${pointer}/${key}`); safe = false;
+      }
+      if (["oneOf", "anyOf", "allOf"].includes(key) && Array.isArray(child) && (child.length < 1 || child.length > 32)) {
+        diagnostic("schema_composition_unsupported", `${pointer}/${key}`); safe = false;
+      }
+      if (key === "prefixItems" && Array.isArray(child) && child.length > 32) {
+        diagnostic("schema_composition_unsupported", `${pointer}/prefixItems`); safe = false;
+      }
+      for (const entry of children) {
+        const value = key === "properties" && Array.isArray(entry) ? entry[1] : entry;
+        const suffix = key === "properties" && Array.isArray(entry) ? `/properties/${part(String(entry[0]))}`
+          : Array.isArray(child) && children === child ? `/${key}/${children.indexOf(entry)}` : `/${key}`;
+        if (key === "additionalProperties" && typeof value === "boolean") {
+          if (profile === "3.1") {diagnostic("boolean_schema_unsupported", `${pointer}/additionalProperties`); safe = false;}
+          continue;
+        }
+        if (!schemaCanProject(value, `${pointer}${suffix}`, active, depth + 1)) safe = false;
+      }
+    }
+    return safe;
+  };
+  const jsonValue = (value: unknown, depth = 0): boolean => {
+    if (depth > 64) return false;
+    if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+    if (typeof value === "number") return Number.isFinite(value);
+    if (Array.isArray(value)) return value.length <= 1000 && value.every(x => jsonValue(x, depth + 1));
+    return obj(value) && Object.keys(value).length <= 1000 && Object.values(value).every(x => jsonValue(x, depth + 1));
+  };
   const local = (value: unknown, category: string, pointer: string): {value: Obj; pointer: string; chain: string[]} | undefined => {
     const seen = new Set<string>();
     const chain: string[] = [];
     while (obj(value) && typeof value.$ref === "string") {
       if (chain.length >= 32) {diagnostic("local_ref_chain_limit_exceeded", pointer); return;}
-      if (Object.keys(value).some(key => key !== "$ref")) diagnostic("reference_siblings_unsupported", pointer);
+      if (Object.keys(value).some(key => key !== "$ref")) {
+        diagnostic("reference_siblings_unsupported", pointer);
+        if (profile === "3.1") return;
+      }
       const match = value.$ref.match(new RegExp(`^#/components/${category}/([^/]+)$`));
       const name = match?.[1]?.replaceAll("~1", "/").replaceAll("~0", "~");
       if (!name || /~(?![01])/.test(match![1]!) || seen.has(name)) {diagnostic("local_ref_unsupported", `${pointer}/$ref`); return;}
@@ -191,7 +310,10 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
       return {$ref: `#/schemas/${id}`};
     }
     const output: ApiSchema = {};
-    if (typeof input.type === "string" && ["string", "integer", "number", "boolean", "object", "array"].includes(input.type)) output.type = input.type as NonNullable<ApiSchema["type"]>;
+    if (profile === "3.1" && Array.isArray(input.type)) output.type = input.type as NonNullable<ApiSchema["type"]>;
+    else if (typeof input.type === "string" && (profile === "3.1"
+      ? ["null", "string", "integer", "number", "boolean", "object", "array"]
+      : ["string", "integer", "number", "boolean", "object", "array"]).includes(input.type)) output.type = input.type as NonNullable<ApiSchema["type"]>;
     else if (input.type !== undefined) diagnostic("schema_type_unsupported", `${pointer}/type`);
     for (const key of ["format", "title", "description", "pattern"] as const) {
       if (input[key] === undefined) continue;
@@ -213,12 +335,15 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
       if (Array.isArray(input.enum) && input.enum.length) output.enum = input.enum as NonNullable<ApiSchema["enum"]>;
       else diagnostic("schema_enum_unsupported", `${pointer}/enum`);
     }
+    if (profile === "3.1" && input.const !== undefined) output.const = input.const as NonNullable<ApiSchema["const"]>;
     if (input.properties !== undefined) {
       if (obj(input.properties)) output.properties = Object.fromEntries(Object.entries(input.properties).sort(([a], [b]) => a.localeCompare(b))
         .map(([name, child]) => [name, schema(child, `${pointer}/properties/${part(name)}`, depth + 1)]));
       else diagnostic("schema_properties_unsupported", `${pointer}/properties`);
     }
     if (input.items !== undefined) output.items = schema(input.items, `${pointer}/items`, depth + 1);
+    if (profile === "3.1" && input.prefixItems !== undefined && Array.isArray(input.prefixItems))
+      output.prefixItems = input.prefixItems.map((item: unknown, i: number) => schema(item, `${pointer}/prefixItems/${i}`, depth + 1));
     if (input.additionalProperties !== undefined) {
       if (typeof input.additionalProperties === "boolean") output.additionalProperties = input.additionalProperties;
       else output.additionalProperties = schema(input.additionalProperties, `${pointer}/additionalProperties`, depth + 1);
@@ -233,14 +358,22 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
       if (typeof output.type === "string") output.type = [output.type, "null"] as NonNullable<ApiSchema["type"]>;
       else diagnostic("schema_nullable_unsupported", `${pointer}/nullable`);
     } else if (input.nullable !== undefined && input.nullable !== false) diagnostic("schema_nullable_unsupported", `${pointer}/nullable`);
-    for (const key of Object.keys(input)) if (!supportedSchema.has(key)) diagnostic("schema_keyword_unsupported", `${pointer}/${part(key)}`);
+    for (const key of Object.keys(input)) if (!(profile === "3.1" ? schema31Keys : supportedSchema).has(key)) diagnostic("schema_keyword_unsupported", `${pointer}/${part(key)}`);
     if (input.readOnly !== undefined || input.writeOnly !== undefined) diagnostic("schema_direction_unsupported", pointer);
     return output;
+  };
+  const projectSchema = (input: unknown, pointer: string): ApiSchema | undefined => {
+    if (profile === "3.0") return schema(input, pointer);
+    if (!schemaCanProject(input, pointer)) return;
+    const before = result.diagnostics.length;
+    const projected = schema(input, pointer);
+    return result.diagnostics.length === before ? projected : undefined;
   };
   for (const [name, rawSchema] of Object.entries(schemaMap).sort(([a], [b]) => a.localeCompare(b))) {
     const pointer = `/components/schemas/${part(name)}`;
     const id = schemaIds.get(name)!;
-    result.schemas[id] = {schema_id: id, schema: schema(rawSchema, pointer), evidence_ids: [evidence(pointer)]};
+    const projected = projectSchema(rawSchema, pointer);
+    if (projected) result.schemas[id] = {schema_id: id, schema: projected, evidence_ids: [evidence(pointer)]};
   }
   const schemes = obj(components.securitySchemes) ? components.securitySchemes : {};
   for (const [name, rawScheme] of Object.entries(schemes).sort(([a], [b]) => a.localeCompare(b))) {
@@ -388,22 +521,24 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
                 continue;
               }
               const before = result.diagnostics.length;
-              pSchema = media.schema === undefined ? {} : schema(media.schema, `${item.pointer}/content/${part(mediaType)}/schema`);
+              const projected = media.schema === undefined ? undefined : projectSchema(media.schema, `${item.pointer}/content/${part(mediaType)}/schema`);
+              pSchema = projected ?? {};
               endpoint.parameters.push({name, in: location, presence: {state: presence, evidence_ids: [pEv]}, schema: pSchema,
                 serialization: {content_encoding: mediaType}});
               claim("parameter.presence", {name, in: location, state: presence},
                 parameter.required === undefined ? item.pointer : `${item.pointer}/required`, endpoint, item.chain,
                 parameter.required === undefined ? "inferred" : "declared");
               claim("parameter.content.declaration", {name, in: location, media_type: mediaType,
-                ...(media.schema !== undefined && result.diagnostics.length === before ? {schema: pSchema} : {})},
+                ...(media.schema !== undefined && (profile === "3.1" ? projected !== undefined : result.diagnostics.length === before) ? {schema: pSchema} : {})},
               `${item.pointer}/content`, endpoint, item.chain);
               continue;}
           }
         } else if (parameter.schema !== undefined) {
           if (!obj(parameter.schema)) {diagnostic("parameter_schema_unsupported", `${item.pointer}/schema`, "warning", endpointId); continue;}
           const before = result.diagnostics.length;
-          pSchema = schema(parameter.schema, `${item.pointer}/schema`);
-          schemaRepresentable = result.diagnostics.length === before;
+          const projected = projectSchema(parameter.schema, `${item.pointer}/schema`);
+          pSchema = projected ?? {};
+          schemaRepresentable = profile === "3.1" ? projected !== undefined : result.diagnostics.length === before;
         } else {diagnostic("parameter_schema_unknown", item.pointer, "warning", endpointId); continue;}
         const defaults: Record<string, string> = {path: "simple", query: "form", header: "simple", cookie: "form"};
         const style = parameter.style === undefined ? defaults[location] : parameter.style;
@@ -446,8 +581,9 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
             if (!isMediaType(mediaType) || !obj(media)) {diagnostic("request_body_media_unsupported", at, "warning", endpointId); continue;}
             noteUnknown(media, allowedMedia, at);
             const beforeSchema = result.diagnostics.length;
-            const converted = media.schema === undefined ? {} : schema(media.schema, `${at}/schema`);
-            const schemaRepresentable = media.schema !== undefined && result.diagnostics.length === beforeSchema;
+            const projected = media.schema === undefined ? undefined : projectSchema(media.schema, `${at}/schema`);
+            const converted = projected ?? {};
+            const schemaRepresentable = media.schema !== undefined && (profile === "3.1" ? projected !== undefined : result.diagnostics.length === beforeSchema);
             if (media.schema === undefined) diagnostic("request_body_schema_unknown", at, "warning", endpointId);
             const encoding: NonNullable<Endpoint["request_bodies"][number]["encoding"]> = {};
             if (media.encoding !== undefined) {
@@ -517,8 +653,9 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
             noteUnknown(rawMedia, allowedMedia, at);
             if (rawMedia.encoding !== undefined) diagnostic("response_encoding_unsupported", `${at}/encoding`, "warning", endpointId);
             const beforeSchema = result.diagnostics.length;
-            const converted = rawMedia.schema === undefined ? {} : schema(rawMedia.schema, `${at}/schema`);
-            const schemaRepresentable = rawMedia.schema !== undefined && result.diagnostics.length === beforeSchema;
+            const projected = rawMedia.schema === undefined ? undefined : projectSchema(rawMedia.schema, `${at}/schema`);
+            const converted = projected ?? {};
+            const schemaRepresentable = rawMedia.schema !== undefined && (profile === "3.1" ? projected !== undefined : result.diagnostics.length === beforeSchema);
             if (rawMedia.schema === undefined) diagnostic("response_schema_unknown", at, "warning", endpointId);
             content.push({media_type: mediaType, schema: converted, serialization: {format: mediaType}});
             claim("response.media.declaration", {status, media_type: mediaType}, at, endpoint, [responsePointer, ...resolved.chain]);
@@ -545,7 +682,8 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
             seenHeaders.add(name.toLowerCase());
             if (header.schema === undefined) {diagnostic("response_header_schema_unknown", at, "warning", endpointId); continue;}
             const beforeSchema = result.diagnostics.length;
-            const converted = schema(header.schema, `${resolvedHeader.pointer}/schema`);
+            const converted = projectSchema(header.schema, `${resolvedHeader.pointer}/schema`);
+            if (!converted) continue;
             if (result.diagnostics.length !== beforeSchema) continue;
             headers.push({name, schema: converted});
             claim("response.header.schema", {status, name, schema: converted}, at, endpoint, [responsePointer, ...resolved.chain, ...resolvedHeader.chain]);
@@ -592,6 +730,7 @@ export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: 
         }
         for (const child of Object.values(converted.properties ?? {})) addRefs(child);
         if (converted.items) addRefs(converted.items);
+        if (profile === "3.1") for (const child of converted.prefixItems ?? []) addRefs(child);
         if (converted.not) addRefs(converted.not);
         if (obj(converted.additionalProperties)) addRefs(converted.additionalProperties as ApiSchema);
         for (const key of ["oneOf", "anyOf", "allOf"] as const) for (const child of converted[key] ?? []) addRefs(child);

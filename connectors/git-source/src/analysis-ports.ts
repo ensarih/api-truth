@@ -32,10 +32,12 @@ const supportedAdapters = new Set([
   "nodejs-swagger-express-mw@0.33.0",
   "nodejs-swagger2-document@0.15.0",
   "openapi3-document@0.2.0",
+  "openapi31-document@0.1.0",
 ]);
 const standaloneDocumentAdapters = new Set([
   "nodejs-swagger2-document@0.15.0",
   "openapi3-document@0.2.0",
+  "openapi31-document@0.1.0",
 ]);
 
 function boundedLimits(value: Limits): boolean {
@@ -94,7 +96,7 @@ async function manifestDigest(tree: MaterializedGitSource, adapterId: string,
     return sha256(`${relativePath}\0${text}`);
   }
   if (adapterId === "nodejs-swagger-express-mw") return sha256(`${configured.path}\0${text}`);
-  if (adapterId === "nodejs-swagger2-document" || adapterId === "openapi3-document") {
+  if (adapterId === "nodejs-swagger2-document" || adapterId === "openapi3-document" || adapterId === "openapi31-document") {
     return sha256(`${configured.path}\0${text}`);
   }
   return fail();
