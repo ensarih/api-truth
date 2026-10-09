@@ -7,6 +7,8 @@ import {parseQuerySelection, readQueryContractWithClient, QueryReadError,
   type QueryPin, type QuerySelection} from "../../query/src/index.js";
 import {runGroundedSemanticAnalysis, runGroundedSemanticDiscovery} from "./kernel.js";
 import {isSemanticIntentQuerySafe} from "./egress.js";
+import {appendSemanticHistory,readSemanticHistory,type SemanticHistoryReadResult,
+  type SemanticHistoryScope} from "./history.js";
 import type {SemanticAnalysisResult, SemanticProviderId, SemanticProviderPort} from "./types.js";
 
 export class SemanticServiceError extends Error {
@@ -188,23 +190,42 @@ const sameAuthorized = (before: Authorized, after: Authorized): boolean =>
   && before.configurationHash === after.configurationHash
   && JSON.stringify(before.inference) === JSON.stringify(after.inference);
 
+const historyLimit=(value:unknown):number=>{
+  if(typeof value!=="number"||!Number.isInteger(value)||value<1||value>20)
+    throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
+  return value;
+};
+const historyScope=(context:Context,authorized:Authorized,endpointIds:readonly string[]):SemanticHistoryScope=>{
+  if(!authorized.inference.enabled)throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");
+  return {tenantId:context.tenantId,principalId:context.principalId,selection:authorized.selection,
+    pin:authorized.pin,configurationHash:authorized.configurationHash,
+    provider:authorized.inference.provider,model:authorized.inference.model,endpointIds};
+};
+
 /** Resolves auth and exact source context before and after inference, with no transaction during provider I/O. */
-export const createSemanticService = (pool: Pool, options: {schema: string; providerPort: SemanticProviderPort}) => {
-  const configured = fields(options, ["schema", "providerPort"]);
+export const createSemanticService = (pool: Pool, options: {schema: string; providerPort: SemanticProviderPort;
+  archiveHistory?: boolean}) => {
+  const configured = fields(options,options&&typeof options==="object"&&!isProxy(options)
+    &&Object.hasOwn(options,"archiveHistory")?["schema","providerPort","archiveHistory"]
+      :["schema","providerPort"]);
   if (!configured || typeof configured.schema !== "string"
-    || typeof configured.providerPort !== "function")
+    || typeof configured.providerPort !== "function"
+    || configured.archiveHistory!==undefined&&typeof configured.archiveHistory!=="boolean")
     throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
   const schemaName = configured.schema;
   const providerPort = configured.providerPort as SemanticProviderPort;
+  const archiveHistory=configured.archiveHistory===true;
   let schema: string;
   try {schema = quoteEnvironmentSchema(schemaName);}
   catch {throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");}
-  const read = async (context: Context, selection: QuerySelection, endpointIds: readonly string[]): Promise<Authorized> => {
+  const transaction = async <T>(context: Context, selection: QuerySelection,
+    endpointIds: readonly string[],finish:(client:PoolClient,authorized:Authorized)=>Promise<T>):Promise<T> => {
     const client = await pool.connect().catch(() => {throw new SemanticServiceError("SEMANTIC_STORAGE_ERROR");});
     try {
       await client.query("BEGIN");
       await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
-      const result = await readAuthorized(client, schemaName, context, selection, endpointIds);
+      const authorized=await readAuthorized(client,schemaName,context,selection,endpointIds);
+      const result=await finish(client,authorized);
       await client.query("COMMIT");
       return result;
     } catch (error) {
@@ -217,6 +238,8 @@ export const createSemanticService = (pool: Pool, options: {schema: string; prov
       throw new SemanticServiceError("SEMANTIC_STORAGE_ERROR");
     } finally {client.release();}
   };
+  const read=(context:Context,selection:QuerySelection,endpointIds:readonly string[])=>
+    transaction(context,selection,endpointIds,async(_client,authorized)=>authorized);
   const run = async (rawContext: unknown, rawSelection: unknown, rawEndpointIds: unknown,
     discovery: boolean, rawIntentQuery?: unknown): Promise<SemanticAnalysisResult> => {
     if (discovery && !isSemanticIntentQuerySafe(rawIntentQuery))
@@ -229,10 +252,13 @@ export const createSemanticService = (pool: Pool, options: {schema: string; prov
       ? await runGroundedSemanticDiscovery({...input, intentQuery: rawIntentQuery as string}, providerPort)
       : await runGroundedSemanticAnalysis(input, providerPort);
     if (result.status === "disabled" || result.status === "no_context") return result;
-    let after: Authorized;
-    try {after = await read(context, selection, endpointIds);}
-    catch {throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");}
-    if (!sameAuthorized(before, after)) throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");
+    try {await transaction(context,selection,endpointIds,async(client,after)=>{
+      if(!sameAuthorized(before,after))throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");
+      if(archiveHistory)await appendSemanticHistory(client,historyScope(context,after,endpointIds),result);
+      return undefined;
+    });}
+    catch(error){if(error instanceof SemanticServiceError&&error.code==="SEMANTIC_STORAGE_ERROR")throw error;
+      throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");}
     return result;
   };
   return Object.freeze({
@@ -241,5 +267,16 @@ export const createSemanticService = (pool: Pool, options: {schema: string; prov
     discover: (context: unknown, selection: unknown, endpointIds: unknown,
       intentQuery: unknown): Promise<SemanticAnalysisResult> =>
       run(context, selection, endpointIds, true, intentQuery),
+    readHistory:async(rawContext:unknown,rawSelection:unknown,rawEndpointIds:unknown,
+      rawLimit:unknown):Promise<SemanticHistoryReadResult>=>{
+      if(!archiveHistory)throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
+      const limit=historyLimit(rawLimit);
+      const {context,selection,endpointIds}=parseRequest(rawContext,rawSelection,rawEndpointIds);
+      return transaction(context,selection,endpointIds,async(client,authorized)=>{
+        if(!authorized.inference.enabled)return Object.freeze({status:"resolved",selector:selection,
+          pin:authorized.pin,records:Object.freeze([]),truncated:false});
+        return readSemanticHistory(client,historyScope(context,authorized,endpointIds),limit);
+      });
+    },
   });
 };

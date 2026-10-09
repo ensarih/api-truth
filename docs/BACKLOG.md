@@ -792,3 +792,12 @@ An optional authorized reader, portal POST and `api_truth_search_api_corpus` MCP
 Independent reviews and real PostgreSQL HTTP/MCP tests validate the boundary. A 37-question public synthetic corpus checks hand-authored candidate ordering, wrong-action decoys, ambiguity, missing context and scoped no-match against actual analyzer outputs. Scripted provider fixtures test structure and citations; they do not grade live models or measure semantic quality. Durable enrichment/review, embeddings, broader dependency context, live provider evaluation and the remaining phase gates stay open.
 
 Validation: clean installation with zero audited vulnerabilities, typecheck, 1,345 offline tests, 280 PostgreSQL tests and six browser tests pass. The Git cleanup regression now inspects only its own scratch directory so concurrent test processes cannot create false failures.
+
+
+### Principal-scoped inference metadata history — P4-S5 (2026-10-09)
+
+Optional explicit migrations and opt-in semantic history now retain append-only inferred status, requested/analyzed endpoint IDs, citations and exact provider/model/prompt/configuration/selector provenance. Raw questions, model prose, context and credentials are discarded before persistence. After model I/O, current authorization and pin checks run in the same transaction as insertion. Reads require the same principal and current source scopes, pin and inference configuration; old records remain stored but are excluded after change or revocation. The default service works without the optional history table. These records remain inferred, unreviewed and non-normative; this audit slice does not implement durable guidance, owner review or caching. Independent review and 26 semantic PostgreSQL tests pass.
+
+### Shared analyzer boundary matrix — NB3 bounded slice (2026-10-09)
+
+Thirty conformance cases exercise the five current compiled analyzer profiles with actual source/document inputs. They check scoped provenance, profile/input selection, path and symlink containment, supplied digest mismatch, network policy, malformed content, source nonexecution, resource bounds and changed-byte fingerprints. This proves full-rerun fingerprint invalidation; incremental prior-dependency pruning and broader framework/runtime conformance remain open.

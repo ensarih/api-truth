@@ -166,8 +166,8 @@ to the repository.
 
 ## 6. Supported source scope and known gaps
 
-The executable Express analyzer is `typescript-express@0.5.1` on TypeScript 5.9.3.
-Its checked-in baseline supports literal Express app/router registrations for
+The executable Express analyzer is `typescript-express@0.6.0` on TypeScript 5.9.3.
+Its bounded profile supports literal Express app/router registrations for
 `get`, `post`, `put`, `patch`, `delete`, `options`, and `head`, including exact
 literal `route(path).method(...)` chains on known apps/routers; literal mount
 prefixes and imported routers; named path and accessed query fields; declared
@@ -177,6 +177,33 @@ unresolved dynamic routes, conditional registrations, unsupported type
 members, unknown presence/status/media, and security guarantees as unknown or
 diagnostics. See the [detailed analyzer matrix](../analyzers/typescript/README.md#support-matrix).
 
+Other explicit profiles are `nodejs-routing-controllers@0.8.0`, standalone
+Swagger 2 `0.15.0`, Swagger middleware `0.33.0`, and OpenAPI 3.0
+`0.2.0`. Document profiles read only an explicitly selected contained
+JSON/YAML document; OpenAPI 3.1 input remains unsupported. These profiles have
+separate limits and do not automatically select an adapter or prove deployed
+startup. See their adapter READMEs for exact support and diagnostics.
+
+For an advisory source/document inventory, select one tree and entrypoints or
+document paths explicitly:
+
+```sh
+npm run inventory:nodejs -- \
+  --project-root /path/to/project \
+  --service-root services/orders \
+  --entrypoint src/main.ts \
+  --document api/openapi.json
+```
+
+The offline inventory does not run code, enumerate branches, or choose an
+analyzer. It reports supported, unsupported, mixed, or unresolved evidence for
+the selected service only. See the [inventory guide](../analyzers/nodejs/INVENTORY.md).
+
+The D12 local Git connector can materialize a configured service subtree from
+an immutable local commit for selected compiled profiles and feed it to D08's
+baseline or full branch-update path. It does not fetch Git remotes, provide
+webhook authentication, or establish a production source provider.
+
 The [routing-controllers profile](../analyzers/routing-controllers/README.md)
 can also be tried against its synthetic fixture:
 
@@ -184,7 +211,10 @@ can also be tried against its synthetic fixture:
 npm run --silent extract:routing-controllers -- --source fixtures/nodejs/routing-controllers/orders/src --service orders --revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
 
-Its current output is partial because the startup entry point is not verified.
+The default declaration-oriented profile does not identify a production
+startup entry point. A host may opt into a bounded selected-entrypoint mode;
+that proves static source reachability only and does not establish that a
+deployment starts that file.
 
 Java/Spring and additional Node.js frameworks are not supported by this
 adapter. Runtime-log examples, a production CI/deployment connector, and a
@@ -192,4 +222,11 @@ protected enterprise pilot remain separate work. Portal and MCP packages are
 host-embedded read surfaces, not a ready-to-run authenticated installation.
 The nine-step Phase 1 release scenario, including failed rollout, rollback,
 missed-event repair, and cross-surface same-pin reads, remains the D13-S1
-gate. The local demos above do not satisfy that gate or authorize a release.
+gate. The portal and MCP can expose current-environment, cross-service keyword
+candidates when the host supplies the corpus query capability. Each candidate
+must be reloaded at its exact checkpoint pin before use; this path makes no
+model call. Separate selected-operation semantic suggestions require an
+explicit user action and a configured provider, and remain inferred,
+unreviewed, and non-normative. Current-pin metadata observations expose only
+sanitized records from an explicit import, not raw logs or payload examples.
+The local demos above do not satisfy the D13-S1 gate or authorize a release.

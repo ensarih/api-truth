@@ -1,7 +1,7 @@
 # Testing and Local Validation
 
-**Status:** offline TypeScript and isolated PostgreSQL suites cover D03–D11, including environment lifecycle, OpenAPI publication, authorized portal/MCP reads, real-browser portal interaction, and environment cross-surface revocation. D12 reference lifecycle and provider boundaries are in progress; Java execution remains planned.
-**Date:** 2026-09-30
+**Status:** Offline TypeScript, protocol, isolated PostgreSQL, and browser suites cover bounded source/document analyzers, D08/D09 persistence, D10 publication, authorized portal/MCP reads, metadata-only observations, explicit keyword operation search, and selected-operation semantic service boundaries. The full provider-to-pilot lifecycle and Java execution remain open.
+**Date:** 2026-10-09
 **Related:** [specification](SPECIFICATION.md), [implementation plan](../PROJECT%20PLAN.md), [roadmap](ROADMAP.md).
 
 ## 1. Purpose
@@ -34,8 +34,8 @@ No database, application server, API key, integration environment, or Java analy
 |---|---|---|
 | Unit | Function outputs, failure behavior, state transitions, pure schema/identity logic | Native runtime; no network or Docker |
 | Contract | IR/event schemas, plugin output, and linked MCP client/server tool behavior | Synthetic fixtures and local protocol transport; no API keys |
-| Integration | PostgreSQL connectivity/isolation; D06 snapshots, access and branch pointers; D08 events/jobs and reconciliation; D09 environment lifecycle; D10 publication, revocation, and local round trip; D11 portal/MCP/export same-publication read | Isolated local PostgreSQL plus real implemented components |
-| End-to-end | CLI/event → catalog → OpenAPI/portal/MCP lifecycle | Local application and fixture services; complete Phase 1 scenario remains open |
+| Integration | PostgreSQL connectivity/isolation; D06 snapshots/access; D08 events/jobs/reconciliation and selected local Git source materialization; D09 serving lifecycle; D10 publication/revocation/round trip; D11 portal/MCP/export pins; D12 metadata imports and current-pin reads; P4 semantic authorization and explicit-environment corpus search | Isolated local PostgreSQL plus real implemented components |
+| End-to-end | Explicit local source/document profile → D08 analyzer host → catalog/serving state → OpenAPI/portal/MCP reads; combined Phase 1 scenario | Local application and synthetic fixtures; live provider, protected pilot, and complete Phase 1 scenario remain open |
 | Java | Java extractor behavior and common plugin conformance | Pinned JDK/build wrapper when the Java adapter is added |
 
 Do not mock the function under test. Mock only external boundaries when needed, such as model API transports; assert the actual adapter result or failure. Database tests exercise real database transactions rather than in-memory substitutes.
@@ -75,8 +75,10 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run test:unit -- <file>` | **Available:** focus the unit project; missing selections fail |
 | `npm run test:watch` | **Available:** rerun relevant offline tests during development |
 | `npm run test:contract` | **Available:** validate reviewed fixture integrity and linked read-only MCP protocol behavior |
-| `npm run test:browser` | **Available:** require an installed Chrome/Chromium executable and exercise portal search, selection, detail, download, and unknown state in a real browser; no silent skip |
+| `npm run test:browser` | **Available:** require an installed Chrome/Chromium executable and exercise portal search, contract selection, detail, download, unknown state, keyword candidates, and exact pinned cross-service loading in a real browser; no silent skip |
 | `npm run test:extractor` | **Available:** run the TypeScript/Express analyzer unit and CLI contract suite |
+| `npm run inventory:nodejs -- --project-root <root> --service-root <path> --entrypoint <path>` | **Available:** print an advisory bounded inventory for an explicit service root and production entrypoint; use `--document <path>` for an explicitly selected API document. It executes no source and selects no analyzer automatically. |
+| `npm run --silent extract:openapi3 -- --source <service-tree> --service <id> --revision <immutable-hex-revision> --document <contained-path>` | **Available:** run the bounded OpenAPI 3.0 document-only profile on one selected document; it does not verify runtime registration. |
 | `npm run test:updates` | **Available:** run the D07 planner, difference, execution, contract, and local CLI suites without Docker or provider credentials |
 | `npm run test:environment` | **Available:** run D09 pure environment-resolution and serving-order scenarios without Docker or provider credentials |
 | `npm run test:environment:integration` | **Available:** require the fixed PostgreSQL service, then test D09 immutable attempts, artifact bindings, ordered serving checkpoints, replay, authority, and conflicts |
@@ -191,7 +193,7 @@ Maintain a requirement-to-test index as implementation proceeds. Initial high-va
 - Document all commands that actually exist and record fresh results. Application-level scenarios remain pending until their components are implemented.
 - Keep the same offline checks available in CI; add container-backed jobs as integration suites are introduced.
 
-The D04 offline scaffold and PostgreSQL boundary, D05 baseline TypeScript/Express analyzer, D06 catalog, D07 update/difference core, D08 event/worker orchestration, D09 environment lifecycle, D10 validated OpenAPI compilation/publication, and D11 shared query/portal/MCP are implemented. Real-browser and PostgreSQL cross-surface tests cover D11's acceptance boundary. D12 provider wiring and the complete D13 Phase 1 release scenario remain open. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance is pending. The analyzer's exact local commands and construct-level support matrix are documented in `analyzers/typescript/README.md`, catalog APIs and invariants in `packages/catalog/README.md`, update contracts and limitations in `packages/updates/README.md`, orchestration capabilities in `packages/orchestration/README.md`, D09 behavior in `packages/environment/README.md`, and D10 behavior in `packages/openapi/README.md`.
+The current tree also contains bounded Swagger 2/OpenAPI 3.0 document and middleware profiles, a routing-controllers declaration profile, a Node.js onboarding inventory, selected Git-to-D08 source/document materialization, metadata-only current-environment observations, and keyword/semantic search surfaces. These profiles do not establish deployed startup or general framework support. Query keyword search makes no model call; semantic suggestions require an explicit user action and a configured provider, and remain inferred/unreviewed. Live Git/provider wiring, OpenAPI 3.1 analyzer input, broader framework conformance, Java executable conformance, durable semantic review, and the protected D13 pilot remain open. The Java process boundary is documented in `analyzers/PLUGIN_API.md`; Java executable conformance is pending. Exact commands and construct-level support are documented in the relevant analyzer and package READMEs.
 
 
 ## Pinned Swagger framework behavior
