@@ -11,6 +11,7 @@ network request or branch enumeration is performed.
 |---|---|---|
 | typescript-express | 0.4.0 | 1.0.0 |
 | nodejs-routing-controllers | 0.7.0 | 1.0.0 |
+| openapi3-document | 0.1.0 | 1.1.0 |
 | nodejs-swagger2-document | 0.13.0 | 1.1.0 |
 | nodejs-swagger-express-mw | 0.32.0 | 1.1.0 |
 

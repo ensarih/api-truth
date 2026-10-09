@@ -1,0 +1,37 @@
+openapi: 3.0.3
+info:
+  title: Orders
+  version: '1'
+servers:
+  - url: https://api.example.test/{version}
+    variables:
+      version:
+        default: v1
+  - url: https://backup.example.test/v1
+security: []
+paths:
+  /orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      responses:
+        '200':
+          description: Order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+            application/xml:
+              schema:
+                type: string
+components:
+  schemas:
+    Order:
+      type: object
+      properties:
+        id:
+          type: string

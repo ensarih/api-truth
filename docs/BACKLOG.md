@@ -37,11 +37,11 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for four bounded profiles; options/resolution input pinning and multi-input update/reuse gates remain. Runtime observations are rejected by D08 until separately pinned. |
-| NB2 / NB8-DETECT | Open | Bounded onboarding inventory, production-connected signals and explicit mixed/unsupported classification; no branch enumeration. |
+| NB1-PROFILES | In progress | Exact compiled-in dispatch is implemented and reviewed for five bounded profiles; options/resolution input pinning and multi-input update/reuse gates remain. Runtime observations are rejected by D08 until separately pinned. |
+| NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | Open | Cross-adapter hostile-input/invalidation matrix and complete bounded Swagger profile gate. |
 | NB5 | Open | Decorator framework conformance and source-to-downstream update gate. |
-| NB6 | Open | OAS 3.0 then bounded 3.1 document profiles and serialization/ref/server tests. |
+| NB6 | In progress | Bounded OpenAPI 3.0 JSON/YAML document profile and CLI implemented with media, serialization, local-reference and server-declaration tests; 3.1 remains open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | Open | Sanitization, unambiguous environment URL correlation and safe examples. |
@@ -152,7 +152,7 @@ it does not substitute for a protected enterprise pilot.
 | ID | Status | Work | Acceptance gate |
 |---|---|---|---|
 | D13-S0 | Complete | Fresh-checkout setup and operator guide. | The local guide records pinned runtime, disposable PostgreSQL, initial configuration and authentication ports, TypeScript/Express support, synthetic extraction-to-catalog and OpenAPI demos, and known limits. A separate clean checkout passed install, offline checks, database startup/readiness, demos, and integration checks. The fixed disposable database was then stopped, restarted, and SQL-readiness checked successfully. No provider key or private source is required. |
-| D13-S1 | In progress | Full Phase 1 scenario and cross-surface conformance. | D12's PostgreSQL lifecycle now reaches PR, merge, UAT, failure, rollback, duplicate/stale replay, and missed-observation repair; D11 proves same-pin portal/MCP/export and revocation for a separately strict-publishable snapshot. The two paths are not yet one release scenario. A minimal complete code-extracted endpoint was tested against real D10 preparation and returned `UNVERIFIED_RESPONSE` plus `UNKNOWN_SECURITY`; endpoint-scoped response evidence and a truthful security-declaration/verification path must close before strict publication from extracted code. |
+| D13-S1 | In progress | Full Phase 1 scenario and cross-surface conformance. | D12's PostgreSQL lifecycle now reaches PR, merge, UAT, failure, rollback, duplicate/stale replay, and missed-observation repair; D11 proves same-pin portal/MCP/export and revocation for a separately strict-publishable snapshot. The two paths are not yet one release scenario. A minimal complete code-extracted endpoint was tested against real D10 preparation and now has qualifying endpoint-scoped response evidence and returns `UNKNOWN_SECURITY`; a truthful security-declaration/verification path must close before strict publication from extracted code. |
 | D13-S2 | Open | Public release hygiene and v0.1 readiness review. | Synthetic-only fixtures/artifacts, license/governance/security reporting, supported/unsupported matrix, privacy scan, clean install, all offline/PostgreSQL/protocol/browser tests, and known limits are documented. Publish a release only after the gate passes. |
 
 ## Later phases and analyzer coverage

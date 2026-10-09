@@ -8,6 +8,7 @@ const profiles=[
  {id:"nodejs-routing-controllers",version:"0.7.0",ir:"1.0.0",root:"fixtures/nodejs/routing-controllers/orders/src",inputs:[{kind:"source_tree",path:".",digest:"pending"}]},
  {id:"nodejs-swagger2-document",version:"0.13.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/orders",inputs:[{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
  {id:"nodejs-swagger-express-mw",version:"0.32.0",ir:"1.1.0",root:"fixtures/nodejs/swagger2/middleware/src",inputs:[{kind:"source_tree",path:".",digest:"pending"},{kind:"type_manifest",path:"api/swagger/swagger.yaml",digest:"pending"}]},
+ {id:"openapi3-document",version:"0.1.0",ir:"1.1.0",root:"fixtures/openapi3/orders",inputs:[{kind:"type_manifest",path:"openapi.yaml",digest:"pending"}]},
 ] as const;
 const request=(profile:typeof profiles[number]):AnalyzerRequest=>({exchange_version:"1.0.0",ir_version:profile.ir,request_id:"host-test",
  analyzer:{analyzer_id:profile.id,analyzer_version:profile.version},
@@ -39,7 +40,7 @@ test("configured identity is detached and rejects request substitution before so
  await expect(analyzer.analyze(request(profiles[3]))).rejects.toThrow("ANALYZER_REQUEST_MISMATCH");
 });
 test("profile inventory is immutable and describes exact bounded versions",()=>{
- expect(configuredAnalyzerProfiles).toHaveLength(4);
+ expect(configuredAnalyzerProfiles).toHaveLength(5);
  expect(Object.isFrozen(configuredAnalyzerProfiles)).toBe(true);
  for(const profile of configuredAnalyzerProfiles)expect(Object.isFrozen(profile)).toBe(true);
 });

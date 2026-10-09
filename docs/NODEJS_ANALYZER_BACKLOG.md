@@ -19,7 +19,7 @@ profile can identify wrapper imports and emit unregistered candidate routes with
 owner-asserted prefix evidence, but cannot prove the startup entry point or
 wrapper semantics. Bounded glob lists from imported static configuration select
 only contained controller source files, with runtime source projection marked
-unverified. OpenAPI 3 and other decorator
+unverified. OpenAPI 3.1 and other decorator
 frameworks are not currently discovered.
 
 This backlog records the work needed to cover those services without weakening
@@ -34,7 +34,7 @@ repository.
 | Literal Express app/router registrations | Implemented within the published D05 support matrix | Endpoint identity, mounted routers, DTO schemas, selected validators, response serialization, evidence, dependencies, diagnostics |
 | Swagger 2 JSON/YAML declarations | Initial document-only profile; middleware binding unverified | D03 endpoint/schema/evidence contracts, selected security definitions and basePath claim, and D07 update/difference engine |
 | Swagger 2 routes loaded by `swagger-express-mw` | Bounded static registration/configuration, exact CommonJS candidates and optional signed session-scoped observed handler binding; production startup and runtime response enforcement remain open | Document-only profile and its bounded JSON/YAML parsers |
-| OpenAPI 3.x document-defined routes | Missing | D03 contract model; future reusable document kernel |
+| OpenAPI 3.x document-defined routes | Bounded 3.0.x document-only profile; 3.1 remains unsupported | Shared selected-document reader, bounded parsers and IR 1.1 contracts |
 | routing-controllers literal decorators | Initial profile; direct and bounded glob registrations, literal body requiredness, inline `@QueryParams` and `@HeaderParams` fields, and opt-in wrapper declarations; startup entry point unverified | D03 route/parameter/response claims and explicit unsupported diagnostics |
 | NestJS, tsoa, inversify, and custom decorator wrappers | Missing | Bounded TypeScript compiler host, schema extraction, handler analysis, D03 contracts |
 | Mixed Express/spec/decorator services | Detection and merge policy missing | D03 identity/provenance and D07 deletion safety provide constraints for a future composite design |
@@ -746,3 +746,10 @@ The standalone document profile remains `0.13.0`.
 Validation: 1,000 offline tests and 58 pinned runtime cases. Runtime cases cover
 matching closed objects, extra fields and reusable definition provenance.
 Independent review found no blocker.
+
+
+### Bounded inventory and OpenAPI 3.0 document profile (2026-10-09)
+
+`inventory:nodejs` takes explicit service roots, production entrypoints and selected documents. It follows bounded literal module graphs without executing code, recognizes exact supported framework registrations, resolves controller symbol identities, and reports mixed, unresolved and unsupported scopes. It does not select an analyzer automatically or enumerate branches.
+
+`openapi3-document@0.1.0` reads one contained JSON/YAML OpenAPI 3.0.x document. Media-specific request/response declarations, parameter override and serialization rules, local references, security and server declarations retain exact pointer provenance. Specification defaults are inferred; malformed/conflicting declarations are withheld or diagnosed. Server URLs remain exposure declarations and never prefix application paths. OpenAPI 3.1, runtime binding and composite routing remain separate gates. See [adapter scope](../analyzers/openapi3/README.md) and [inventory usage](../analyzers/nodejs/INVENTORY.md).

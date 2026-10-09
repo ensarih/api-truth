@@ -1,13 +1,16 @@
 {
   "name": "@api-truth/analyzer-host",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
     "@api-truth/ir": "0.0.0",
     "@api-truth/analyzer-typescript": "0.4.0",
     "@api-truth/analyzer-routing-controllers": "0.7.0",
-    "@api-truth/analyzer-nodejs-swagger2-document": "0.35.0"
+    "@api-truth/analyzer-nodejs-swagger2-document": "0.36.0",
+    "@api-truth/analyzer-openapi3-document": "0.1.0"
   }
 }

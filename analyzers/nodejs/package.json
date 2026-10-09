@@ -1,10 +1,11 @@
 {
   "name": "@api-truth/analyzer-nodejs-swagger2-document",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./inventory": "./src/inventory.ts",
     "./middleware": "./src/middleware.ts",
     "./runtime-binding-capture": "./src/runtime-binding-capture.cjs"
   },

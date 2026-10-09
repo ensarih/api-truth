@@ -34,7 +34,9 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
-    "test:swagger:runtime": "node tests/conformance/swagger-runtime/run.mjs"
+    "test:swagger:runtime": "node tests/conformance/swagger-runtime/run.mjs",
+    "extract:openapi3": "node scripts/extract-openapi3.mjs",
+    "inventory:nodejs": "node scripts/inventory-nodejs.mjs"
   },
   "engines": {
     "node": "24.6.0",

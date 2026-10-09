@@ -3,6 +3,7 @@ import {configuredAnalyzerIrVersion,parseAnalyzerSelection,parseAnalyzerRequest,
 import {ANALYZER as express,createAnalyzer as createExpress} from "@api-truth/analyzer-typescript";
 import {ANALYZER as routing,createAnalyzer as createRouting} from "@api-truth/analyzer-routing-controllers";
 import {ANALYZER as document,createAnalyzer as createDocument} from "@api-truth/analyzer-nodejs-swagger2-document";
+import {ANALYZER as openapi3,createAnalyzer as createOpenapi3} from "@api-truth/analyzer-openapi3-document";
 import {ANALYZER as middleware,createAnalyzer as createMiddleware} from "@api-truth/analyzer-nodejs-swagger2-document/middleware";
 
 /** Exact compiled-in profiles; no framework detection or source-selected plugins. */
@@ -10,6 +11,7 @@ const registrations = [
   {identity:Object.freeze({...express}),ir:"1.0.0",create:createExpress},
   {identity:Object.freeze({...routing}),ir:"1.0.0",create:createRouting},
   {identity:Object.freeze({...document}),ir:"1.1.0",create:createDocument},
+  {identity:Object.freeze({...openapi3}),ir:"1.1.0",create:createOpenapi3},
   {identity:Object.freeze({...middleware}),ir:"1.1.0",create:createMiddleware},
 ] as const;
 export const configuredAnalyzerProfiles = Object.freeze(registrations.map(profile=>Object.freeze({
