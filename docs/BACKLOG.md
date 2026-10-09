@@ -1153,3 +1153,10 @@ locked install/typecheck passed all 1,633 offline tests. Fourteen service tests
 cover source denial, cross-operation attestations, exact response status,
 qualified and changed pins, immutable policies, final-query revocation and
 timeout suppression. Live transport and host database authority remain unproved.
+
+### Revoked source/reader proxy rejection — P3 boundary fix (2026-10-10)
+
+Two failing tests showed revoked Proxy objects could escape configured-reader
+or source-attestation checks as generic JavaScript errors. The service now checks
+proxy identity before array/object operations and returns the fixed configuration
+or storage error. The source is not projected and no callback text is exposed.

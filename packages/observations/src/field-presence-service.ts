@@ -30,8 +30,8 @@ export class FieldPresenceServiceError extends Error {
 const error=(code:FieldPresenceServiceError["code"]):never=>{throw new FieldPresenceServiceError(code);};
 const safeText=(value:unknown,max=512):value is string=>typeof value==="string"&&value.length>0&&value.length<=max
   &&!/[\u0000-\u001f\u007f]/.test(value);
-const plain=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==="object"&&!Array.isArray(value)
-  &&!isProxy(value)&&(Object.getPrototypeOf(value)===Object.prototype||Object.getPrototypeOf(value)===null);
+const plain=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==="object"&&!isProxy(value)
+  &&!Array.isArray(value)&&(Object.getPrototypeOf(value)===Object.prototype||Object.getPrototypeOf(value)===null);
 const fields=(value:unknown,names:readonly string[]):Record<string,unknown>|undefined=>{
   try{
     if(!plain(value))return undefined;

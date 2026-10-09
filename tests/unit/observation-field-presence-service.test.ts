@@ -222,3 +222,16 @@ test("a timed-out source result cannot trigger projection or final authority cal
     expect(vi.getTimerCount()).toBe(0);
   }finally{vi.useRealTimers();}
 });
+
+test("revoked source attestation proxies produce fixed service errors",async()=>{
+  const {proxy,revoke}=Proxy.revocable({},{});revoke();
+  const body=vi.fn(async()=>({attestation:proxy,payloadText:"{}",payloadCompleteness:"complete_unredacted"}));
+  const {service}=make({body});
+  await expect(service.read(context,{selection,policyId:"owner-policy",observationId:id}))
+    .rejects.toMatchObject({code:"FIELD_PRESENCE_STORAGE_ERROR"});
+});
+test("revoked configured reader proxies produce fixed configuration errors",()=>{
+  const {proxy,revoke}=Proxy.revocable({},{});revoke();
+  expect(()=>createFieldPresenceService({queryReader:proxy as never,policies:[],
+    authorize:async()=>true,readObservation:async()=>({})})).toThrow("FIELD_PRESENCE_INVALID_CONFIGURATION");
+});
