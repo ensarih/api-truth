@@ -44,7 +44,7 @@ provider or enterprise pilot claim.
 | NB6 | In progress | Bounded OpenAPI 3.0 JSON/YAML document profile and CLI implemented with media, serialization, local-reference and server-declaration tests; 3.1 remains open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
-| P3-LOGS | Open | Sanitization, unambiguous environment URL correlation and safe examples. |
+| P3-LOGS | In progress | Sanitization, unambiguous environment URL correlation and safe examples. |
 | P4-SEMANTICS | Open | Grounded provider adapters, intent discovery and deterministic evaluation. |
 | D12-S0/S2 | Open | Live provider facts, artifacts, ordering, authentication and environment wiring. |
 | P2-JAVA | Open | Spring analyzer, two-ecosystem conformance and downstream lifecycle. |
@@ -732,3 +732,8 @@ The standalone document profile remains `0.13.0`.
 Validation: 1,000 offline tests and 58 pinned runtime cases. Runtime cases cover
 matching closed objects, extra fields and reusable definition provenance.
 Independent review found no blocker.
+
+
+### Metadata-only observation matching (2026-10-09)
+
+The first Phase 3 kernel correlates a bounded inert log record with an existing source snapshot, a resolved environment pin, independent per-record revision/window/source attestation, and explicit gateway routing evidence. Unique public-to-application templates can link an existing endpoint. Missing revision, ambiguous maps/routes and selector variants remain unresolved. Raw URLs, hosts, path values, body/header/cookie/query/trace data and raw-value hashes never enter results or errors. This pure slice has no durable import, examples, catalog/query views, ELK connector, retention or attestation provider yet; those Phase 3 gates remain open.

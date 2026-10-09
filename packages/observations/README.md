@@ -1,0 +1,9 @@
+# Bounded metadata observation matching
+
+`correlateMetadataObservation(raw, context)` is a pure first Phase 3 slice. A trusted caller supplies one authorized catalog snapshot, its resolved single-revision environment pin, a per-record provenance attestation (`revision`, `sourceId`, `sourceVersion`, `windowStart`, `windowEnd`), and explicit gateway routing mappings for that same pin. The raw record supplies only a URL, uppercase HTTP method, status code, and revision to cross-check with the attestation. Other inert JSON fields are size-checked and discarded; getters, proxies, non-JSON objects, cycles, and oversized values are rejected.
+
+A confirmed result contains only the existing endpoint ID, trusted mapping ID, method, status code, `metadata_only` completeness, and policy version. Unresolved/rejected results contain fixed reason codes. Results never include raw URL, origin, path, query, headers, cookies, body, trace IDs, raw values, exception text, or hashes of those values.
+
+Matching requires an exact literal public origin and explicit public-to-application path templates. It rejects encoded path separators and dot segments, userinfo, fragments, ambiguous mappings, missing or selector-specific endpoints, and revision mismatch. It never selects a first server or route, discovers a new endpoint from logs, or infers schema, requiredness, authentication, examples, or source contract facts from samples.
+
+The caller must establish authorization, routing evidence, and a trustworthy independent attestation from verified transport, container, or artifact metadata; application-provided revision fields alone are insufficient. The caller must not derive the attestation from the untrusted log record itself. This package does not read logs, query the catalog or environment store, persist observations, or promote observations into contract claims or runtime deployment assertions.
