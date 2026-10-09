@@ -164,6 +164,175 @@ test("import aliases and namespace decorators produce D03-valid declared routes"
   expect(first.endpoints).toEqual(second.endpoints);
 });
 
+test("selected production entrypoint follows bounded runtime imports and only its registrations", async () => {
+  const { root, adapter } = await service({
+    "app.ts": `import "./bootstrap";`,
+    "bootstrap.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live";
+      createExpressServer({ controllers: [Live] });`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") export class Live { @Get() list(): string { return "ok"; } }`,
+    "dead.ts": `import { createExpressServer } from "routing-controllers";
+      import { Dead } from "./dead-controller";
+      createExpressServer({ controllers: [Dead] });`,
+    "dead-controller.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/dead") export class Dead { @Get() list(): string { return "no"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" })
+    .analyze(request());
+  expect(parseAnalyzerResult(result).ok).toBe(true);
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/live"]);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("startup_entrypoint_unverified");
+  expect(result.diagnostics.map(item => item.code)).toContain("production_entrypoint_deployment_unverified");
+  expect(result.coverage.status).toBe("incomplete");
+  expect(result.reproducibility_fingerprint).not.toBe((await adapter.analyze(request())).reproducibility_fingerprint);
+});
+
+test("selected production entrypoint treats dynamic imports and nested startup as unresolved", async () => {
+  const { root } = await service({
+    "app.ts": `async function start() { await import("./bootstrap"); } start();`,
+    "bootstrap.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; createExpressServer({ controllers: [Live] });`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") export class Live { @Get() list(): string { return "ok"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toEqual(expect.arrayContaining([
+    "dynamic_import_unresolved",
+  ]));
+  expect(result.coverage.status).toBe("incomplete");
+});
+
+test("selected production entrypoint does not accept a registration nested in a function", async () => {
+  const { root } = await service({
+    "app.ts": `import "./bootstrap";`,
+    "bootstrap.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; function start() { createExpressServer({ controllers: [Live] }); } start();`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") class Live { @Get() list(): string { return "ok"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toContain("conditional_registration_unresolved");
+  expect(result.coverage.status).toBe("incomplete");
+});
+
+test("selected production entrypoint path must exist inside the selected source tree", async () => {
+  const { root } = await service({ "app.ts": `export {};` });
+  await expect(createAnalyzer({ projectRoot: root, productionEntrypoint: "service/missing.ts" }).analyze(request()))
+    .rejects.toThrow("Production entrypoint rejected");
+  await expect(createAnalyzer({ projectRoot: root, productionEntrypoint: "../outside.ts" }).analyze(request()))
+    .rejects.toThrow("Production entrypoint rejected");
+  await expect(createAnalyzer({ projectRoot: root, productionEntrypoint: join(root, "service/app.ts") }).analyze(request()))
+    .rejects.toThrow("Production entrypoint rejected");
+  await expect(createAnalyzer({ projectRoot: root, productionEntrypoint: "service/./app.ts" }).analyze(request()))
+    .rejects.toThrow("Production entrypoint rejected");
+});
+
+test("selected production graph follows top-level CommonJS requires but ignores type-only imports", async () => {
+  const { root } = await service({
+    "app.ts": `require("./bootstrap"); import type { TypesOnly } from "./types";`,
+    "bootstrap.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; createExpressServer({ controllers: [Live] });`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") export class Live { @Get() list(): string { return "ok"; } }`,
+    "types.ts": `export interface TypesOnly {}`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/live"]);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("production_import_unresolved");
+});
+
+test("selected production graph reports nested requires and rejects symlinked source trees", async () => {
+  const { root } = await service({ "app.ts": `function unused() { require("./bootstrap"); }` });
+  const unresolved = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(unresolved.diagnostics.map(item => item.code)).toContain("conditional_import_unresolved");
+  await symlink(join(root, "service", "app.ts"), join(root, "service", "link.ts"));
+  await expect(createAnalyzer({ projectRoot: root, productionEntrypoint: "service/link.ts" }).analyze(request()))
+    .rejects.toThrow("Source boundary or input limit rejected");
+});
+
+test("selected production graph does not follow a shadowed require binding", async () => {
+  const { root } = await service({
+    "app.cjs": `const require = (name) => { throw new Error(name); }; require("./bootstrap");`,
+    "bootstrap.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; createExpressServer({ controllers: [Live] });`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") class Live { @Get() list(): string { return "ok"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.cjs" }).analyze(request());
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toContain("production_import_unresolved");
+});
+
+test.each([
+  `const { require } = fake; require("./bootstrap");`,
+  `const { x: { require } } = fake; require("./bootstrap");`,
+  `function start({ x: [require] }) { require("./bootstrap"); }`,
+  `({ require } = fake); require("./bootstrap");`,
+  `([require] = [fake]); require("./bootstrap");`,
+])("selected production graph rejects destructured require shadowing: %s", async source => {
+  const { root } = await service({
+    "app.ts": source,
+    "bootstrap.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; createExpressServer({ controllers: [Live] });`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") export class Live { @Get() list(): string { return "ok"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toContain("production_import_unresolved");
+});
+
+test.each([
+  `try { require("./bootstrap"); } catch {}`,
+  `try {} catch { require("./bootstrap"); }`,
+])("selected production graph leaves try/catch require unresolved: %s", async source => {
+  const { root } = await service({
+    "app.ts": source,
+    "bootstrap.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; createExpressServer({ controllers: [Live] });`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") export class Live { @Get() list(): string { return "ok"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toContain("conditional_import_unresolved");
+});
+
+test("selected production graph diagnoses unknown bare runtime imports but recognizes adapter frameworks", async () => {
+  const { root } = await service({
+    "app.ts": `import "@vendor/bootstrap"; import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; createExpressServer({ controllers: [Live] });`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") export class Live { @Get() list(): string { return "ok"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.endpoints.map(endpoint => endpoint.application_path)).toEqual(["/live"]);
+  expect(result.diagnostics.map(item => item.code)).toContain("external_runtime_import_unresolved");
+});
+
+test("selected production graph stops at its global import-edge budget", async () => {
+  const imports = Array.from({ length: 4100 }, () => `import "./dep";`).join("\n");
+  const { root } = await service({ "app.ts": imports, "dep.ts": `export {};` });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.diagnostics.filter(item => item.code === "production_import_limit_exceeded")).toHaveLength(1);
+  expect(result.diagnostics.map(item => item.code)).not.toContain("production_import_unresolved");
+});
+
+test("selected production entrypoint accepts only direct source-level registration statements", async () => {
+  const { root } = await service({
+    "app.ts": `import { createExpressServer } from "routing-controllers";
+      import { Live } from "./live"; { createExpressServer({ controllers: [Live] }); }`,
+    "live.ts": `import { JsonController, Get } from "routing-controllers";
+      @JsonController("/live") class Live { @Get() list(): string { return "ok"; } }`,
+  });
+  const result = await createAnalyzer({ projectRoot: root, productionEntrypoint: "service/app.ts" }).analyze(request());
+  expect(result.endpoints).toEqual([]);
+  expect(result.diagnostics.map(item => item.code)).toContain("conditional_registration_unresolved");
+});
+
 test("literal Body required options establish request body presence", async () => {
   const { adapter } = await service({ "controller.ts": `
     import { JsonController, Post, Body, createExpressServer } from "routing-controllers";

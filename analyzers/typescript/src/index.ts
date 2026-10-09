@@ -1,3 +1,4 @@
+import {canonicalJsonStringify} from "../../../packages/ir/src/index.js";
 import { resolve, relative, dirname } from "node:path";
 import ts from "typescript";
 import { hash, inside, readSources, digestSources } from "./source.js";
@@ -6,7 +7,7 @@ import { parseAnalyzerRequest, parseAnalyzerResult, deriveEndpointIdentity,
   type AnalyzerRequest, type AnalyzerResult, type Endpoint, type Evidence, type ApiSchema, type Claim,
 } from "../../../packages/ir/src/index.js";
 
-export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.5.0" };
+export const ANALYZER = { analyzer_id: "typescript-express", analyzer_version: "0.5.1" };
 const walk = (node: ts.Node, visit: (node: ts.Node) => void) => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
 const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 
@@ -47,7 +48,7 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 function extract(files: Map<string, string>, root: string, request: AnalyzerRequest, budget: () => void): AnalyzerResult {
   const sourceDigest = digestSources(files, root);
   const effectiveExtractionMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
-  const fingerprint = hash(JSON.stringify({
+  const fingerprint = hash(canonicalJsonStringify({
     request: { ...request, extraction_mode: effectiveExtractionMode },
     sourceDigest,
     analyzer: ANALYZER,

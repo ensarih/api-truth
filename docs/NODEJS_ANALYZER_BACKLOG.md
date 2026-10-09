@@ -1,8 +1,8 @@
 # Node.js analyzer expansion backlog
 
 **Status:** active analyzer priority, 2026-10-09
-**Current implementation:** `typescript-express@0.5.0` covers a bounded static
-Express subset. `nodejs-swagger2-document@0.13.0` reads selected Swagger 2 JSON/YAML
+**Current implementation:** `typescript-express@0.5.1` covers a bounded static
+Express subset. `nodejs-swagger2-document@0.14.0` reads selected Swagger 2 JSON/YAML
 declarations with flat parameter serialization and scalar/flat-array form and multipart-file
 extraction. IR 1.1 encoding and qualified export are implemented; runtime binding,
 runtime validation and broader constraint eligibility remain open. Qualified
@@ -13,7 +13,7 @@ default or statically configured CommonJS handler source candidates with separat
 Optional trusted captures establish observed handler binding for one exact
 source revision, environment and session. Production startup, future dispatch,
 response enforcement and installed framework verification remain unverified.
-`nodejs-routing-controllers@0.7.0` extracts a bounded literal decorator subset
+`nodejs-routing-controllers@0.8.0` extracts a bounded literal decorator subset
 and binds direct controller registrations. An opt-in, source-bound declaration
 profile can identify wrapper imports and emit unregistered candidate routes with
 owner-asserted prefix evidence, but cannot prove the startup entry point or
@@ -763,3 +763,10 @@ Analyzer selections can explicitly pin up to 16 ordered, unique `type_manifest` 
 ### Minimal Express API-key guard source proof (2026-10-09)
 
 `typescript-express@0.5.0` establishes a header API-key source requirement only for an exact single-app, single-route module and a first guard that rejects mismatched nonempty literal credentials with an empty 401 before continuing. Header names and evidence are emitted; expected credentials are omitted. Extra runtime imports, middleware, registration paths or mutations and unsupported guard control flow leave security unknown. Real analyzed source reaches strict catalog/OpenAPI preparation without fabricated security evidence. The proof concerns source semantics under standard Express, not deployed credentials or observed access control. See the [bounded analyzer scope](../analyzers/typescript/README.md).
+
+
+### Stable request identities and selected controller startup graph (2026-10-09)
+
+All five compiled analyzer profiles canonicalize JSON object-key order for reproducible request fingerprints. Regression tests previously failed for every profile when the same request was reordered; they now produce identical snapshot/result fingerprints without sorting arrays or changing values. Current profiles are Express `0.5.1`, routing-controllers `0.8.0`, Swagger document `0.14.0`, Swagger middleware `0.33.0` and OpenAPI 3 document `0.1.1`.
+
+Routing's explicit `production_entrypoint` option follows a bounded contained literal runtime import graph and only considers direct top-level framework registration in reachable files. Disconnected registrations, type-only imports, shadowed/destructured require, conditional/try-catch/dynamic loads and unknown external imports cannot establish that graph. Static deployment startup remains unverified. CLI/config/host option selection and configuration-change invalidation are tested. Broader decorator semantics and wrapper/composite profiles remain open.

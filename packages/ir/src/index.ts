@@ -12,3 +12,5 @@ export * from "./security.js";
 export * from "./validation.js";
 export * from "./versions.js";
 export * from "./views.js";
+
+export { canonicalJsonStringify } from "./canonical-json.js";

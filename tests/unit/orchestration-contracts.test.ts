@@ -357,6 +357,15 @@ describe("D08 orchestration contracts", () => {
     expect(calculateConfigurationImpact({fingerprint:"same",document:config()},{fingerprint:"same",document:next})).toEqual(["orders"]);
   });
 
+  test.each([
+    {production_entrypoint:"src/app.ts"},
+    {resolution_inputs:[{kind:"type_manifest",path:"api/swagger.yaml"}]},
+  ])("analyzer option changes invalidate the configured service",options=>{
+    const next=config();
+    Object.assign(next.repositories[0]!.services[0]!.analyzer,options);
+    expect(calculateConfigurationImpact({fingerprint:"same",document:config()},{fingerprint:"same",document:next})).toEqual(["orders"]);
+  });
+
   test("contains every malformed configuration pair behind a safe error", () => {
     const marker = "secret://configuration-pair";
     const validPair = { fingerprint: "valid", document: config() };

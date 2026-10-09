@@ -1,8 +1,13 @@
 {
   "name": "@api-truth/analyzer-typescript",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@api-truth/ir": "0.0.0", "typescript": "5.9.3" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@api-truth/ir": "0.0.0",
+    "typescript": "5.9.3"
+  }
 }

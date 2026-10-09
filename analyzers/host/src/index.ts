@@ -26,9 +26,11 @@ export function createConfiguredAnalyzer(options:{projectRoot:string;selection:u
   const ir=configuredAnalyzerIrVersion(selection);
   const profile=registrations.find(item=>item.identity.analyzer_id===selection.adapter_id
     && item.identity.analyzer_version===selection.adapter_version && item.ir===ir);
-  if(!profile)throw new Error("UNSUPPORTED_ANALYZER_SELECTION");
+  if(!profile || selection.production_entrypoint !== undefined && profile.identity.analyzer_id !== "nodejs-routing-controllers")
+    throw new Error("UNSUPPORTED_ANALYZER_SELECTION");
   const identity={...profile.identity};
   const adapter=profile.create({projectRoot:options.projectRoot,
+    ...(selection.production_entrypoint===undefined?{}:{productionEntrypoint:selection.production_entrypoint}),
     ...(options.trustedRuntimePublicKey===undefined?{}:{trustedRuntimePublicKey:options.trustedRuntimePublicKey})});
   return {async analyze(input:unknown):Promise<AnalyzerResult>{
     let request:ReturnType<typeof parseAnalyzerRequest>;

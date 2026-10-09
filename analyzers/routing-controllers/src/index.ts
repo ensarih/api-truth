@@ -1,4 +1,6 @@
+import {canonicalJsonStringify} from "../../../packages/ir/src/index.js";
 import { relative, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
 import ts from "typescript";
 import {
   deriveEndpointIdentity, parseAnalyzerRequest, parseAnalyzerResult,
@@ -7,14 +9,15 @@ import {
 import { digestSources, hash, inside, readSources } from "./source.js";
 import { parseRoutingProfile, type RoutingProfile } from "./profile.js";
 import { matchControllerGlob, resolveStaticExpression, resolveStaticPath } from "./controller-selection.js";
+import { buildProductionGraph, type ProductionGraph } from "./production-entrypoint.js";
 
 /** Literal legacy decorators with directly resolved routing-controllers registration. */
-export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.7.0" };
+export const ANALYZER = { analyzer_id: "nodejs-routing-controllers", analyzer_version: "0.8.0" };
 const literal = (node: ts.Node | undefined) => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 const decorators = (node: ts.Node) => ts.canHaveDecorators(node) ? ts.getDecorators(node) ?? [] : [];
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => { visit(node); ts.forEachChild(node, child => walk(child, visit)); };
 
-export function createAnalyzer(options: { projectRoot: string }) {
+export function createAnalyzer(options: { projectRoot: string; productionEntrypoint?: string }) {
   return { async analyze(input: unknown): Promise<AnalyzerResult> {
     const parsed = parseAnalyzerRequest(input);
     if (!parsed.ok) throw new Error("Invalid analyzer request");
@@ -34,6 +37,8 @@ export function createAnalyzer(options: { projectRoot: string }) {
     const started = Date.now();
     const budget = () => { if (Date.now() - started > request.limits.timeout_ms) throw new Error("Analysis time limit exceeded"); };
     const { files, root } = await readSources(options.projectRoot, request.source.service_root, request.limits.max_files, budget);
+    const production = options.productionEntrypoint === undefined ? undefined : buildProductionGraph(files, root,
+      options.productionEntrypoint, await realpath(options.projectRoot), budget);
     const digest = digestSources(files, root);
     const profilePath = profileInput === undefined ? undefined
       : resolve(root, relative(selectedRoot, resolve(options.projectRoot, profileInput.path)));
@@ -50,7 +55,7 @@ export function createAnalyzer(options: { projectRoot: string }) {
     request = { ...request, source: { ...request.source, source_digest: digest },
       resolution_inputs: [{ kind: "source_tree", path: request.source.service_root, digest },
         ...(profileInput && profileDigest ? [{ kind: "type_manifest" as const, path: profileInput.path, digest: profileDigest }] : [])] };
-    const result = extract(files, root, request, budget, profile);
+    const result = extract(files, root, request, budget, profile, production);
     if (Buffer.byteLength(JSON.stringify(result)) > request.limits.max_output_bytes) throw new Error("Analysis output limit exceeded");
     const validated = parseAnalyzerResult(result);
     if (!validated.ok) throw new Error("Analyzer produced invalid result");
@@ -63,10 +68,14 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 }
 
 function extract(files: Map<string, string>, root: string, request: AnalyzerRequest, budget: () => void,
-  profile?: RoutingProfile): AnalyzerResult {
+  profile?: RoutingProfile, production?: ProductionGraph): AnalyzerResult {
   const effectiveMode = request.extraction_mode === "incremental" ? "fallback_full_service" : request.extraction_mode;
-  const fingerprint = hash(JSON.stringify({ request: { ...request, extraction_mode: effectiveMode }, analyzer: ANALYZER,
-    compiler: ts.version, profile: "registered-legacy-7" }));
+  const fingerprint = hash(canonicalJsonStringify({ request: { ...request, extraction_mode: effectiveMode }, analyzer: ANALYZER,
+    compiler: ts.version, profile: "registered-legacy-7", production: production && {
+      entrypoint: production.entrypoint,
+      paths: [...production.paths].map(path => relative(root, path).replaceAll("\\", "/")).sort(),
+      issues: production.issues.map(issue => `${relative(root, issue.node.getSourceFile().fileName).replaceAll("\\", "/")}:${issue.code}:${issue.node.getStart()}`).sort(),
+    } }));
   const result: AnalyzerResult = {
     exchange_version: "1.0.0", ir_version: "1.0.0", identity_version: "1.0.0", request_id: request.request_id,
     result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`, analyzer: ANALYZER, source: request.source,
@@ -171,6 +180,7 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
     experimentalDecorators: true }, host);
   const checker = program.getTypeChecker();
   const sources = sourcePaths.map(path => program.getSourceFile(path)!).filter(Boolean);
+  const registrationSources = production ? sources.filter(source => production.paths.has(source.fileName)) : sources;
   const allowedDecoratorModules = new Set(["routing-controllers", ...(profile?.decoratorModules ?? [])]);
   const frameworkImport = (identifier: ts.Identifier): { kind: "named" | "namespace"; name: string; module: string } | undefined => {
     const symbol = checker.getSymbolAtLocation(identifier);
@@ -199,12 +209,16 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
   const registrations = new Map<ts.ClassDeclaration, Registration[]>();
   let setupCount = 0;
   let firstSetup: ts.CallExpression | undefined;
-  for (const source of sources) walk(source, node => {
+  for (const issue of production?.issues ?? []) diagnostic(issue.code, issue.node);
+  for (const source of registrationSources) walk(source, node => {
     if (!ts.isCallExpression(node)) return;
     const functionName = frameworkFunction(node.expression);
     if (!["createExpressServer", "useExpressServer", "createKoaServer", "useKoaServer"].includes(functionName ?? "")) return;
     setupCount++;
     firstSetup ??= node;
+    if (production && !(ts.isExpressionStatement(node.parent) && node.parent.parent === source)) {
+      diagnostic("conditional_registration_unresolved", node); return;
+    }
     for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
       if (ts.isFunctionLike(parent) || ts.isIfStatement(parent) || ts.isIterationStatement(parent, false)
         || ts.isSwitchStatement(parent) || ts.isConditionalExpression(parent)
@@ -266,8 +280,11 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
       }
     }
   });
+  const registeredFiles = new Set([...registrations.keys()].map(controller => controller.getSourceFile().fileName));
+  const analysisSources = production ? sources.filter(source => production.paths.has(source.fileName)
+    || registeredFiles.has(source.fileName)) : sources;
   let controllerCount = 0;
-  for (const source of sources) {
+  for (const source of analysisSources) {
     budget();
     for (const statement of source.statements) if (ts.isImportDeclaration(statement)
       && allowedDecoratorModules.has(literal(statement.moduleSpecifier) ?? "") && statement.importClause?.name)
@@ -518,9 +535,9 @@ function extract(files: Map<string, string>, root: string, request: AnalyzerRequ
         diagnostic("relative_reexport_unresolved", node);
     });
   }
-  if (firstSetup) diagnostic("startup_entrypoint_unverified", firstSetup);
-  if (controllerCount && !setupCount) diagnostic("controller_registration_unverified", sources[0]!);
-  else if (!controllerCount && sources.length) diagnostic("no_supported_controller", sources[0]!);
+  if (!production && firstSetup) diagnostic("startup_entrypoint_unverified", firstSetup);
+  if (controllerCount && !setupCount) diagnostic("controller_registration_unverified", analysisSources[0]!);
+  else if (!controllerCount && analysisSources.length) diagnostic("no_supported_controller", analysisSources[0]!);
   result.endpoints.sort((a, b) => a.identity.route_key.localeCompare(b.identity.route_key));
   result.evidence.sort((a, b) => a.evidence_id.localeCompare(b.evidence_id));
   result.claims.sort((a, b) => a.claim_id.localeCompare(b.claim_id));

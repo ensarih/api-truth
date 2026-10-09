@@ -9,11 +9,11 @@ network request or branch enumeration is performed.
 
 | Adapter | Version | IR |
 |---|---|---|
-| typescript-express | 0.5.0 | 1.0.0 |
-| nodejs-routing-controllers | 0.7.0 | 1.0.0 |
-| openapi3-document | 0.1.0 | 1.1.0 |
-| nodejs-swagger2-document | 0.13.0 | 1.1.0 |
-| nodejs-swagger-express-mw | 0.32.0 | 1.1.0 |
+| typescript-express | 0.5.1 | 1.0.0 |
+| nodejs-routing-controllers | 0.8.0 | 1.0.0 |
+| openapi3-document | 0.1.1 | 1.1.0 |
+| nodejs-swagger2-document | 0.14.0 | 1.1.0 |
+| nodejs-swagger-express-mw | 0.33.0 | 1.1.0 |
 
 These are bounded profiles; listing one does not certify the whole framework.
 The optional configuration IR field defaults to legacy 1.0.0, so Swagger
@@ -51,3 +51,5 @@ This prevents an unpinned receipt from silently changing a cached contract.
 
 
 An installation may pin an ordered `resolution_inputs` array of `{ "kind": "type_manifest", "path": "api/swagger/swagger.yaml" }` in the analyzer selection. Paths are normalized, project-relative and contained within the configured service; at most 16 unique manifests are allowed. The host rejects selected-input substitution before reading source. Standalone calls that omit this optional selection retain adapter-specific validation. Durable D08 workers require explicit configuration for every extra manifest, require actual SHA-256 digests, and conservatively reanalyze the service on branch updates with extra inputs. Runtime observations remain rejected until their independent identity and trust metadata are pinned. Document-only orchestration is still unsupported; its local CLI is available.
+
+For the routing profile only, `production_entrypoint` explicitly selects a contained project-relative file. The host passes its detached selection to the adapter, which scopes registrations to the bounded runtime import graph. Other profiles reject this option. Changing the option invalidates configuration analysis identity. Static reachability does not prove deployment startup.

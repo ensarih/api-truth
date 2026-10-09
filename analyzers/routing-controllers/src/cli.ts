@@ -4,7 +4,7 @@ import { ANALYZER, createAnalyzer } from "./index.js";
 
 export async function runCli(args: string[]): Promise<void> {
   const values = new Map<string, string>();
-  const allowed = new Set(["--source", "--service", "--revision", "--ir-version", "--profile"]);
+  const allowed = new Set(["--source", "--service", "--revision", "--ir-version", "--profile", "--entrypoint"]);
   for (let index = 0; index < args.length; index += 2) {
     const name = args[index]; const value = args[index + 1];
     if (!name || !allowed.has(name) || values.has(name) || !value || value.startsWith("--"))
@@ -25,7 +25,8 @@ export async function runCli(args: string[]): Promise<void> {
   };
   const parsed = parseAnalyzerRequest(candidate);
   if (!parsed.ok) throw new Error("Invalid analyzer request");
-  const result = await createAnalyzer({ projectRoot: resolve(values.get("--source")!) }).analyze(parsed.value);
+  const result = await createAnalyzer({ projectRoot: resolve(values.get("--source")!),
+    ...(values.has("--entrypoint") ? {productionEntrypoint: values.get("--entrypoint")!} : {}) }).analyze(parsed.value);
   for (const diagnostic of result.diagnostics) process.stderr.write(`${diagnostic.severity}: ${diagnostic.code}\n`);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

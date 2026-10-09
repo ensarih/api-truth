@@ -97,3 +97,17 @@ test("local command selects a static controller glob and an asserted environment
   expect(result.diagnostics.map((diagnostic: { code: string }) => diagnostic.code))
     .toContain("controller_glob_source_projection_unverified");
 }, 30000);
+
+test("local command explicitly selects a contained production entrypoint",()=>{
+ const args=["--source",resolve("fixtures/nodejs/routing-controllers/orders/src"),"--service","orders","--revision","a".repeat(40),"--entrypoint","app.ts"];
+ const output=run(args);
+ expect(output.status).toBe(0);
+ const result=JSON.parse(output.stdout);
+ expect(parseAnalyzerResult(result).ok).toBe(true);
+ expect(result.endpoints).toHaveLength(2);
+ expect(result.diagnostics.map((item:{code:string})=>item.code)).toContain("production_entrypoint_deployment_unverified");
+ const invalid=run([...args.slice(0,-1),"../private-entrypoint.ts"]);
+ expect(invalid.status).not.toBe(0);
+ expect(invalid.stdout).toBe("");
+ expect(invalid.stderr).not.toContain("private-entrypoint");
+});

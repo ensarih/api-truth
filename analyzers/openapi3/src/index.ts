@@ -1,3 +1,4 @@
+import {canonicalJsonStringify} from "../../../packages/ir/src/index.js";
 import {createHash} from "node:crypto";
 import {resolve} from "node:path";
 import {
@@ -9,7 +10,7 @@ import {parseStrictJson, StrictJsonError} from "../../nodejs/src/strict-json.js"
 import {parseStrictYaml, StrictYamlError} from "../../nodejs/src/strict-yaml.js";
 
 /** A selected API document declares a contract; no server URL is treated as an in-process route. */
-export const ANALYZER = {analyzer_id: "openapi3-document", analyzer_version: "0.1.0"};
+export const ANALYZER = {analyzer_id: "openapi3-document", analyzer_version: "0.1.1"};
 type Obj = Record<string, unknown>;
 const obj = (value: unknown): value is Obj => value !== null && typeof value === "object" && !Array.isArray(value);
 const part = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1");
@@ -61,7 +62,7 @@ export async function analyze(request: AnalyzerRequest): Promise<AnalyzerResult>
 }
 
 export function extractOpenApi3Document(request: AnalyzerRequest, documentPath: string, text: string): AnalyzerResult {
-  const fingerprint = hash(JSON.stringify({request, parser: "openapi3-strict-json-yaml-1", documentPath}));
+  const fingerprint = hash(canonicalJsonStringify({request, parser: "openapi3-strict-json-yaml-1", documentPath}));
   const result: AnalyzerResult = {exchange_version: "1.0.0", ir_version: request.ir_version, identity_version: "1.0.0",
     request_id: request.request_id, result_id: `result-${fingerprint}`, snapshot_id: `snapshot-${fingerprint}`,
     analyzer: request.analyzer, source: request.source, status: "success", completed_at: new Date().toISOString(),

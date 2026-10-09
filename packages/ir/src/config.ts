@@ -46,14 +46,17 @@ const EnvironmentConfigSchema = Type.Object({
   deployment_authority: DeploymentAuthoritySchema,
 }, { additionalProperties: false });
 
+const SelectedSourcePathSchema = Type.String({minLength: 1, maxLength: 1024,
+  pattern: "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_@+.-]+(?:/[A-Za-z0-9_@+.-]+)*$"});
+
 export const AnalyzerSelectionSchema = Type.Object({
   adapter_id: Type.String({ minLength: 1 }),
   adapter_version: Type.String({ minLength: 1 }),
   ir_version: Type.Optional(IrVersionSchema),
+  production_entrypoint: Type.Optional(SelectedSourcePathSchema),
   resolution_inputs: Type.Optional(Type.Array(Type.Object({
     kind: Type.Literal("type_manifest"),
-    path: Type.String({minLength: 1, maxLength: 1024,
-      pattern: "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_@+.-]+(?:/[A-Za-z0-9_@+.-]+)*$"}),
+    path: SelectedSourcePathSchema,
   }, {additionalProperties: false}), {maxItems: 16, uniqueItems: true})),
 }, { additionalProperties: false });
 export type AnalyzerSelection = Static<typeof AnalyzerSelectionSchema>;

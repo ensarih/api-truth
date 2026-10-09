@@ -1,6 +1,6 @@
 # routing-controllers analyzer profile
 
-`nodejs-routing-controllers@0.7.0` reads a bounded service source tree and emits
+`nodejs-routing-controllers@0.8.0` reads a bounded service source tree and emits
 a D03 analyzer result. It never executes project code or resolves packages.
 
 Run it locally with `npm run extract:routing-controllers -- --source <service-tree>
@@ -36,6 +36,30 @@ joins the controller and action paths. Source-to-runtime glob projection remains
 unverified, so glob-derived routes have incomplete coverage and inferred route
 claims. Without an explicitly selected declaration profile, unregistered
 decorated classes emit no endpoints.
+
+Hosts can optionally pass `productionEntrypoint` to `createAnalyzer`, using a
+normalized project-relative path such as `services/orders/src/main.ts`. In
+this mode the analyzer follows a bounded graph of literal relative runtime
+imports and re-exports, then accepts only direct source-level registration
+statements in modules reachable from that entrypoint. Unreachable registrations
+do not emit endpoints. Type-only imports do not make a module reachable;
+dynamic imports, conditional or nested `require` calls, unresolved local imports,
+ambiguous paths, and resource-limit failures produce diagnostics and incomplete
+coverage. Shadowed `require` identifiers are never treated as module edges.
+Known `routing-controllers`, Express, Koa, and Node built-in imports are not
+traversed; other bare runtime package imports are diagnosed as unresolved
+external source. Destructured bindings and assignments to `require` are treated
+as shadowing, and `require` inside `try`/`catch` stays unresolved.
+The selected entrypoint and resolved graph participate in the reproducibility
+fingerprint. The selected service tree remains digest-bound as a whole.
+Coverage still reports `production_entrypoint_deployment_unverified`; the
+selection does not prove that a deployment invokes that source file.
+
+This option proves only bounded static source reachability. It does not execute
+the application, establish which command a deployment uses, or prove deployed
+startup, environment configuration, runtime controller loading, or route
+availability. Without this option, the existing extraction behavior is
+unchanged.
 
 For services that bootstrap controllers through a separate wrapper, place a
 profile JSON file inside the selected production source tree and pass its
@@ -101,3 +125,6 @@ stderr. It reports incomplete coverage until the startup entry point can be
 verified. The focused tests are
 `tests/unit/routing-controllers-analyzer.test.ts` and
 `tests/contract/routing-controllers-cli.test.ts`.
+
+
+The local command accepts `--entrypoint app.ts` to enable this mode relative to `--source`. Installation analyzer selections use `production_entrypoint`; it is pinned in configuration identity. Omitting it keeps explicit declaration discovery. Request object key order does not affect result identities; entrypoint choice, graph changes and source bytes do.

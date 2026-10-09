@@ -1,6 +1,6 @@
 # Node.js Swagger 2 analyzers
 
-`nodejs-swagger2-document@0.13.0` reads one explicitly selected, contained
+`nodejs-swagger2-document@0.14.0` reads one explicitly selected, contained
 Swagger 2 **JSON or YAML** file. It produces D03 analyzer results for declared
 operations, parameters, response status/media/schema, definitions, evidence,
 claims, dependencies, and scoped diagnostics. The selected file is supplied as
@@ -129,7 +129,7 @@ Run the local checks with `npm run check`. The focused tests are in
 
 ## Direct swagger-express-mw registration
 
-`nodejs-swagger-express-mw@0.32.0` is a separate, explicitly selected profile.
+`nodejs-swagger-express-mw@0.33.0` is a separate, explicitly selected profile.
 It reads a bounded service tree and the exact default file
 `api/swagger/swagger.yaml`. The first supported source shape is a root entrypoint
 that imports `express` and `swagger-express-mw`, creates an Express app, and
@@ -844,3 +844,6 @@ The standalone document profile remains `0.13.0`.
 Validation: 1,000 offline tests and 58 pinned runtime cases. Runtime cases cover
 matching closed objects, extra fields and reusable definition provenance.
 Independent review found no blocker.
+
+
+Document `0.14.0` and middleware `0.33.0` use canonical JSON key ordering in request/result identity fingerprints. Reordering request object properties does not change the result identity; ordered arrays and changed values still do. Earlier dated profile notes describe historical versions.
