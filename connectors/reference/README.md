@@ -86,3 +86,29 @@ network call, then recheck them after the call in its final transaction. Only
 delivery ID never supply a branch revision or ordering token. Provider
 authentication installation, confirmed absence, pull-request state, source
 materialization and deployment/artifact proof remain separate integrations.
+
+## Repository-restricted GitHub App installation tokens
+
+`createGitHubInstallationTokenResolver` creates an uncached resolver closed over
+one host-configured App, installation, account, repository ID/full name, and
+opaque signing-key reference. It asks a trusted sign-only host callback to sign
+an internally constructed short-lived RS256 App JWT; the callback never receives
+a caller JWT or chooses the App, installation, repository, or secret reference.
+The resolver verifies the installation's App/account binding and the repository's
+installation, then requests an installation token with exactly one configured
+`repository_ids` value and `contents: read`. It checks the token response's
+selected scope, permissions, and expiry. If GitHub includes its optional
+`repositories` listing, it must contain exactly the configured repository. The
+request itself always carries the repository restriction; the resolver does not
+omit it, because GitHub otherwise grants all repositories available to the
+installation. See GitHub's [installation-token API](https://docs.github.com/en/rest/apps/apps?apiVersion=2022-11-28)
+and [JWT requirements](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
+
+The host must perform its source-access grant check before calling this resolver.
+The token and callback do not establish API Truth authorization. Keep secrets and
+tokens out of logs; this resolver does not cache or persist them. Its fixed
+`api.github.com` origin, deadline, and bounded strict-JSON response handling are
+for GitHub.com only. Real App credentials, installation grants, and repository
+permissions still require host deployment validation.
+
+Expiry validation permits at most one hour plus a 60-second clock-skew allowance from a valid host clock. The repository-installation read rechecks App identity and suspension before token minting.

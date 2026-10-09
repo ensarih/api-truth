@@ -897,3 +897,12 @@ Validation: independent service review, clean tracked-source install/typecheck a
 Portal 0.1.0 `POST /api/examples` and MCP 0.1.0 `api_truth_get_synthetic_example` expose the authorized service only when the host configures it. Requests name one repository, service, environment, expected checkpoint and policy ID; tenant/principal come from authentication. Caller property paths, schemas, snapshots and policy bodies are rejected. Existing byte bounds and fixed error mapping apply. The read-only tool returns explicitly synthetic, non-normative results. The portal browser UI, observed examples and retention remain separate work.
 
 Validation: independent surface review, exact clean install/typecheck and all 1,491 offline tests passed. Eleven observation-query PostgreSQL tests include equality of direct service, portal and MCP output on the same pin and denial on both surfaces after revocation. Four new surface contract tests cover strict requests, optional capability, fixed errors and byte bounds.
+
+
+### Repository-restricted GitHub App token resolver — D12 credential boundary (2026-10-09)
+
+A separate trusted host resolver builds short-lived RS256 App JWT claims through a sign-only secret service. Fixed App/installation/account/repository bindings are verified at exact provider endpoints before requesting a token for exactly one numeric repository ID and contents-read permission. Repository installation App identity and suspension are rechecked. The response must retain selected repository scope, bounded future expiry and only contents/metadata read permissions; optional returned repository lists must match exactly. No token cache, persistence, branch/repository enumeration or credential-bearing errors are introduced.
+
+This provider credential flow does not establish this host's source-access authorization or deployment state. A protected live host still needs operator-provisioned App/installation/secret bindings, authorization and lease/configuration fencing. Offline tests verify transport and protocol behavior only; real GitHub credential acceptance remains open.
+
+Validation: independent review and extra regression checks for App/suspension rechecks and invalid final clock; clean tracked-source install/typecheck and all 1,513 offline tests passed. Twenty-two token resolver tests include actual synthetic RSA JWT verification and composition with the exact branch reader; no live credential was minted in these tests.
