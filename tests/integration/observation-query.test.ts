@@ -5,7 +5,7 @@ import {afterEach,beforeEach,expect,test,vi} from "vitest";
 import {snapshotContentSha256,snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
 import {applyEnvironmentMigrations} from "../../packages/environment/src/migrations.js";
 import {type ContractSnapshot} from "../../packages/ir/src/index.js";
-import {applyObservationMigrations} from "../../packages/observations/src/index.js";
+import {applyObservationMigrations,createSyntheticExampleService} from "../../packages/observations/src/index.js";
 import {applyOpenApiMigrations} from "../../packages/openapi/src/migrations.js";
 import {canonicalOrchestrationHash} from "../../packages/orchestration/src/canonical.js";
 import {applyOrchestrationMigrations} from "../../packages/orchestration/src/migrations.js";
@@ -176,4 +176,56 @@ test("historical selectors and invalid bounds fail before database reads",async(
     .rejects.toMatchObject({code:"INVALID_QUERY_OBSERVATION"});
   await expect(query().readMetadataObservations(context,selection({kind:"environment",environment}),{limit:1,endpointId:"missing"}))
     .rejects.toMatchObject({code:"QUERY_NOT_FOUND_OR_DENIED"});
+});
+
+
+const exampleService=(readContract=query().readContract)=>createSyntheticExampleService({
+  queryReader:{readContract},policies:[{policyId:"customer-summary",tenantId,repositoryId,serviceId,environment,
+    policy:{version:"synthetic-examples-1",endpointId:"ep-get",direction:"response",statusCode:200,
+      mediaType:"application/json",propertyPaths:["/id"]}}],
+});
+const exampleRequest=()=>({policyId:"customer-summary",selection:selection({kind:"environment",environment,
+  expectedCheckpointVersion:"7"})});
+
+test("synthetic examples use two real authorized environment reads and exact static policy",async()=>{
+  const read=vi.fn(query().readContract);
+  const result=await exampleService(read).generate(context,exampleRequest());
+  expect(result).toMatchObject({status:"generated",kind:"synthetic_example",nonNormative:true,
+    scope:{tenantId,repositoryId,serviceId,environment,endpointId:"ep-get",checkpointVersion:"7",
+      snapshotId:snapshot.snapshot_id},value:{id:"string"}});
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(await exampleService().generate(context,{...exampleRequest(),policyId:"not-configured"}))
+    .toMatchObject({status:"withheld",diagnostics:[{ruleId:"policy_not_configured",count:1}]});
+});
+
+test("revoked catalog grants prevent synthetic example delivery",async()=>{
+  await database.pool.query(`UPDATE ${schema}.principal_scope_grants SET active=false
+    WHERE tenant_id=$1 AND principal_id=$2`,[tenantId,principalId]);
+  await expect(exampleService().generate(context,exampleRequest()))
+    .rejects.toMatchObject({code:"EXAMPLE_NOT_FOUND_OR_DENIED"});
+});
+
+test("grant revocation between authorized example reads prevents delivery",async()=>{
+  const actual=query().readContract;let reads=0;
+  const read:typeof actual=async(...args)=>{
+    const result=await actual(...args);
+    if(++reads===1)await database.pool.query(`UPDATE ${schema}.principal_scope_grants SET active=false
+      WHERE tenant_id=$1 AND principal_id=$2`,[tenantId,principalId]);
+    return result;
+  };
+  await expect(exampleService(read).generate(context,exampleRequest()))
+    .rejects.toMatchObject({code:"EXAMPLE_NOT_FOUND_OR_DENIED"});
+  expect(reads).toBe(1);
+});
+
+test("serving checkpoint advancement between example reads prevents stale delivery",async()=>{
+  const actual=query().readContract;let reads=0;
+  const read:typeof actual=async(...args)=>{
+    const result=await actual(...args);
+    if(++reads===1)await database.pool.query(`UPDATE ${schema}.environment_serving_checkpoints
+      SET version=8 WHERE tenant_id=$1`,[tenantId]);
+    return result;
+  };
+  await expect(exampleService(read).generate(context,exampleRequest()))
+    .rejects.toMatchObject({code:"EXAMPLE_STALE_CONTEXT"});
 });

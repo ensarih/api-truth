@@ -881,3 +881,12 @@ Validation: independent review, exact clean install/typecheck and all 1,480 offl
 Both exact branch and pull-request reconciliation verify the active configuration fingerprint in a short transaction before invoking a provider port. A stale leased job fails as superseded with no provider request. Completion still rechecks lease, active configuration and subject generation; no database transaction spans network I/O. Provider-source authorization remains a trusted host responsibility, distinct from catalog reader grants.
 
 Validation: independent lock/transaction review, clean tracked-source install/typecheck and all 297 PostgreSQL tests passed. Branch and PR regression cases preserve an uncancelled lease while changing the active configuration and prove zero provider calls and no state promotion.
+
+
+### Authorized synthetic-example service — P3 delivery boundary (2026-10-09)
+
+Observations 0.4.0 adds a service using a trusted authorized QueryReader and detached static policies bound to tenant/repository/service/environment. Caller requests contain only a policy ID and an explicit environment selection with expected checkpoint. Policy lookup follows the first authorized read. Generation is followed by another authorized read and exact snapshot/revision/config/checkpoint/source-digest comparison; stale context or revoked grants prevent delivery. No caller-supplied policy, view or traffic is accepted. Fixed errors avoid raw storage/reader details.
+
+Real PostgreSQL tests use the current environment resolver and catalog grants to verify generation, absent policy, revocation before and between reads, and checkpoint advancement. Surface delivery and observed-example lifecycle remain separate gates.
+
+Validation: independent service review, clean tracked-source install/typecheck and all 1,487 offline tests passed; ten observation-query PostgreSQL tests include four real authorized-service scenarios. Delivery is denied after a catalog grant revocation or environment checkpoint change between the two reads.
