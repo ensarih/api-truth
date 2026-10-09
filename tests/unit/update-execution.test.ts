@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { ANALYZER, createAnalyzer } from "../../analyzers/typescript/src/index.js";
+import {ANALYZER as SWAGGER_DOCUMENT, createAnalyzer as createSwaggerDocumentAnalyzer}
+  from "../../analyzers/nodejs/src/index.js";
+import {ANALYZER as OPENAPI_DOCUMENT, createAnalyzer as createOpenApiDocumentAnalyzer}
+  from "../../analyzers/openapi3/src/index.js";
 import { contractSnapshotFromAnalyzerResult } from "../../packages/catalog/src/index.js";
 import {
   parseAnalyzerResult,
@@ -149,6 +153,77 @@ afterAll(async () => {
 });
 
 describe("D07 safe update execution", () => {
+  test.each([
+    ["Swagger 2", SWAGGER_DOCUMENT, createSwaggerDocumentAnalyzer,
+      JSON.stringify({swagger: "2.0", info: {title: "Orders", version: "1"},
+        paths: {"/orders": {get: {responses: {"200": {description: "Found"}}}}}})],
+    ["OpenAPI 3.0", OPENAPI_DOCUMENT, createOpenApiDocumentAnalyzer,
+      JSON.stringify({openapi: "3.0.3", info: {title: "Orders", version: "1"},
+        paths: {"/orders": {get: {responses: {"200": {description: "Found"}}}}}})],
+  ] as const)("fully analyzes the exact standalone %s document profile", async (_name, analyzerIdentity,
+    createDocumentAnalyzer, documentText) => {
+    const root = await makeRoot({"api/document.json": documentText});
+    const documentDigest = `sha256:${createHash("sha256").update("api/document.json").update("\0")
+      .update(documentText).digest("hex")}`;
+    const plan = updatePlan(baseSnapshot, documentDigest, ["api/document.json"],
+      {analyzer: analyzerIdentity, ir_version: "1.1.0"});
+    expect(plan.action).toBe("analyze_full_service");
+    const documentRequest = request(targetRevision, documentDigest, "document-update",
+      ["api/document.json"], "fallback_full_service");
+    documentRequest.analyzer = {...analyzerIdentity};
+    documentRequest.ir_version = "1.1.0";
+    documentRequest.resolution_inputs = [{kind: "type_manifest", path: "api/document.json", digest: documentDigest}];
+    const analyzer = createDocumentAnalyzer({projectRoot: root});
+    const output = await executeUpdate({plan, request: documentRequest,
+      base_snapshot: baseSnapshot, config_fingerprint: configFingerprint}, analyzer);
+    expect(output.analyzer_result?.status).toBe("partial");
+    expect(output.target_snapshot.source.source_digest).toBe(documentDigest);
+    expect(output.target_snapshot.endpoints).toHaveLength(1);
+  });
+
+  test("standalone documents reject wrong adapter, extra inputs, wrong path/digest, and reuse", async () => {
+    const documentText = JSON.stringify({swagger: "2.0", info: {title: "Orders", version: "1"},
+      paths: {"/orders": {get: {responses: {"200": {description: "Found"}}}}}});
+    const root = await makeRoot({"api/document.json": documentText});
+    const documentDigest = `sha256:${createHash("sha256").update("api/document.json").update("\0")
+      .update(documentText).digest("hex")}`;
+    const plan = updatePlan(baseSnapshot, documentDigest, ["api/document.json"],
+      {analyzer: SWAGGER_DOCUMENT, ir_version: "1.1.0"});
+    const valid = request(targetRevision, documentDigest, "document-negative",
+      ["api/document.json"], "fallback_full_service");
+    valid.analyzer = {...SWAGGER_DOCUMENT};
+    valid.ir_version = "1.1.0";
+    valid.resolution_inputs = [{kind: "type_manifest", path: "api/document.json", digest: documentDigest}];
+    const analyze = vi.fn(createSwaggerDocumentAnalyzer({projectRoot: root}).analyze);
+    const reject = async (candidate: AnalyzerRequest, candidatePlan = plan) => {
+      await expect(executeUpdate({plan: candidatePlan, request: candidate,
+        base_snapshot: baseSnapshot, config_fingerprint: configFingerprint}, {analyze}))
+        .rejects.toMatchObject({code: expect.stringMatching(/^UPDATE_(?:SCOPE|ANALYSIS)_MISMATCH$/)});
+      expect(analyze).not.toHaveBeenCalled();
+    };
+    await reject({...structuredClone(valid), analyzer: {...SWAGGER_DOCUMENT, analyzer_version: "0.13.0"}});
+    await reject({...structuredClone(valid), ir_version: "1.0.0"});
+    await reject({...structuredClone(valid), resolution_inputs: [{kind: "type_manifest",
+      path: "api/other.json", digest: documentDigest}]});
+    await reject({...structuredClone(valid), resolution_inputs: [{kind: "type_manifest",
+      path: "api/document.json", digest: `sha256:${"0".repeat(64)}`}]});
+    await reject({...structuredClone(valid), source: {...valid.source,
+      source_digest: `sha256:${"0".repeat(64)}`}});
+    await reject({...structuredClone(valid), resolution_inputs: [...valid.resolution_inputs,
+      {kind: "source_tree", path: ".", digest: documentDigest}]});
+    await reject({...structuredClone(valid), resolution_inputs: [...valid.resolution_inputs,
+      {kind: "runtime_observation", path: "receipt.json", digest: documentDigest}]});
+    const baseRequest = {...structuredClone(valid), request_id: "document-base",
+      source: {...valid.source, immutable_revision: baseRevision}, extraction_mode: "baseline" as const,
+      changed_paths: []};
+    const baseResult = await createSwaggerDocumentAnalyzer({projectRoot: root}).analyze(baseRequest);
+    const documentBase = contractSnapshotFromAnalyzerResult(baseResult, configFingerprint).snapshot;
+    const reusePlan = updatePlan(documentBase, documentDigest, [],
+      {analyzer: SWAGGER_DOCUMENT, ir_version: "1.1.0"});
+    expect(reusePlan.action).toBe("analyze_full_service");
+    await reject({...structuredClone(valid), changed_paths: [], extraction_mode: "baseline"}, reusePlan);
+  });
+
   test("runs full-service analysis with bounded contained type-manifest inputs", async () => {
     const requestWithManifests = structuredClone(successRequest);
     requestWithManifests.resolution_inputs.push(

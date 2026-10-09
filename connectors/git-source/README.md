@@ -39,11 +39,16 @@ to orchestration's `AnalysisWorkerPorts` contract. The caller supplies an
 explicit `(tenantId, repositoryId) → absolute local repository path` allowlist;
 the configured repository locator is never interpreted as a filesystem path.
 Resolve accepts only a full immutable commit ID and a source profile compiled
-into the analyzer host: Express, routing-controllers, or swagger-express-mw.
-Document-only profiles and runtime observations are rejected. Configured
+into the analyzer host: Express, routing-controllers, swagger-express-mw,
+standalone Swagger 2, or standalone OpenAPI 3.0. Runtime observations are
+rejected. Standalone document profiles require an explicit IR 1.1 selection
+and exactly one owner-configured, contained `type_manifest`; their request has
+that manifest only, with no `source_tree`, entrypoint, or extra inputs. The
+source and manifest digest both use the selected project-relative path, a NUL
+separator, and the exact UTF-8 document bytes. Those profiles describe
+declarations only and do not establish application route binding. Configured
 routing-controller manifests and the middleware's exact default Swagger
-document are read from the same committed tree and receive the digest format
-expected by their adapter.
+document retain their adapter-specific digest formats.
 
 The adapter asks the compiled analyzer host to measure the selected source
 projection, then returns a normalized request containing those measured

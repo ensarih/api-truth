@@ -29,6 +29,12 @@ const supportedAdapters = new Set([
   "typescript-express@0.5.1",
   "nodejs-routing-controllers@0.8.0",
   "nodejs-swagger-express-mw@0.33.0",
+  "nodejs-swagger2-document@0.14.0",
+  "openapi3-document@0.1.1",
+]);
+const standaloneDocumentAdapters = new Set([
+  "nodejs-swagger2-document@0.14.0",
+  "openapi3-document@0.1.1",
 ]);
 
 function boundedLimits(value: Limits): boolean {
@@ -40,7 +46,8 @@ function boundedLimits(value: Limits): boolean {
       && value.maxSessions > 0 && value.maxSessions <= MAX_SESSIONS);
 }
 
-function validateSelection(input: ResolveInput): { expectedInputs: Array<{ kind: "type_manifest"; path: string }>; irVersion: "1.0.0" | "1.1.0" } {
+function validateSelection(input: ResolveInput): { expectedInputs: Array<{ kind: "type_manifest"; path: string }>;
+  irVersion: "1.0.0" | "1.1.0"; standaloneDocument: boolean } {
   const selection = input.service.analyzer;
   const adapterKey = `${selection.adapter_id}@${selection.adapter_version}`;
   const profile = configuredAnalyzerProfiles.find(item => item.adapter_id === selection.adapter_id
@@ -49,6 +56,7 @@ function validateSelection(input: ResolveInput): { expectedInputs: Array<{ kind:
   if (configuredAnalyzerIrVersion(selection) !== profile.ir_version
     || selection.ir_version !== undefined && selection.ir_version !== profile.ir_version) fail();
   const root = input.service.root;
+  const standaloneDocument = standaloneDocumentAdapters.has(adapterKey);
   if (!normalizedProjectPath(root) || root.startsWith("/") || root.includes("\\")) fail();
   const expectedInputs = selection.resolution_inputs ?? [];
   if (expectedInputs.some(item => item.kind !== "type_manifest" || !normalizedProjectPath(item.path)
@@ -64,7 +72,9 @@ function validateSelection(input: ResolveInput): { expectedInputs: Array<{ kind:
     if (selection.production_entrypoint !== undefined || expectedInputs.length !== 1
       || expectedInputs[0]?.path !== expectedDocument) fail();
   }
-  return { expectedInputs: [...expectedInputs], irVersion: profile.ir_version };
+  if (standaloneDocument && (selection.ir_version !== "1.1.0" || selection.production_entrypoint !== undefined
+    || expectedInputs.length !== 1)) fail();
+  return { expectedInputs: [...expectedInputs], irVersion: profile.ir_version, standaloneDocument };
 }
 
 async function manifestDigest(tree: MaterializedGitSource, adapterId: string,
@@ -82,6 +92,9 @@ async function manifestDigest(tree: MaterializedGitSource, adapterId: string,
     return sha256(`${relativePath}\0${text}`);
   }
   if (adapterId === "nodejs-swagger-express-mw") return sha256(`${configured.path}\0${text}`);
+  if (adapterId === "nodejs-swagger2-document" || adapterId === "openapi3-document") {
+    return sha256(`${configured.path}\0${text}`);
+  }
   return fail();
 }
 
@@ -161,10 +174,10 @@ export function createLocalGitAnalysisPorts(options: {
             source_digest: "pending",
             access_label: rawInput.repository.access_scope_id,
           };
-          const resolutionInputs = [
-            { kind: "source_tree" as const, path: rawInput.service.root, digest: "pending" },
-            ...selection.expectedInputs.map(item => ({ ...item, digest: "pending" })),
-          ];
+          const resolutionInputs = selection.standaloneDocument
+            ? selection.expectedInputs.map(item => ({ ...item, digest: "pending" }))
+            : [{ kind: "source_tree" as const, path: rawInput.service.root, digest: "pending" },
+              ...selection.expectedInputs.map(item => ({ ...item, digest: "pending" }))];
           const mode = rawInput.baseRevision === undefined ? "baseline" as const : "fallback_full_service" as const;
           const probeRaw = {
             exchange_version: ANALYZER_EXCHANGE_VERSION, ir_version: selection.irVersion, request_id: requestId,
@@ -180,13 +193,15 @@ export function createLocalGitAnalysisPorts(options: {
           if (!probe.ok) return fail();
           const probedResult = await host.analyze(probe.value);
           if (!/^sha256:[a-f0-9]{64}$/i.test(probedResult.source.source_digest)) return fail();
-          const normalizedInputs: Array<{ kind: "source_tree" | "type_manifest"; path: string; digest: string }> = [
-            { kind: "source_tree" as const, path: rawInput.service.root, digest: probedResult.source.source_digest },
-          ];
-          for (const item of selection.expectedInputs) normalizedInputs.push({
-            kind: "type_manifest" as const, path: item.path,
-            digest: await manifestDigest(tree, rawInput.service.analyzer.adapter_id, item),
-          });
+          const normalizedInputs: Array<{ kind: "source_tree" | "type_manifest"; path: string; digest: string }> =
+            selection.standaloneDocument ? [] : [
+              { kind: "source_tree", path: rawInput.service.root, digest: probedResult.source.source_digest },
+            ];
+          for (const item of selection.expectedInputs) {
+            const digest = await manifestDigest(tree, rawInput.service.analyzer.adapter_id, item);
+            if (selection.standaloneDocument && digest !== probedResult.source.source_digest) return fail();
+            normalizedInputs.push({ kind: "type_manifest", path: item.path, digest });
+          }
           const parsed = parseAnalyzerRequest({ ...probe.value, source: { ...probe.value.source,
             source_digest: probedResult.source.source_digest }, resolution_inputs: normalizedInputs });
           if (!parsed.ok) return fail();

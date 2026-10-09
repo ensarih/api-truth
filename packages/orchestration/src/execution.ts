@@ -70,6 +70,14 @@ function fail(code: "JOB_EXECUTION_FAILED" | "JOB_LEASE_CONFLICT" | "JOB_CANCELL
   | "PROMOTION_INELIGIBLE" | "REVISION_ASSOCIATION_CONFLICT"): never { throw new OrchestrationError(code); }
 const equal = (left: unknown, right: unknown): boolean => canonicalOrchestrationJson(left) === canonicalOrchestrationJson(right);
 const digest = /^sha256:[a-f0-9]{64}$/;
+const documentProfiles = new Set([
+  "nodejs-swagger2-document@0.14.0",
+  "openapi3-document@0.1.1",
+]);
+const isDocumentProfile = (analyzerId: string, version: string, irVersion: string): boolean =>
+  irVersion === "1.1.0" && documentProfiles.has(`${analyzerId}@${version}`);
+const containedDocument = (root: string, path: string): boolean =>
+  path !== "." && (root === "." || path.startsWith(`${root}/`));
 
 const validateLease = async (client: PoolClient, job: Job | undefined, worker: WorkerIdentity, lease: JobLease): Promise<Job> => {
   if (job === undefined || job.state !== "leased" || job.lease_worker_id !== worker.workerId
@@ -148,10 +156,22 @@ const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
     if (!parsed.ok) fail("JOB_EXECUTION_FAILED");
     const request = parsed.value;
     const configuredInputs=service.analyzer.resolution_inputs ?? [];
-    const extraInputs=request.resolution_inputs.slice(1);
-    if(!equal(extraInputs.map(input=>({kind:input.kind,path:"path" in input ? input.path : undefined})),configuredInputs)
-      || extraInputs.some(input=>input.kind!=="type_manifest" || !digest.test(input.digest)
-        || !(service.root==="." || input.path.startsWith(`${service.root}/`)))) fail("JOB_EXECUTION_FAILED");
+    const documentProfile = isDocumentProfile(job.analyzer_adapter_id, job.analyzer_adapter_version, job.ir_version);
+    if (documentProfile) {
+      const configured = configuredInputs[0];
+      const selected = request.resolution_inputs[0];
+      if (service.analyzer.production_entrypoint !== undefined
+        || configuredInputs.length !== 1 || configured?.kind !== "type_manifest"
+        || !containedDocument(service.root, configured.path)
+        || request.resolution_inputs.length !== 1 || selected?.kind !== "type_manifest"
+        || selected.path !== configured.path || !digest.test(selected.digest)
+        || request.source.source_digest !== selected.digest) fail("JOB_EXECUTION_FAILED");
+    } else {
+      const extraInputs=request.resolution_inputs.slice(1);
+      if(!equal(extraInputs.map(input=>({kind:input.kind,path:"path" in input ? input.path : undefined})),configuredInputs)
+        || extraInputs.some(input=>input.kind!=="type_manifest" || !digest.test(input.digest)
+          || !(service.root==="." || input.path.startsWith(`${service.root}/`)))) fail("JOB_EXECUTION_FAILED");
+    }
     if (request.exchange_version !== job.exchange_version || request.ir_version !== job.ir_version
       || request.analyzer.analyzer_id !== job.analyzer_adapter_id
       || request.analyzer.analyzer_version !== job.analyzer_adapter_version
@@ -161,10 +181,10 @@ const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
       // Capture receipts affect output independently of immutable source bytes.
       // They need a separately pinned job input before orchestration may accept them.
       || request.resolution_inputs.some(input => input.kind === "runtime_observation")
-      || request.resolution_inputs.length === 0
-      || request.resolution_inputs[0]?.kind !== "source_tree"
-      || request.resolution_inputs[0].path !== job.service_root
-      || request.resolution_inputs[0].digest !== request.source.source_digest
+      || !documentProfile && (request.resolution_inputs.length === 0
+        || request.resolution_inputs[0]?.kind !== "source_tree"
+        || request.resolution_inputs[0].path !== job.service_root
+        || request.resolution_inputs[0].digest !== request.source.source_digest)
       || request.execution_policy.network_access !== false || request.execution_policy.side_effects !== "none"
       || !Array.isArray(raw.changedPaths) || typeof raw.changedPathsComplete !== "boolean") fail("JOB_EXECUTION_FAILED");
     const paths = [...raw.changedPaths];
@@ -172,6 +192,9 @@ const resolveRequest = async (prepared: Prepared, ports: AnalysisWorkerPorts,
       || path === job.service_root || path.startsWith(`${job.service_root}/`)))
       || !equal(paths, [...new Set(paths)].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))))
       || !raw.changedPathsComplete && paths.length !== 0
+      || documentProfile && paths.some(path => path !==
+        (request.resolution_inputs[0] && "path" in request.resolution_inputs[0]
+          ? request.resolution_inputs[0].path : undefined))
       || !equal(request.changed_paths, paths)) fail("JOB_EXECUTION_FAILED");
     return { request, changedPaths: paths, changedPathsComplete: raw.changedPathsComplete };
   } catch { fail("JOB_EXECUTION_FAILED"); }
@@ -328,7 +351,8 @@ const materialize = async (prepared: Prepared,
         immutable_revision: job.target_revision!, source_digest: resolved.request.source.source_digest,
         analysis_key: targetKey }, changed_paths: resolved.changedPaths,
       // Extra manifests are analyzed in full until their reuse identity has a separate conformance gate.
-      changed_paths_complete: resolved.changedPathsComplete && resolved.request.resolution_inputs.length===1 });
+      changed_paths_complete: resolved.changedPathsComplete && resolved.request.resolution_inputs.length===1
+        && !isDocumentProfile(job.analyzer_adapter_id, job.analyzer_adapter_version, job.ir_version) });
     parsedPlan = parseUpdatePlan(plan);
     if (!parsedPlan.ok) fail("JOB_EXECUTION_FAILED");
   } catch { fail("JOB_EXECUTION_FAILED"); }

@@ -148,6 +148,58 @@ test("normalizes Swagger middleware source and default-document digests from one
   } finally { await ports.dispose(); }
 });
 
+test.each([
+  {
+    name: "standalone Swagger 2",
+    selection: { adapter_id: "nodejs-swagger2-document", adapter_version: "0.14.0", ir_version: "1.1.0" as const,
+      resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/contracts/swagger.yaml" }] },
+    path: "services/api/contracts/swagger.yaml",
+    document: `swagger: '2.0'\ninfo: { title: Example, version: '1' }\npaths:\n  /health:\n    get:\n      responses:\n        '200': { description: ok }\n`,
+    endpoint: "/health",
+  },
+  {
+    name: "standalone OpenAPI 3.0",
+    selection: { adapter_id: "openapi3-document", adapter_version: "0.1.1", ir_version: "1.1.0" as const,
+      resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/contracts/openapi.yaml" }] },
+    path: "services/api/contracts/openapi.yaml",
+    document: `openapi: 3.0.3\ninfo: { title: Example, version: '1' }\npaths:\n  /orders:\n    post:\n      responses:\n        '201': { description: created }\n`,
+    endpoint: "/orders",
+  },
+])("normalizes $name as a selected document only", async ({ selection: selected, path, document, endpoint }) => {
+  const repo = await repository({ [path]: document });
+  const ports = createLocalGitAnalysisPorts({ repositories: [{ tenantId: "tenant-a", repositoryId: "repo-a", repoPath: repo.root }], limits });
+  try {
+    const resolved = await ports.resolver.resolve(input(repo.revision, selected));
+    const digest = `sha256:${(await import("node:crypto")).createHash("sha256").update(`${path}\0${document}`).digest("hex")}`;
+    expect(resolved.request.resolution_inputs).toEqual([{ kind: "type_manifest", path, digest }]);
+    expect(resolved.request.source.source_digest).toBe(digest);
+    expect(resolved.request.extraction_mode).toBe("baseline");
+    const result = await ports.analyzer.analyze(resolved.request);
+    expect(result.endpoints.map(item => item.application_path)).toContain(endpoint);
+    expect(result.evidence.every(item => item.source.kind === "api_document")).toBe(true);
+  } finally { await ports.dispose(); }
+});
+
+test("standalone document profiles require one contained manifest and explicit IR 1.1", async () => {
+  const repo = await repository({ "services/api/docs/openapi.yaml": "openapi: 3.0.3\ninfo: { title: Example, version: '1' }\npaths: {}\n" });
+  const ports = createLocalGitAnalysisPorts({ repositories: [{ tenantId: "tenant-a", repositoryId: "repo-a", repoPath: repo.root }], limits });
+  const base = { adapter_id: "openapi3-document", adapter_version: "0.1.1", ir_version: "1.1.0" as const };
+  for (const invalid of [
+    { ...base, resolution_inputs: [] },
+    { ...base, resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/docs/openapi.yaml" },
+      { kind: "type_manifest" as const, path: "services/api/docs/openapi.yaml" }] },
+    { ...base, resolution_inputs: [{ kind: "type_manifest" as const, path: "outside/openapi.yaml" }] },
+    { ...base, production_entrypoint: "services/api/index.ts",
+      resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/docs/openapi.yaml" }] },
+    { adapter_id: base.adapter_id, adapter_version: base.adapter_version,
+      resolution_inputs: [{ kind: "type_manifest" as const, path: "services/api/docs/openapi.yaml" }] },
+    { ...base, resolution_inputs: [{ kind: "runtime_observation", path: "services/api/runtime.json" }] },
+  ] as unknown as AnalyzerSelection[]) {
+    await expect(ports.resolver.resolve(input(repo.revision, invalid))).rejects.toThrow("Local Git analysis request rejected");
+  }
+  await ports.dispose();
+});
+
 test("rejects document-only and runtime-dependent profiles before resolving a repository", async () => {
   const ports = createLocalGitAnalysisPorts({ repositories: [{ tenantId: "tenant-a", repositoryId: "repo-a", repoPath: "/missing/repository" }], limits });
   await expect(ports.resolver.resolve(input("a".repeat(40), {

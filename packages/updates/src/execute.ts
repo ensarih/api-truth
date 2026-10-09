@@ -161,10 +161,28 @@ const normalizedManifestPath = (path: string): boolean => path === "."
 const isContainedManifestPath = (serviceRoot: string, path: string): boolean =>
   normalizedManifestPath(path) && path !== "."
   && (serviceRoot === "." || path.startsWith(`${serviceRoot}/`));
+const documentProfiles = new Set(["nodejs-swagger2-document@0.14.0", "openapi3-document@0.1.1"]);
+const isDocumentProfile = (request: AnalyzerRequest): boolean =>
+  request.ir_version === "1.1.0"
+    && documentProfiles.has(`${request.analyzer.analyzer_id}@${request.analyzer.analyzer_version}`);
 
 const validateResolutionInputs = (input: ParsedExecutionInput): void => {
   const { plan, request } = input;
   const inputs = request.resolution_inputs;
+  if (isDocumentProfile(request)) {
+    const document = inputs[0];
+    if (inputs.length !== 1 || !document || document.kind !== "type_manifest"
+      || !isContainedManifestPath(plan.service.service_root, document.path)
+      || !/^sha256:[a-f0-9]{64}$/.test(document.digest)
+      || document.digest !== plan.service.target_source_digest
+      || plan.changed_paths.some(path => path !== document.path)
+      || plan.action !== "analyze_full_service"
+      || plan.extraction_mode !== "fallback_full_service"
+      || request.extraction_mode !== "fallback_full_service") {
+      mismatch("UPDATE_SCOPE_MISMATCH", "/request/resolution_inputs", "semantic.scope_mismatch");
+    }
+    return;
+  }
   const sourceTree = inputs[0];
   if (!sourceTree || !("path" in sourceTree) || sourceTree.kind !== "source_tree"
     || sourceTree.path !== plan.service.service_root || sourceTree.digest !== plan.service.target_source_digest) {
