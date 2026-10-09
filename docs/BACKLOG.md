@@ -745,3 +745,7 @@ An offline normalized-file connector verifies an externally configured Ed25519 s
 ### Dependency hygiene checkpoint (2026-10-09)
 
 A clean installation exposed GHSA-68fv-2mgg-jv7q in the locked development dependency `source-map-js@1.2.1`. The lock now selects patched 1.2.2 within existing dependency ranges, preserving all other packages and platform artifacts. This closes that advisory only; release governance, capacity, recovery and production deployment checks remain open.
+
+### Immutable local Git sources in durable analysis (2026-10-09)
+
+An explicit tenant/repository allowlist now materializes only a configured service root from a selected immutable local commit. Git transports, hooks, lazy fetch and replacement objects are disabled; unsafe paths, symlinks and submodules reject. Explicit configured branch refs are probed individually without enumeration. Source and manifest digests are measured using the exact compiled analyzer profile, independently of the Git tree digest. One-shot sessions have deterministic request identity, bounded capacity and retryable cleanup. Sixteen connector tests and a real Git → D08 → PostgreSQL baseline/branch-update test cover the bounded Express, routing-controller and Swagger middleware source profiles. Live fetch/provider delivery, document-only orchestration, delta reuse, protected pilot and broader lifecycle materialization remain separate gates.

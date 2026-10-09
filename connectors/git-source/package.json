@@ -1,0 +1,15 @@
+{
+  "name": "@api-truth/connector-git-source",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./analysis-ports": "./src/analysis-ports.ts"
+  },
+  "dependencies": {
+    "@api-truth/analyzer-host": "0.5.0",
+    "@api-truth/ir": "0.0.0",
+    "@api-truth/orchestration": "0.0.0"
+  }
+}
