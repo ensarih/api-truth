@@ -224,6 +224,15 @@ const parsePayloadText = (text: unknown): unknown => {
       index += number[0].length;
       const parsed = Number(number[0]);
       if (!Number.isFinite(parsed)) return fail();
+      // Presence classification must not mistake a rounded fraction or underflow
+      // for a declared integer. Withhold unsafe integral representations.
+      if (Number.isInteger(parsed)) {
+        if (!Number.isSafeInteger(parsed)) return fail();
+        const parts = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(number[0])!;
+        const digits = (parts[1]! + (parts[2] ?? "")).replace(/^0+/, "");
+        const scale = Number(parts[3] ?? "0") - (parts[2]?.length ?? 0);
+        if (digits && scale < 0 && (scale <= -digits.length || /[1-9]/.test(digits.slice(scale)))) return fail();
+      }
       return parsed;
     }
     return fail();

@@ -76,3 +76,14 @@ test("withholds deep raw payloads with fixed diagnostics and no values",()=>{
   expect(result).toMatchObject({status:"withheld",diagnostics:[{ruleId:"payload_parse_unverified",count:1}]});
   expect(JSON.stringify(result)).not.toContain("SECRET_CANARY");
 });
+
+for (const numeric of ["1.0000000000000001","1e-999","9007199254740993"]) test(`withholds lossy numeric type evidence ${numeric}`,()=>{
+  const value=input();value.payloadText=`{"count":${numeric}}`;
+  expect(projectObservedFieldPresence(value)).toMatchObject({status:"withheld"});
+});
+
+for (const numeric of ["1.0000","1e3","1.200e1","0e-999"]) test(`retains exact integral numeric representations ${numeric}`,()=>{
+  const value=input();value.payloadText=`{"count":${numeric}}`;
+  expect(projectObservedFieldPresence(value)).toMatchObject({status:"projected",fields:[
+    {path:"/customer/id",state:"absent"},{path:"/password",state:"absent"},{path:"/count",state:"present"}]});
+});

@@ -58,3 +58,8 @@ Synthetic examples currently withhold qualified source-reuse views that carry
 cannot yet represent both revisions. A qualifier appearing or changing on the
 final authorized read invalidates an earlier candidate. Keyword/API detail reads
 can carry this qualification; examples do not silently discard it.
+
+The raw payload parser also withholds unsafe integral numbers and fractions or
+underflow values that JavaScript would round to integers, preventing false
+integer type correspondence. Exact integral decimal/exponent forms remain
+supported. This is conservative numeric type checking, not value validation.

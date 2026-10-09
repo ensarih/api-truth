@@ -1124,3 +1124,11 @@ that existing synthetic examples discarded the selected/evidence revision
 qualification. The pure generator and authorized service now withhold such
 views; the final read compares the qualifier and discards stale candidates.
 Supporting both revisions in example scopes remains later work.
+
+### Numeric correspondence hardening — P3 projection (2026-10-10)
+
+Three failing tests demonstrated unsafe integral rounding, rounded fractional
+numbers and numeric underflow being accepted as integer type evidence. The
+projector now checks safe integral representations and lexical decimal/exponent
+scale before correspondence. Exact integral exponent/decimal forms remain
+supported. This does not infer constraints or normative requiredness.
