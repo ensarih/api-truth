@@ -9,3 +9,4 @@ export type { QueryObservationReader } from "./reader.js";
 export type { QueryOperationReader } from "./reader.js";
 export { searchOperationCandidates, validateOperationSearchOptions } from "./operation-search.js";
 export type { OperationCandidate, OperationSearchOptions, OperationSearchResult } from "./operation-search.js";
+export type { QueryCorpusOperationReader, CorpusOperationSearchResult, CorpusOperationCandidate } from "./reader.js";

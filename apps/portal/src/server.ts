@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {validateOperationSearchOptions, type QueryReader, type QueryObservationReader,
-  type QueryOperationReader, type QuerySelection, type QueryContractResult} from "@api-truth/query";
+  type QueryOperationReader, type QueryCorpusOperationReader, type QuerySelection,
+  type QueryContractResult} from "@api-truth/query";
 import { parseStrictJson } from "../../../packages/ir/src/strict-json.js";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
@@ -9,7 +10,7 @@ export type PortalPrincipal = Readonly<{ tenantId: string; principalId: string }
 export type PortalOptions = Readonly<{
   authenticate(request: IncomingMessage): Promise<PortalPrincipal | undefined>;
   query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">
-    & Partial<QueryObservationReader & QueryOperationReader>;
+    & Partial<QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader>;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
 }>;
 
@@ -20,6 +21,7 @@ const page = `<!doctype html>
 <section><h2>Find a service</h2><form id="search"><label>Service <input name="query" maxlength="128" autocomplete="off"></label>
 <label>Environment <input name="environment" maxlength="512" placeholder="e.g. uat"></label>
 <button type="submit">Search</button></form><p id="search-status" role="status"></p><ul id="results"></ul></section>
+<section id="corpus-section" hidden><h2>Find API candidates across services</h2><p>Search existing authorized APIs by keyword in one current environment. Results are lexical candidates, not a guarantee that an API fulfills your task.</p><form id="corpus"><label>Environment <input name="environment" maxlength="512" required placeholder="e.g. uat"></label><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Search across services</button></form><p id="corpus-status" role="status"></p><ul id="corpus-results"></ul></section>
 <section><h2>View a contract</h2><form id="contract"><label>Repository <input name="repositoryId" maxlength="512" required></label>
 <label>Service <input name="serviceId" maxlength="512" required></label><label>Selection
 <select name="kind"><option value="environment">Environment</option><option value="branch">Branch</option>
@@ -36,18 +38,19 @@ const page = `<!doctype html>
 <option value="revision">Revision</option></select></label><label>Name or revision <input name="toValue" maxlength="512" required></label>
 <button type="submit">Compare</button></form><p id="compare-status" role="status"></p><pre id="changes"></pre></section>
 </main><script src="/app.js" defer></script></body></html>`;
-const script = `const runtimeEnabled=__OBSERVATION_READER_ENABLED__,semanticEnabled=__SEMANTIC_ENABLED__,candidateEnabled=__CANDIDATE_ENABLED__;
+const script = `const runtimeEnabled=__OBSERVATION_READER_ENABLED__,semanticEnabled=__SEMANTIC_ENABLED__,candidateEnabled=__CANDIDATE_ENABLED__,corpusEnabled=__CORPUS_ENABLED__;
 const search=document.getElementById('search'),contract=document.getElementById('contract'),compare=document.getElementById('compare');
 const discovery=document.getElementById('discovery'),discover=document.getElementById('discover'),discoveryEndpoints=document.getElementById('discovery-endpoints'),discoveryStatus=document.getElementById('discovery-status'),discoveryResults=document.getElementById('discovery-results');
 const candidates=document.getElementById('candidates'),candidateStatus=document.getElementById('candidate-status'),candidateResults=document.getElementById('candidate-results');
+const corpusSection=document.getElementById('corpus-section'),corpus=document.getElementById('corpus'),corpusStatus=document.getElementById('corpus-status'),corpusResults=document.getElementById('corpus-results');corpusSection.hidden=!corpusEnabled;
 if(semanticEnabled||candidateEnabled)discovery.hidden=false;discover.hidden=!semanticEnabled;candidates.hidden=!candidateEnabled;
-let currentResolved=null,selectionGeneration=0,discoveryGeneration=0,candidateGeneration=0;discover.addEventListener('input',()=>{discoveryGeneration++;discoveryResults.replaceChildren();discoveryStatus.textContent='Discovery inputs changed. Submit again to update results.';});candidates.addEventListener('input',()=>{candidateGeneration++;candidateResults.replaceChildren();candidateStatus.textContent='Candidate inputs changed. Submit again to update results.';});contract.addEventListener('input',()=>{selectionGeneration++;discoveryGeneration++;candidateGeneration++;currentResolved=null;discoveryResults.replaceChildren();candidateResults.replaceChildren();discoveryStatus.textContent='View the selected contract again before discovery.';candidateStatus.textContent='View the selected contract again before candidate search.';});
+let currentResolved=null,selectionGeneration=0,discoveryGeneration=0,candidateGeneration=0,corpusGeneration=0,pendingCorpusCandidate=null;discover.addEventListener('input',()=>{discoveryGeneration++;discoveryResults.replaceChildren();discoveryStatus.textContent='Discovery inputs changed. Submit again to update results.';});candidates.addEventListener('input',()=>{candidateGeneration++;candidateResults.replaceChildren();candidateStatus.textContent='Candidate inputs changed. Submit again to update results.';});corpus.addEventListener('input',()=>{corpusGeneration++;corpusResults.replaceChildren();corpusStatus.textContent='Corpus search inputs changed. Submit again to update results.';});contract.addEventListener('input',()=>{delete contract.dataset.expectedVersion;pendingCorpusCandidate=null;selectionGeneration++;discoveryGeneration++;candidateGeneration++;currentResolved=null;discoveryResults.replaceChildren();candidateResults.replaceChildren();discoveryStatus.textContent='View the selected contract again before discovery.';candidateStatus.textContent='View the selected contract again before candidate search.';});
 const status=document.getElementById('search-status'),results=document.getElementById('results');
 const contractStatus=document.getElementById('contract-status'),summary=document.getElementById('contract-summary');
 const endpoints=document.getElementById('endpoints'),schemas=document.getElementById('schemas'),evidence=document.getElementById('evidence'),detail=document.getElementById('detail');
 const download=document.getElementById('download'),compareStatus=document.getElementById('compare-status'),changes=document.getElementById('changes');
-const selection=()=>{const data=new FormData(contract);return new URLSearchParams({repositoryId:String(data.get('repositoryId')||''),
-  serviceId:String(data.get('serviceId')||''),kind:String(data.get('kind')||''),value:String(data.get('value')||'')});};
+const selection=()=>{const data=new FormData(contract),params=new URLSearchParams({repositoryId:String(data.get('repositoryId')||''),
+  serviceId:String(data.get('serviceId')||''),kind:String(data.get('kind')||''),value:String(data.get('value')||'')});if(contract.dataset.expectedVersion)params.set('expectedVersion',contract.dataset.expectedVersion);return params;};
 const fetchJson=async(path,init={})=>{const response=await fetch(path,{...init,credentials:'same-origin'});if(!response.ok)throw Error('unavailable');return response.json();};
 const showDetail=async(path)=>{detail.textContent='Loading…';try{const data=await fetchJson(path);detail.textContent=JSON.stringify(data,null,2);}
   catch{detail.textContent='Details are unavailable.';}};
@@ -58,16 +61,18 @@ search.addEventListener('submit',async event=>{event.preventDefault();results.re
     for(const service of body.services){const row=document.createElement('li'),button=document.createElement('button');
       button.type='button';button.textContent=service.repositoryId+' / '+service.serviceId+
         (service.environment?' — '+service.environment.name+': '+service.environment.status:'');
-      button.addEventListener('click',()=>{contract.elements.namedItem('repositoryId').value=service.repositoryId;
+      button.addEventListener('click',()=>{delete contract.dataset.expectedVersion;pendingCorpusCandidate=null;contract.elements.namedItem('repositoryId').value=service.repositoryId;
         contract.elements.namedItem('serviceId').value=service.serviceId;
         if(service.environment){contract.elements.namedItem('kind').value='environment';contract.elements.namedItem('value').value=service.environment.name;}
         contract.requestSubmit();});
       row.append(button);results.append(row);}}
   catch{status.textContent='The service list is unavailable.';}});
-contract.addEventListener('submit',async event=>{event.preventDefault();const generation=++selectionGeneration;discoveryGeneration++;candidateGeneration++;currentResolved=null;discoveryResults.replaceChildren();candidateResults.replaceChildren();candidateStatus.textContent='';discoveryStatus.textContent='';discoveryEndpoints.replaceChildren();summary.replaceChildren();endpoints.replaceChildren();
+corpus.addEventListener('submit',async event=>{event.preventDefault();const generation=++corpusGeneration;corpusResults.replaceChildren();const data=new FormData(corpus),environment=String(data.get('environment')||''),intentQuery=String(data.get('intentQuery')||'');corpusStatus.textContent='Searching current authorized services…';try{const body=await fetchJson('/api/corpus-candidates',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({environment,intentQuery,limit:20})});if(generation!==corpusGeneration)return;if(body.environment!==environment)throw Error('stale');if(body.status==='candidates'){corpusStatus.textContent=body.candidates.length+' keyword candidates across visible authorized services.'+(body.complete?'':' Search context is incomplete.')+(body.truncated?' More candidates were omitted by the result limit.':'');for(const item of body.candidates){if(item.selector?.repositoryId!==item.repositoryId||item.selector?.serviceId!==item.serviceId||item.selector?.selector?.kind!=='environment'||item.selector.selector.environment!==environment||item.selector.selector.expectedCheckpointVersion!==item.pin?.checkpointVersion)continue;const row=document.createElement('li'),button=document.createElement('button');button.type='button';button.textContent='Load pinned contract';button.addEventListener('click',()=>{if(generation!==corpusGeneration)return;pendingCorpusCandidate={item,generation};contract.elements.namedItem('repositoryId').value=item.repositoryId;contract.elements.namedItem('serviceId').value=item.serviceId;contract.elements.namedItem('kind').value='environment';contract.elements.namedItem('value').value=environment;contract.dataset.expectedVersion=item.pin.checkpointVersion;contract.requestSubmit();});row.append(document.createTextNode(item.repositoryId+' / '+item.serviceId+' — '+item.method+' '+item.path+' — '+item.label+' (checkpoint '+item.pin.checkpointVersion+', keyword score '+item.score+', evidence '+item.evidenceIds.join(', ')+') '),button);corpusResults.append(row);}}else if(body.status==='no_match')corpusStatus.textContent='No keyword overlap was found in the complete visible authorized scope. This does not rule out a semantic match.';else corpusStatus.textContent='Corpus search could not make a complete determination.';}catch{if(generation===corpusGeneration)corpusStatus.textContent='Corpus search is unavailable.';}});
+contract.addEventListener('submit',async event=>{event.preventDefault();const generation=++selectionGeneration,requestedCandidate=pendingCorpusCandidate;pendingCorpusCandidate=null;discoveryGeneration++;candidateGeneration++;currentResolved=null;discoveryResults.replaceChildren();candidateResults.replaceChildren();candidateStatus.textContent='';discoveryStatus.textContent='';discoveryEndpoints.replaceChildren();summary.replaceChildren();endpoints.replaceChildren();
   schemas.replaceChildren();evidence.replaceChildren();detail.textContent='';download.hidden=true;contractStatus.textContent='Loading…';
   try{const params=selection(),body=await fetchJson('/api/contract?'+params);if(generation!==selectionGeneration)return;
     if(body.status!=='resolved'){contractStatus.textContent='Contract state: '+body.status+'. No contract is available here.';return;}
+    if(requestedCandidate){const item=requestedCandidate.item;if(requestedCandidate.generation!==corpusGeneration||params.get('repositoryId')!==item.repositoryId||params.get('serviceId')!==item.serviceId||params.get('kind')!=='environment'||params.get('value')!==item.selector.selector.environment||params.get('expectedVersion')!==item.pin.checkpointVersion||!['snapshotId','revision','configFingerprint','checkpointVersion'].every(field=>body.pin?.[field]===item.pin[field])||body.selector?.repositoryId!==item.repositoryId||body.selector?.serviceId!==item.serviceId||body.selector?.selector?.kind!=='environment'||body.selector.selector.environment!==item.selector.selector.environment||body.selector.selector.expectedCheckpointVersion!==item.pin.checkpointVersion||!body.endpoints.some(endpoint=>endpoint.endpointId===item.endpointId)){contractStatus.textContent='Pinned candidate is stale. Search again.';return;}}
     contractStatus.textContent='Contract available. Analyzed at '+body.analyzedAt+'.';currentResolved={params,body};
     const coverage=document.createElement('p');coverage.textContent='Coverage: '+body.coverage.status+'.';summary.append(coverage);
     if(runtimeEnabled&&params.get('kind')==='environment'&&body.pin&&body.pin.checkpointVersion){
@@ -78,7 +83,7 @@ contract.addEventListener('submit',async event=>{event.preventDefault();const ge
     for(const item of body.endpoints){const row=document.createElement('li'),button=document.createElement('button');
       button.type='button';button.textContent=item.method+' '+item.path;
       button.addEventListener('click',()=>showDetail('/api/endpoint?'+params+'&endpointId='+encodeURIComponent(item.endpointId)));
-      row.append(button);endpoints.append(row);if(semanticEnabled){const label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.name='endpointId';check.value=item.endpointId;check.checked=!candidateEnabled&&body.endpoints.length<=16;label.append(check,document.createTextNode(item.method+' '+item.path));discoveryEndpoints.append(label);}}
+      row.append(button);endpoints.append(row);if(semanticEnabled){const label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.name='endpointId';check.value=item.endpointId;check.checked=!candidateEnabled&&!corpusEnabled&&body.endpoints.length<=16;label.append(check,document.createTextNode(item.method+' '+item.path));discoveryEndpoints.append(label);}}
     for(const id of body.schemas){const row=document.createElement('li'),button=document.createElement('button');
       button.type='button';button.textContent='Schema: '+id;
       button.addEventListener('click',()=>showDetail('/api/schema?'+params+'&schemaId='+encodeURIComponent(id)));
@@ -199,6 +204,32 @@ const sameSelector = (left: unknown, right: unknown): boolean => {
       : a.kind === "environment" ? ["kind", "environment", "expectedCheckpointVersion"] : [];
   return fields.length > 0 && fields.every(field => a[field] === b[field]);
 };
+const validCorpusResult=(input:unknown,principal:PortalPrincipal,environment:string):boolean=>{
+  try{
+    if(!input||typeof input!=="object"||Array.isArray(input))return false;
+    const result=input as Record<string,unknown>;
+    if(result.matchMode!=="keyword"||result.scope!=="visible_authorized_services"
+      ||result.environment!==environment)return false;
+    if(result.status==="unknown")return ["no_visible_services","incomplete_scan","scan_limit"].includes(result.reason as string);
+    if(result.status==="no_match")return result.complete===true&&result.truncated===false;
+    if(result.status!=="candidates"||!Array.isArray(result.candidates)
+      ||result.candidates.length>20||typeof result.complete!=="boolean"
+      ||typeof result.truncated!=="boolean")return false;
+    return result.candidates.every((candidate:unknown)=>{
+      if(!candidate||typeof candidate!=="object"||Array.isArray(candidate))return false;
+      const item=candidate as Record<string,unknown>,pin=item.pin as Record<string,unknown>|undefined;
+      const selector=item.selector as Record<string,unknown>|undefined;
+      const view=selector?.selector as Record<string,unknown>|undefined;
+      return safeId(item.repositoryId)&&safeId(item.serviceId)&&safeId(item.endpointId)
+        &&pin!==undefined&&safeId(pin.snapshotId)&&safeId(pin.revision)
+        &&safeId(pin.configFingerprint)&&typeof pin.checkpointVersion==="string"
+        &&decimalVersion(pin.checkpointVersion)&&selector?.version==="1"
+        &&selector.tenantId===principal.tenantId&&selector.repositoryId===item.repositoryId
+        &&selector.serviceId===item.serviceId&&view?.kind==="environment"
+        &&view.environment===environment&&view.expectedCheckpointVersion===pin.checkpointVersion;
+    });
+  }catch{return false;}
+};
 const summary = (result: Extract<QueryContractResult, { status: "resolved" }>) => ({
   status: "resolved", selector: result.selector, pin: result.pin, publication: result.publication,
   coverage: result.snapshot.coverage, analyzedAt: result.snapshot.created_at,
@@ -273,6 +304,17 @@ const parseCandidateBody = (input: unknown, principal: PortalPrincipal):
     ...(Object.hasOwn(body, "limit") ? {limit: body.limit} : {})});
   return selected && options ? {selected, intentQuery: options.intentQuery, limit: options.limit ?? 20} : undefined;
 };
+const parseCorpusBody=(input:unknown):{environment:string;intentQuery:string;limit:number}|undefined=>{
+  if(!input||typeof input!=="object"||Array.isArray(input)
+    ||Object.getPrototypeOf(input)!==Object.prototype)return undefined;
+  const body=input as Record<string,unknown>;
+  const keys=Object.keys(body).sort().join(",");
+  if(keys!=="environment,intentQuery"&&keys!=="environment,intentQuery,limit")return undefined;
+  if(!safeId(body.environment)||!isSemanticIntentQuerySafe(body.intentQuery))return undefined;
+  const options=validateOperationSearchOptions({intentQuery:body.intentQuery,
+    ...(Object.hasOwn(body,"limit")?{limit:body.limit}:{})});
+  return options?{environment:body.environment,intentQuery:options.intentQuery,limit:options.limit??20}:undefined;
+};
 
 /** The host supplies authentication. No request header becomes a principal by itself. */
 export const createPortalServer = (options: PortalOptions): Server => {
@@ -289,7 +331,8 @@ export const createPortalServer = (options: PortalOptions): Server => {
       (request.method === "POST" ? jsonClose : json)(response, 401, { error: "NOT_AUTHORIZED" }); return;
     }
     if (!request.url || request.url.length > 2048 || (request.method !== "GET"
-      && !(request.method === "POST" && ["/api/discover", "/api/candidates"].includes(request.url.split("?", 1)[0]!)))) {
+      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates"]
+        .includes(request.url.split("?", 1)[0]!)))) {
       (request.method === "POST" ? jsonClose : json)(response, 400, { error: "INVALID_REQUEST" }); return;
     }
     let url: URL;
@@ -300,16 +343,19 @@ export const createPortalServer = (options: PortalOptions): Server => {
     if (url.pathname === "/app.js") { send(response, 200,
       script.replace("__OBSERVATION_READER_ENABLED__", String(typeof options.query.readMetadataObservations === "function"))
         .replace("__SEMANTIC_ENABLED__", String(semanticDiscover !== undefined))
-        .replace("__CANDIDATE_ENABLED__", String(typeof options.query.readOperationCandidates === "function")),
+        .replace("__CANDIDATE_ENABLED__", String(typeof options.query.readOperationCandidates === "function"))
+        .replace("__CORPUS_ENABLED__", String(typeof options.query.searchOperationCandidatesAcrossServices === "function")),
       "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {
-      if (url.pathname === "/api/discover" || url.pathname === "/api/candidates") {
+      if (["/api/discover", "/api/candidates", "/api/corpus-candidates"].includes(url.pathname)) {
         if (url.search.length > 0) { jsonClose(response, 400, {error: "INVALID_REQUEST"}); return; }
         const candidate = url.pathname === "/api/candidates";
+        const corpus = url.pathname === "/api/corpus-candidates";
         if (request.method !== "POST" || (candidate
           ? typeof options.query.readOperationCandidates !== "function"
-          : semanticDiscover === undefined)) {
+          : corpus?typeof options.query.searchOperationCandidatesAcrossServices !== "function"
+            : semanticDiscover === undefined)) {
           (request.method === "POST" ? jsonClose : json)(response, 404, {error: "NOT_FOUND"}); return;
         }
         const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
@@ -327,6 +373,16 @@ export const createPortalServer = (options: PortalOptions): Server => {
         let body: unknown;
         try { body = parseStrictJson(new TextDecoder("utf-8", {fatal: true}).decode(raw), {maxDepth: 8, maxNodes: 128}); }
         catch { json(response, 400, {error: "INVALID_REQUEST"}); return; }
+        if(corpus){
+          const requestData=parseCorpusBody(body);
+          if(!requestData){json(response,400,{error:"INVALID_REQUEST"});return;}
+          const found=await options.query.searchOperationCandidatesAcrossServices!(principal,
+            {tenantId:principal.tenantId,...requestData});
+          if(!validCorpusResult(found,principal,requestData.environment)){
+            json(response,409,{error:"STALE_SELECTION"});return;
+          }
+          json(response,200,found);return;
+        }
         if (candidate) {
           const requestData = parseCandidateBody(body, principal);
           if (!requestData) {json(response, 400, {error: "INVALID_REQUEST"}); return;}

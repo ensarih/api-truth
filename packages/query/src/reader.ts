@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import {isProxy} from "node:util/types";
-import { parseConfig, parseContractSnapshot, type ContractSnapshot } from "@api-truth/ir";
+import { parseConfig, parseContractSnapshot, type ContractSnapshot, type InstallationConfig } from "@api-truth/ir";
 import { canonicalOrchestrationHash } from "@api-truth/orchestration";
 import { snapshotContentSha256, snapshotIdentitySha256 } from "../../catalog/src/canonical.js";
 import { compareContractSnapshots, type ContractDifferenceSet } from "@api-truth/updates";
@@ -8,7 +8,8 @@ import { OpenApiStorageError, readCurrentOpenApiWithClient, readPublicationOpenA
   type OpenApiPublicationSelector, type PublicationKey } from "@api-truth/openapi";
 import { quoteEnvironmentSchema } from "../../environment/src/migrations.js";
 import { parseQuerySelection, type QuerySelection } from "./selector.js";
-import {searchOperationCandidates, validateOperationSearchOptions, type OperationSearchResult} from "./operation-search.js";
+import {searchOperationCandidates, validateOperationSearchOptions, type OperationCandidate,
+  type OperationSearchResult} from "./operation-search.js";
 
 export class QueryReadError extends Error {
   readonly code: "INVALID_QUERY_CONTEXT" | "INVALID_QUERY_DETAIL" | "INVALID_QUERY_SEARCH"
@@ -65,6 +66,19 @@ export interface QueryObservationReader {
 export interface QueryOperationReader {
   readOperationCandidates(context:unknown,selection:unknown,options:unknown):Promise<OperationSearchResult>;
 }
+export type CorpusOperationCandidate=OperationCandidate & Readonly<{repositoryId:string;serviceId:string;
+  selector:QuerySelection;pin:QueryPin}>;
+export type CorpusOperationSearchResult=
+  | Readonly<{status:"candidates";matchMode:"keyword";scope:"visible_authorized_services";
+      environment:string;candidates:readonly CorpusOperationCandidate[];complete:boolean;truncated:boolean;
+      incompleteReason?:"incomplete_scan"|"scan_limit"}>
+  | Readonly<{status:"no_match";matchMode:"keyword";scope:"visible_authorized_services";
+      environment:string;complete:true;truncated:false}>
+  | Readonly<{status:"unknown";matchMode:"keyword";scope:"visible_authorized_services";
+      environment:string;reason:"no_visible_services"|"incomplete_scan"|"scan_limit"}>;
+export interface QueryCorpusOperationReader {
+  searchOperationCandidatesAcrossServices(context:unknown,request:unknown):Promise<CorpusOperationSearchResult>;
+}
 export type QueryReader = Readonly<{
   readContract(context: unknown, selection: unknown): Promise<QueryContractResult>;
   readEndpoint(context: unknown, selection: unknown, endpointId: unknown): Promise<QueryDetailResult<"endpoint">>;
@@ -77,7 +91,7 @@ export type QueryReader = Readonly<{
 type SnapshotRow = { snapshot_id: string; repository_id: string; service_id: string;
   immutable_revision: string; config_fingerprint: string; ir_version: string; identity_version: string;
   analyzer_status: string; identity_sha256: string; content_sha256: string;
-  required_scope_ids: string[]; document: unknown };
+  required_scope_ids: string[]; document: unknown; document_bytes?: string };
 const snapshotColumns = `snapshot_id,repository_id,service_id,immutable_revision,config_fingerprint,
   ir_version,identity_version,analyzer_status,identity_sha256,content_sha256,required_scope_ids,document`;
 const granted = (principalParameter: number): string => `cardinality(snapshot.required_scope_ids)>0 AND NOT EXISTS (
@@ -145,6 +159,24 @@ const parseSearchRequest = (input: unknown): SearchRequest => {
   } catch { throw new QueryReadError("INVALID_QUERY_SEARCH"); }
 };
 
+type CorpusSearchRequest=Readonly<{tenantId:string;environment:string;intentQuery:string;limit:number}>;
+const parseCorpusSearchRequest=(input:unknown):CorpusSearchRequest=>{
+  try{
+    if(!input||typeof input!=="object"||Array.isArray(input)||isProxy(input)
+      ||Object.getPrototypeOf(input)!==Object.prototype)throw new Error();
+    const fields=Object.getOwnPropertyDescriptors(input);
+    const names=Object.hasOwn(fields,"limit")?["tenantId","environment","intentQuery","limit"]
+      :["tenantId","environment","intentQuery"];
+    if(Reflect.ownKeys(fields).length!==names.length||names.some(name=>!fields[name]
+      ||!("value" in fields[name]!)))throw new Error();
+    const tenantId=fields.tenantId!.value as unknown,environment=fields.environment!.value as unknown;
+    const options=validateOperationSearchOptions({intentQuery:fields.intentQuery!.value,
+      ...(Object.hasOwn(fields,"limit")?{limit:fields.limit!.value}:{})});
+    if(!bounded(tenantId)||!bounded(environment)||!options)throw new Error();
+    return Object.freeze({tenantId,environment,intentQuery:options.intentQuery,limit:options.limit??20});
+  }catch{throw new QueryReadError("INVALID_QUERY_SEARCH");}
+};
+
 const parseObservationOptions = (input:unknown):QueryObservationOptions => {
   try {
     if(!input||typeof input!=="object"||Array.isArray(input)||isProxy(input)||Object.getPrototypeOf(input)!==Object.prototype)throw new Error();
@@ -194,12 +226,17 @@ const verifySnapshot = (row: SnapshotRow, selection: QuerySelection): ContractSn
 };
 
 const selectAuthorized = async (client: PoolClient, selection: QuerySelection,
-  principalId: string, clause: string, values: unknown[]): Promise<SnapshotRow[]> => {
-  const query = `SELECT ${snapshotColumns} FROM catalog_snapshots snapshot
+  principalId: string, clause: string, values: unknown[], maxDocumentBytes?: number): Promise<SnapshotRow[]> => {
+  const boundedDocument=maxDocumentBytes===undefined?"snapshot.document":
+    `CASE WHEN octet_length(snapshot.document::text)<=$${5+values.length}
+      THEN snapshot.document ELSE NULL END`;
+  const byteCount=maxDocumentBytes===undefined?"":`,octet_length(snapshot.document::text)::text AS document_bytes`;
+  const query = `SELECT ${snapshotColumns.replace("document",`${boundedDocument} AS document${byteCount}`)} FROM catalog_snapshots snapshot
     WHERE snapshot.tenant_id=$1 AND snapshot.repository_id=$2 AND snapshot.service_id=$3
       AND ${clause} AND ${granted(4 + values.length)} ORDER BY snapshot.snapshot_id COLLATE "C" LIMIT 2`;
   const result = await client.query<SnapshotRow>(query,
-    [selection.tenantId, selection.repositoryId, selection.serviceId, ...values, principalId]);
+    [selection.tenantId, selection.repositoryId, selection.serviceId, ...values, principalId,
+      ...(maxDocumentBytes===undefined?[]:[maxDocumentBytes])]);
   return result.rows;
 };
 
@@ -252,20 +289,31 @@ const readBranch = async (client: PoolClient, selector: QuerySelection,
   return resolved(selector, rows[0]!, { pointerVersion: pointer.pointer_version });
 };
 
+class CorpusBudgetExceeded extends Error {}
+type ValidatedActiveConfiguration=Readonly<{configFingerprint:string;document:InstallationConfig}>;
 const readEnvironment = async (client: PoolClient, selector: QuerySelection,
-  principalId: string): Promise<QueryCoreResult> => {
+  principalId: string, maxDocumentBytes?: number,
+  validatedConfiguration?:ValidatedActiveConfiguration): Promise<QueryCoreResult> => {
   if (selector.selector.kind !== "environment") return storage();
-  const active = (await client.query<{ config_fingerprint: string; document_sha256: string; document: unknown }>(
-    `SELECT active.config_fingerprint,configuration.document_sha256,configuration.document
-     FROM orchestration_active_configurations active
-     JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
-       AND configuration.config_fingerprint=active.config_fingerprint WHERE active.tenant_id=$1`,
-    [selector.tenantId],
-  )).rows[0];
-  if (!active) return denied();
-  const parsed = parseConfig(active.document);
-  if (!parsed.ok || canonicalOrchestrationHash(parsed.value) !== active.document_sha256) return storage();
-  const repo = parsed.value.repositories.find((item) => item.repository_id === selector.repositoryId);
+  let configFingerprint:string,configuration:InstallationConfig;
+  if(validatedConfiguration){
+    configFingerprint=validatedConfiguration.configFingerprint;
+    configuration=validatedConfiguration.document;
+  }else{
+    const active = (await client.query<{ config_fingerprint: string; document_sha256: string; document: unknown }>(
+      `SELECT active.config_fingerprint,configuration.document_sha256,configuration.document
+       FROM orchestration_active_configurations active
+       JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+         AND configuration.config_fingerprint=active.config_fingerprint WHERE active.tenant_id=$1`,
+      [selector.tenantId],
+    )).rows[0];
+    if (!active) return denied();
+    const parsed = parseConfig(active.document);
+    if (!parsed.ok || canonicalOrchestrationHash(parsed.value) !== active.document_sha256) return storage();
+    configFingerprint=active.config_fingerprint;
+    configuration=parsed.value;
+  }
+  const repo = configuration.repositories.find((item) => item.repository_id === selector.repositoryId);
   const service = repo?.services.find((item) => item.service_id === selector.serviceId);
   const environmentName = selector.selector.environment;
   const environment = service?.environments.find((item) => item.name === environmentName);
@@ -286,11 +334,11 @@ const readEnvironment = async (client: PoolClient, selector: QuerySelection,
        AND checkpoint.service_id=$3 AND checkpoint.environment=$4`,
     [selector.tenantId, selector.repositoryId, selector.serviceId, selector.selector.environment],
   )).rows[0];
-  if (checkpoint && checkpoint.active_config_fingerprint === active.config_fingerprint
+  if (checkpoint && checkpoint.active_config_fingerprint === configFingerprint
     && (!checkpoint.source_access_label || !await hasScopes(client, selector.tenantId,
       principalId, [checkpoint.source_access_label]))) return denied();
   if (!checkpoint || checkpoint.reconciliation_required
-    || checkpoint.active_config_fingerprint !== active.config_fingerprint) return resultState(selector, "unknown");
+    || checkpoint.active_config_fingerprint !== configFingerprint) return resultState(selector, "unknown");
   if (checkpoint.serving_status !== "known") return resultState(selector, "unknown");
   if (checkpoint.completeness !== "complete") return resultState(selector, "transitional");
   if (!Array.isArray(checkpoint.inventory)) return storage();
@@ -310,9 +358,12 @@ const readEnvironment = async (client: PoolClient, selector: QuerySelection,
   )).rows[0];
   if (binding?.revision !== revision.revision) return resultState(selector, "unavailable");
   const rows = await selectAuthorized(client, selector, principalId,
-    "snapshot.immutable_revision=$4 AND snapshot.config_fingerprint=$5", [revision.revision, active.config_fingerprint]);
+    "snapshot.immutable_revision=$4 AND snapshot.config_fingerprint=$5", [revision.revision, configFingerprint],
+    maxDocumentBytes);
   if (rows.length === 0) return resultState(selector, "unavailable");
   if (rows.length > 1) return resultState(selector, "ambiguous");
+  if(maxDocumentBytes!==undefined&&(rows[0]!.document===null
+    ||Number(rows[0]!.document_bytes)>maxDocumentBytes))throw new CorpusBudgetExceeded();
   if (selector.selector.expectedCheckpointVersion !== undefined
     && selector.selector.expectedCheckpointVersion !== checkpoint.version)
     throw new QueryReadError("QUERY_STALE_SELECTION");
@@ -464,6 +515,158 @@ const searchConfiguredServices = async (client: PoolClient, principalId: string,
   return Object.freeze({ services: Object.freeze(services), truncated: false });
 };
 
+const MAX_CORPUS_SERVICES=20,MAX_CONFIGURED_INSPECTED=200,MAX_CORPUS_ENDPOINTS=5_000;
+const MAX_CORPUS_BYTES=4*1024*1024,CORPUS_DEADLINE_MS=10_000;
+const byteOrder=(left:string,right:string):number=>Buffer.compare(Buffer.from(left),Buffer.from(right));
+
+const withCorpusDeadline=(client:PoolClient,started:number):PoolClient=>{
+  const rawQuery=client.query.bind(client);
+  const run=async(...args:unknown[]):Promise<unknown>=>{
+    const remaining=Math.floor(CORPUS_DEADLINE_MS-(performance.now()-started));
+    if(remaining<=0)throw new CorpusBudgetExceeded();
+    const operation=(rawQuery as (...queryArgs:unknown[])=>Promise<unknown>)(...args);
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const deadline=new Promise<never>((_,reject)=>{
+      timer=setTimeout(()=>reject(new CorpusBudgetExceeded()),remaining);
+      timer.unref?.();
+    });
+    try{return await Promise.race([operation,deadline]);}
+    finally{if(timer!==undefined)clearTimeout(timer);}
+  };
+  const query=(async(...args:unknown[])=>{
+    const remaining=Math.floor(CORPUS_DEADLINE_MS-(performance.now()-started));
+    if(remaining<=0)throw new CorpusBudgetExceeded();
+    try{
+      await run("SELECT set_config('statement_timeout',$1,true)",[`${remaining}ms`]);
+      if(CORPUS_DEADLINE_MS-(performance.now()-started)<=0)throw new CorpusBudgetExceeded();
+      return await run(...args);
+    }catch(error){
+      if(error instanceof CorpusBudgetExceeded)throw error;
+      if(error&&typeof error==="object"&&(error as {code?:unknown}).code==="57014")
+        throw new CorpusBudgetExceeded();
+      throw error;
+    }
+  }) as PoolClient["query"];
+  return new Proxy(client,{get(target,property){
+    if(property==="query")return query;
+    const value=Reflect.get(target,property,target);
+    return typeof value==="function"?value.bind(target):value;
+  }});
+};
+
+/** A lexical search over currently serving, visible contracts in one database snapshot. */
+const searchCorpusWithClient=async(client:PoolClient,principalId:string,
+  request:CorpusSearchRequest):Promise<CorpusOperationSearchResult>=>{
+  const started=performance.now();
+  const budgetClient=withCorpusDeadline(client,started);
+  let scanLimit=false,incomplete=false,anyServiceTruncated=false,visible=0,bytes=0,endpoints=0;
+  const tighten=async()=>{
+    const remaining=CORPUS_DEADLINE_MS-(performance.now()-started);
+    if(remaining<=0){scanLimit=true;return false;}
+    return true;
+  };
+  await budgetClient.query("SET LOCAL statement_timeout TO '10s'");
+  const active=(await budgetClient.query<{config_fingerprint:string;document:unknown;document_sha256:string;document_bytes:string}>(
+    `SELECT CASE WHEN octet_length(configuration.document::text)<=$2 THEN configuration.document
+        ELSE NULL END AS document,active.config_fingerprint,configuration.document_sha256,
+       octet_length(configuration.document::text)::text AS document_bytes
+     FROM orchestration_active_configurations active
+     JOIN orchestration_configurations configuration ON configuration.tenant_id=active.tenant_id
+       AND configuration.config_fingerprint=active.config_fingerprint
+     WHERE active.tenant_id=$1`,[request.tenantId,MAX_CORPUS_BYTES])).rows[0];
+  if(!active)return Object.freeze({status:"unknown",matchMode:"keyword",scope:"visible_authorized_services",
+    environment:request.environment,reason:"no_visible_services"});
+  if(active.document===null||Number(active.document_bytes)>MAX_CORPUS_BYTES)return Object.freeze({status:"unknown",
+    matchMode:"keyword",scope:"visible_authorized_services",environment:request.environment,reason:"scan_limit"});
+  const parsed=parseConfig(active.document);
+  if(!parsed.ok||canonicalOrchestrationHash(parsed.value)!==active.document_sha256)return storage();
+  const validatedConfiguration:ValidatedActiveConfiguration=Object.freeze({
+    configFingerprint:active.config_fingerprint,document:parsed.value,
+  });
+  bytes=Buffer.byteLength(JSON.stringify(active.document),"utf8");
+  if(bytes>MAX_CORPUS_BYTES)return Object.freeze({status:"unknown",matchMode:"keyword",
+    scope:"visible_authorized_services",environment:request.environment,reason:"scan_limit"});
+  type Configured=Readonly<{repositoryId:string;serviceId:string;repositoryScope:string;environmentScope:string}>;
+  const configured:Configured[]=[];
+  let inspected=0;
+  for(const repository of parsed.value.repositories){
+    for(const service of repository.services){
+      if(++inspected>MAX_CONFIGURED_INSPECTED){scanLimit=true;break;}
+      const environment=service.environments.find(item=>item.name===request.environment);
+      if(!environment)continue;
+      configured.push({repositoryId:repository.repository_id,serviceId:service.service_id,
+        repositoryScope:repository.access_scope_id,
+        environmentScope:environment.deployment_authority.access_scope_id});
+    }
+    if(scanLimit)break;
+  }
+  configured.sort((a,b)=>byteOrder(a.repositoryId,b.repositoryId)||byteOrder(a.serviceId,b.serviceId));
+  if(!await tighten())return Object.freeze({status:"unknown",matchMode:"keyword",
+    scope:"visible_authorized_services",environment:request.environment,reason:"scan_limit"});
+  const grantRows=(await budgetClient.query<{access_scope_id:string}>(
+    `SELECT scope.access_scope_id FROM access_scopes scope
+     JOIN principal_scope_grants grant_row ON grant_row.tenant_id=scope.tenant_id
+       AND grant_row.access_scope_id=scope.access_scope_id
+     WHERE scope.tenant_id=$1 AND grant_row.principal_id=$2
+       AND scope.active AND grant_row.active
+     ORDER BY scope.access_scope_id COLLATE "C" LIMIT 1025`,
+    [request.tenantId,principalId])).rows;
+  if(grantRows.length>1024)return Object.freeze({status:"unknown",matchMode:"keyword",
+    scope:"visible_authorized_services",environment:request.environment,reason:"scan_limit"});
+  const grantedScopes=new Set(grantRows.map(row=>row.access_scope_id));
+  const authorized=configured.filter(item=>grantedScopes.has(item.repositoryScope)
+    &&grantedScopes.has(item.environmentScope));
+  if(authorized.length>MAX_CORPUS_SERVICES)scanLimit=true;
+  const found:CorpusOperationCandidate[]=[];
+  for(const service of authorized.slice(0,MAX_CORPUS_SERVICES)){
+    if(bytes>MAX_CORPUS_BYTES||!await tighten()){scanLimit=true;break;}
+    const selector=parseQuerySelection({version:"1",tenantId:request.tenantId,
+      repositoryId:service.repositoryId,serviceId:service.serviceId,
+      selector:{kind:"environment",environment:request.environment}});
+    let selected:QueryCoreResult;
+    try{selected=await readEnvironment(budgetClient,selector,principalId,
+      Math.max(0,MAX_CORPUS_BYTES-bytes),validatedConfiguration);}
+    catch(error){if(error instanceof QueryReadError&&error.code==="QUERY_NOT_FOUND_OR_DENIED")continue;
+      if(error instanceof CorpusBudgetExceeded)throw error;
+      throw error;}
+    if(selected.status!=="resolved"){visible++;incomplete=true;continue;}
+    const scopes=[...new Set(selected.snapshot.evidence.map(item=>item.access_label))];
+    if(scopes.length>1024){scanLimit=true;break;}
+    if(scopes.length>0){
+      if(!await tighten()){scanLimit=true;break;}
+      if(!await hasScopes(budgetClient,request.tenantId,principalId,scopes))continue;
+    }
+    visible++;
+    endpoints+=selected.snapshot.endpoints.length;
+    bytes+=Buffer.byteLength(JSON.stringify(selected.snapshot),"utf8");
+    if(endpoints>MAX_CORPUS_ENDPOINTS||bytes>MAX_CORPUS_BYTES){scanLimit=true;break;}
+    const pinnedSelector=parseQuerySelection({...selector,selector:{kind:"environment",
+      environment:request.environment,expectedCheckpointVersion:selected.pin.checkpointVersion}});
+    const matched=searchOperationCandidates({status:"resolved",selector:pinnedSelector,
+      pin:selected.pin,snapshot:selected.snapshot},{intentQuery:request.intentQuery,limit:20});
+    if(matched.status==="candidates"){
+      if(!matched.complete)incomplete=true;
+      for(const candidate of matched.candidates)found.push(Object.freeze({...candidate,
+        repositoryId:service.repositoryId,serviceId:service.serviceId,
+        selector:pinnedSelector,pin:selected.pin}));
+      if(matched.truncated)anyServiceTruncated=true;
+    }else if(matched.status==="unknown")incomplete=true;
+    if(performance.now()-started>=CORPUS_DEADLINE_MS){scanLimit=true;break;}
+  }
+  found.sort((a,b)=>b.score-a.score||byteOrder(a.repositoryId,b.repositoryId)
+    ||byteOrder(a.serviceId,b.serviceId)||byteOrder(a.endpointId,b.endpointId));
+  const complete=!scanLimit&&!incomplete;
+  if(found.length>0)return Object.freeze({status:"candidates",matchMode:"keyword",
+    scope:"visible_authorized_services",environment:request.environment,
+    candidates:Object.freeze(found.slice(0,request.limit)),complete,
+    truncated:anyServiceTruncated||found.length>request.limit,
+    ...(complete?{}:{incompleteReason:scanLimit?"scan_limit" as const:"incomplete_scan" as const})});
+  if(complete&&visible>0)return Object.freeze({status:"no_match",matchMode:"keyword",
+    scope:"visible_authorized_services",environment:request.environment,complete:true,truncated:false});
+  return Object.freeze({status:"unknown",matchMode:"keyword",scope:"visible_authorized_services",
+    environment:request.environment,reason:scanLimit?"scan_limit":visible===0?"no_visible_services":"incomplete_scan"});
+};
+
 /** Read within a caller-owned transaction; retains the same selector and authorization checks. */
 export async function readQueryContractWithClient(client:PoolClient, options:{schema:string},
   contextInput:unknown, selectionInput:unknown):Promise<QueryContractResult> {
@@ -480,10 +683,11 @@ export async function readQueryContractWithClient(client:PoolClient, options:{sc
 }
 
 /** Reads selector, authorization, and snapshot in one consistent database transaction. */
-export const createQueryReader = (pool: Pool, options: { schema: string }): QueryReader & QueryObservationReader & QueryOperationReader => {
+export const createQueryReader = (pool: Pool, options: { schema: string }): QueryReader & QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader => {
   const schema = quoteEnvironmentSchema(options.schema);
   const withRead = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
     const client = await pool.connect().catch(() => { throw new QueryReadError("QUERY_STORAGE_ERROR"); });
+    let destroyClient=false;
     try {
       await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       await client.query(`SET LOCAL search_path TO ${schema}, pg_catalog`);
@@ -491,10 +695,11 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
       await client.query("COMMIT");
       return result;
     } catch (error) {
+      if(error instanceof CorpusBudgetExceeded){destroyClient=true;throw error;}
       await client.query("ROLLBACK").catch(() => undefined);
       if (error instanceof QueryReadError) throw error;
       throw new QueryReadError("QUERY_STORAGE_ERROR");
-    } finally { client.release(); }
+    } finally { client.release(destroyClient); }
   };
   const readContract = async (contextInput: unknown, selectionInput: unknown): Promise<QueryContractResult> => {
     const selector = parseQuerySelection(selectionInput);
@@ -503,6 +708,14 @@ export const createQueryReader = (pool: Pool, options: { schema: string }): Quer
   };
   return Object.freeze({
     readContract,
+    async searchOperationCandidatesAcrossServices(contextInput:unknown,requestInput:unknown):Promise<CorpusOperationSearchResult>{
+      const request=parseCorpusSearchRequest(requestInput);
+      const principalId=parseContext(contextInput,request.tenantId);
+      try{return await withRead(client=>searchCorpusWithClient(client,principalId,request));}
+      catch(error){if(error instanceof CorpusBudgetExceeded)return Object.freeze({status:"unknown",
+        matchMode:"keyword",scope:"visible_authorized_services",environment:request.environment,
+        reason:"scan_limit"});throw error;}
+    },
     async readOperationCandidates(contextInput:unknown,selectionInput:unknown,optionsInput:unknown):Promise<OperationSearchResult>{
       const options=validateOperationSearchOptions(optionsInput);
       if(!options)throw new QueryReadError("INVALID_QUERY_SEARCH");

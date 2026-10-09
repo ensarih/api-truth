@@ -3,12 +3,18 @@ import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { materializeGitSource, readConfiguredBranches } from "../../connectors/git-source/src/index.js";
+
+const scratch = vi.hoisted(() => ({root: undefined as string | undefined}));
+vi.mock("node:os", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {...actual, tmpdir: () => scratch.root ?? actual.tmpdir()};
+});
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => { scratch.root = undefined; await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 async function repository() {
   const root = await mkdtemp(join(tmpdir(), "api-truth-git-source-test-")); roots.push(root);
@@ -71,12 +77,14 @@ test("enforces file and byte budgets and cleans partial materializations", async
   const repo = await repository();
   await writeFile(join(repo.root, "services/api/extra.ts"), "export const extra = true;\n");
   const revision = await repo.commit();
-  const before = new Set(await readdir(tmpdir()));
+  // Inspect only this test's scratch directory; other test processes can materialize Git concurrently.
+  scratch.root = await mkdtemp(join(tmpdir(), "api-truth-cleanup-owned-")); roots.push(scratch.root);
+  const before = new Set(await readdir(scratch.root));
   await expect(materializeGitSource({ repoPath: repo.root, revision, serviceRoot: "services/api", limits: { maxFiles: 1, maxBytes: 100_000 } }))
     .rejects.toThrow("Git source materialization rejected");
   await expect(materializeGitSource({ repoPath: repo.root, revision, serviceRoot: "services/api", limits: { maxFiles: 20, maxBytes: 4 } }))
     .rejects.toThrow("Git source materialization rejected");
-  const after = await readdir(tmpdir());
+  const after = await readdir(scratch.root);
   expect(after.filter(name => name.startsWith("api-truth-git-source-") && !before.has(name))).toEqual([]);
 });
 

@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { McpServer, type CallToolResult, type ServerContext } from "@modelcontextprotocol/server";
-import type { QueryReader, QueryObservationReader, QueryOperationReader, QuerySelection, QuerySelector } from "@api-truth/query";
+import type { QueryReader, QueryObservationReader, QueryOperationReader, QueryCorpusOperationReader,
+  QuerySelection, QuerySelector } from "@api-truth/query";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
 import * as z from "zod/v4";
@@ -9,7 +10,7 @@ export type ApiTruthMcpPrincipal = Readonly<{ tenantId: string; principalId: str
 
 export type ApiTruthMcpOptions = Readonly<{
   query: Pick<QueryReader, "searchServices" | "readContract" | "readEndpoint" | "readSchema" | "compareContracts">
-    & Partial<QueryObservationReader & QueryOperationReader>;
+    & Partial<QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader>;
   authenticate(context: ServerContext): Promise<ApiTruthMcpPrincipal | undefined>;
   maxOutputBytes?: number;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
@@ -84,6 +85,10 @@ const observationSchema = z.object({repositoryId: boundedIdentifier, serviceId: 
 const candidateSchema = z.object({repositoryId: boundedIdentifier, serviceId: boundedIdentifier,
   view: discoveryEnvironmentView, intentQuery: z.string().min(1).max(512)
     .regex(/^[^\u0000-\u001f\u007f]+$/), maxResults: z.number().int().min(1).max(20).default(20)}).strict();
+const corpusCandidateSchema = z.object({environment: boundedIdentifier,
+  intentQuery: z.string().min(1).max(512).regex(/^[^\u0000-\u001f\u007f]+$/)
+    .refine(isSemanticIntentQuerySafe),
+  maxResults: z.number().int().min(1).max(20).default(20)}).strict();
 
 const successSchema = z.object({ ok: z.literal(true), data: z.unknown() }).strict();
 const failureSchema = z.object({ ok: z.literal(false), error: z.enum(publicErrors) }).strict();
@@ -275,6 +280,17 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
     }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
       readCandidates(principal, selection(principal, args.repositoryId, args.serviceId, args.view),
         {intentQuery: args.intentQuery, limit: args.maxResults})));
+  }
+
+  if (typeof options.query.searchOperationCandidatesAcrossServices === "function") {
+    const searchCorpus = options.query.searchOperationCandidatesAcrossServices.bind(options.query);
+    server.registerTool("api_truth_search_api_corpus", {
+      title: "Find API candidates across services",
+      description: "Search keyword-overlapping operations in current authorized services for one explicit environment. Each candidate has its own exact serving pin and evidence; incomplete coverage is explicit. No inference provider is called.",
+      inputSchema: corpusCandidateSchema, outputSchema, annotations: readOnlyAnnotations,
+    }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
+      searchCorpus(principal, {tenantId: principal.tenantId, environment: args.environment,
+        intentQuery: args.intentQuery, limit: args.maxResults})));
   }
 
   if (typeof options.query.readMetadataObservations === "function") {

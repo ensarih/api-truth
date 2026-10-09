@@ -374,6 +374,17 @@ test("portal and MCP candidate search and discovery share actual PostgreSQL sele
     expect(candidateResult).toMatchObject({status: "candidates", matchMode: "keyword", pin: selected,
       candidates: [{endpointId: "ep-get"}]});
     expect(provider).toHaveBeenCalledTimes(2);
+    const corpusArgs = {environment, intentQuery: "stored order"};
+    const postCorpus = () => fetch(`http://127.0.0.1:${address.port}/api/corpus-candidates`, {method: "POST",
+      headers: {"content-type": "application/json"}, body: JSON.stringify(corpusArgs)});
+    const corpusHttp = await postCorpus(); expect(corpusHttp.status).toBe(200);
+    const corpusResult = await corpusHttp.json();
+    const corpusTool = await client.callTool({name: "api_truth_search_api_corpus", arguments: corpusArgs});
+    expect(corpusTool.structuredContent).toEqual({ok: true, data: corpusResult});
+    expect(corpusResult).toMatchObject({status: "candidates", matchMode: "keyword",
+      scope: "visible_authorized_services", complete: false, incompleteReason: "incomplete_scan",
+      candidates: [{repositoryId, serviceId, endpointId: "ep-get", pin: selected}]});
+    expect(provider).toHaveBeenCalledTimes(2);
     await createAccessPolicyStore(database!.pool, {schema: database!.schema})
       .putGrant({tenantId}, {principalId, scopeId: scopes[4], active: false});
     expect((await post()).status).toBe(404);
@@ -382,6 +393,12 @@ test("portal and MCP candidate search and discovery share actual PostgreSQL sele
     expect((await postCandidates()).status).toBe(404);
     const deniedCandidates = await client.callTool({name: "api_truth_search_api_candidates", arguments: candidateArgs});
     expect(deniedCandidates.structuredContent).toEqual({ok: false, error: "NOT_FOUND_OR_DENIED"});
+    const hiddenCorpusHttp = await postCorpus(); expect(hiddenCorpusHttp.status).toBe(200);
+    const hiddenCorpus = await hiddenCorpusHttp.json();
+    expect(hiddenCorpus).toEqual({status: "unknown", matchMode: "keyword", scope: "visible_authorized_services",
+      environment, reason: "no_visible_services"});
+    const hiddenCorpusTool = await client.callTool({name: "api_truth_search_api_corpus", arguments: corpusArgs});
+    expect(hiddenCorpusTool.structuredContent).toEqual({ok: true, data: hiddenCorpus});
     expect(provider).toHaveBeenCalledTimes(2);
   } finally {
     await Promise.allSettled([client.close(), mcp.close()]);
