@@ -261,6 +261,72 @@ test("the reconciliation worker repairs an opaque serving state from one exact p
   } finally { await database.cleanup(); }
 });
 
+test("a concurrent drain cannot clear a live lease after reconciliation applies the checkpoint", async () => {
+  const database = await createCatalogTestDatabase();
+  const schema = quoteCatalogTestSchema(database.schema);
+  let releaseFinish!: () => void;
+  let signalCheckpointApplied!: () => void;
+  const finishGate = new Promise<void>(resolve => { releaseFinish = resolve; });
+  const checkpointApplied = new Promise<void>(resolve => { signalCheckpointApplied = resolve; });
+  let firstDrain: Promise<readonly {state: string}[]> | undefined;
+  try {
+    await applyOrchestrationMigrations(database.pool, {schema: database.schema});
+    await applyEnvironmentMigrations(database.pool, {schema: database.schema});
+    const orchestration = createOrchestrationRepository(database.pool, {schema: database.schema});
+    await orchestration.registerConfiguration(admin(), configuration());
+    await orchestration.activateInitialConfiguration(admin(), {fingerprint: "config-a"});
+    const environment = createEnvironmentRepository(database.pool, {schema: database.schema});
+    const scope = {tenantId: "tenant-a", repositoryId: "commerce", serviceId: "orders", environment: "uat"};
+    await orchestration.ingestEvent(eventContext(), serving("opaque-before-race", "cursor-old", []));
+    await expect(environment.recordServingObservation(worker,
+      {tenantId: scope.tenantId, producerId: "deploy", eventId: "opaque-before-race"}))
+      .resolves.toMatchObject({disposition: "reconciliation_required"});
+
+    const exact = createEnvironmentReconciler({environment, orchestration,
+      provider: {observe: async () => serving("provider-applied-before-finish", "cursor-new", [])},
+      workerIdentity: worker, eventContext: eventContext()});
+    const gated = {reconcile: async (selected: typeof scope) => {
+      const result = await exact.reconcile(selected);
+      signalCheckpointApplied();
+      await finishGate;
+      return result;
+    }};
+    const scheduling = createEnvironmentReconciliationWorker(database.pool, {schema: database.schema}, gated);
+
+    firstDrain = scheduling.drain(worker, 1) as Promise<readonly {state: string}[]>;
+    await checkpointApplied;
+    expect((await database.pool.query<{current_event_id: string; reconciliation_required: boolean}>(
+      `SELECT current_event_id,reconciliation_required FROM ${schema}.environment_serving_checkpoints`)).rows)
+      .toEqual([{current_event_id: "provider-applied-before-finish", reconciliation_required: false}]);
+    expect((await database.pool.query<{state: string; lease_token: string | null}>(
+      `SELECT state,lease_token FROM ${schema}.environment_reconciliation_tasks`)).rows)
+      .toEqual([{state: "leased", lease_token: expect.any(String)}]);
+
+    await expect(scheduling.drain(worker, 1)).resolves.toEqual([]);
+    expect((await database.pool.query<{state: string; lease_token: string | null}>(
+      `SELECT state,lease_token FROM ${schema}.environment_reconciliation_tasks`)).rows)
+      .toEqual([{state: "leased", lease_token: expect.any(String)}]);
+
+    releaseFinish();
+    await expect(firstDrain).resolves.toMatchObject([{scope, state: "resolved"}]);
+    expect((await database.pool.query<{state: string; lease_token: string | null}>(
+      `SELECT state,lease_token FROM ${schema}.environment_reconciliation_tasks`)).rows)
+      .toEqual([{state: "resolved", lease_token: null}]);
+
+    await database.pool.query(`UPDATE ${schema}.environment_reconciliation_tasks
+      SET state='leased',lease_token='abandoned-worker',lease_expires_at=clock_timestamp()-interval '1 second',
+          resolved_at=NULL`);
+    await expect(scheduling.drain(worker, 1)).resolves.toEqual([]);
+    expect((await database.pool.query<{state: string; lease_token: string | null}>(
+      `SELECT state,lease_token FROM ${schema}.environment_reconciliation_tasks`)).rows)
+      .toEqual([{state: "resolved", lease_token: null}]);
+  } finally {
+    releaseFinish();
+    if (firstDrain) await firstDrain.catch(() => undefined);
+    await database.cleanup();
+  }
+});
+
 test("a configured environment with no deployment event gets an automatic exact provider check", async () => {
   const database = await createCatalogTestDatabase();
   const schema = quoteCatalogTestSchema(database.schema);

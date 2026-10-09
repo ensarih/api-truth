@@ -945,3 +945,10 @@ Migration 0006 records external receipt provenance in a separate append-only tab
 This association is not a runtime analysis job or a verified handler contract. Protected host authorization/grant provisioning, separate capture scheduling and full source/handler verification remain open; D08 runtime input rejection remains in place.
 
 Validation: independent review, clean tracked-source install/typecheck and all 1,529 offline tests passed. All 309 PostgreSQL tests passed, including seven new capture-association cases covering migration/replay, identity collision, denied/revoked writer, hostile input, append-only rows, concurrent duplicate collapse, separate authorized tenants and grant-lock serialization. No capture-specific job or deployed handler claim is enabled.
+
+
+### Active environment lease cleanup race — CI corrective slice (2026-10-09)
+
+Linux PostgreSQL CI exposed a concurrent drain clearing an unexpired reconciliation lease after its owning worker applied the provider checkpoint but before it finished the task. Checkpoint cleanup now leaves active leases to their owner; expired abandoned leases remain eligible for cleanup. Configuration removal and new checkpoint-generation supersession retain their separate behavior. The regression gates the actual provider reconciliation after checkpoint application, then runs the competing drain; the active token survives and the owner resolves the task.
+
+Validation: the deterministic regression failed before the fix and passed afterward. Independent review, clean tracked-source install/typecheck, all 1,529 offline tests and all 310 PostgreSQL tests passed. The focused environment suite passed 40 tests, including active-lease preservation and expired abandoned-lease cleanup. Linux CI remains the final concurrency regression gate. No timeout or expected result is weakened.

@@ -150,7 +150,8 @@ export const createEnvironmentReconciliationWorker = (pool: Pool,
        FROM environment_serving_checkpoints checkpoint
        WHERE checkpoint.tenant_id=task.tenant_id AND checkpoint.repository_id=task.repository_id
          AND checkpoint.service_id=task.service_id AND checkpoint.environment=task.environment
-         AND NOT checkpoint.reconciliation_required AND task.state<>'resolved'`,
+         AND NOT checkpoint.reconciliation_required AND task.state<>'resolved'
+         AND (task.state<>'leased' OR task.lease_expires_at<=clock_timestamp())`,
     );
     await client.query(
       `UPDATE environment_reconciliation_tasks SET state='exhausted',lease_token=NULL,lease_expires_at=NULL,
