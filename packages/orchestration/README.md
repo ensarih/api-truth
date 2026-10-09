@@ -71,6 +71,22 @@ Rows are append-only. This records `pinned_envelope` provenance only: it does no
 verify handler bytes, schedule runtime analysis, or promote branch/environment
 pointers. D08 continues rejecting runtime observation inputs.
 
+`createObservedCaptureVerificationStore` records a separate append-only
+`protected-handler-bytes-1` verification summary linked to that capture identity.
+The trusted host supplies the capture-bound verification port; callers cannot
+submit results, handler paths or signing keys. Parent pin identity is recomputed
+before verification and again inside insertion, together with a DB-local writer
+grant check. The detached result must match the parent source/environment and
+receipt/signer hashes. Exact replay is idempotent; changed roots/results conflict.
+
+Only the canonical result hash, handler count, relative service root, profile and
+parent hashes are stored. Handler paths, controller/export identifiers and receipt
+payloads are not persisted in this table. The storage boundary trusts the host
+byte verifier and adds no deployment or document correspondence proof. No query
+surface, runtime analysis job, catalog snapshot or serving pointer is created.
+Host callbacks and pool acquisition retain their own deadline responsibilities;
+write SQL uses the same local statement timeout as capture associations.
+
 ## Local validation
 
 From the repository root:

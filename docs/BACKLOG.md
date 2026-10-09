@@ -968,3 +968,19 @@ Validation: independent review, clean tracked-source install/typecheck and all 1
 The pinned Swagger fixture now commits its complete synthetic source before measuring the digest and capturing actual request dispatch with Node 22.19.0. The signed receipt and key stay outside the Git service tree. A Node 24.6.0 helper independently computes the configured capture identity, verifies protected provenance, and matches signed handler bytes to that commit. Exact commit/source/handler hashes, external artifact separation, unchanged execution marker and owned temporary-tree cleanup are asserted. The verifier emits no IR claim payload; document mapping, deployment and live host authorization remain unverified.
 
 Validation: independent review and the focused protected scenario passed. An exact clean tracked-source tree installed locked root and isolated fixture dependencies and passed all 60 pinned framework cases with no skips or failures. The default offline suite remains separate and needs no legacy framework dependencies.
+
+
+### Capture-qualified verification summaries — NB1 durable result boundary (2026-10-09)
+
+Migration 0007 links an append-only `protected-handler-bytes-1` verification summary to the separate capture identity. The host supplies the trusted byte verifier; requests contain only capture identity and exact source/environment scope. Parent pin identity is recomputed before verification and under the insertion lock. Writer authorization is rechecked through the same DB-local transaction. A detached, bounded result must match parent context/digests and fixed limitations. Exact replay is idempotent; changed service roots or results conflict.
+
+Only canonical result digest, handler count, relative root/profile and parent hashes are persisted. Handler identifiers and receipt payloads are withheld from this table. The storage layer trusts the host verifier; it establishes neither deployed behavior nor document mapping. No query surface, capture analysis job or mainline catalog/serving promotion is enabled.
+
+Validation: independent review, clean tracked-source install/typecheck, all 1,537 offline tests and all 316 PostgreSQL tests passed. Six focused cases include the actual Git/Ed25519/external-pin/byte-port/storage assembly, scope/hash consistency, replay, cleanup, no source execution and no catalog/pointer writes. Hostile oversized arrays are rejected before bulk descriptor enumeration.
+
+
+### Synthetic example browser completion assertion — CI corrective slice (2026-10-09)
+
+The browser test previously matched a lowercase substring that could occur in the loading message but failed against the capitalized final result. It now waits for the exact completed synthetic-result message and endpoint identity before checking rendered content. Application behavior, timeouts and hostile-content assertions are unchanged.
+
+Validation: independent review and all eight browser tests passed on the clean verification tree. The pinned protected-capture case, PostgreSQL, offline and Java Linux gates at the earlier commit passed; only this browser assertion failed there. The corrected latest CI run is the final browser gate.
