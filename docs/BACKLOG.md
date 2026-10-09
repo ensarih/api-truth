@@ -919,7 +919,7 @@ Validation: clean tracked-source install/typecheck and all 1,514 offline tests p
 
 Two Linux offline jobs exceeded the 15-second fixture-driver test deadline while every other test passed. The public synthetic driver now reuses the same strict local fact normalizer in-process instead of launching seven Node/IR/validator processes. It preserves all seven event kinds, IDs, provider fixture sequences and previous-event chaining, and refuses unconfigured branches without writing an artifact. Standalone CLI behavior remains covered independently. The test timeout and assertions were not weakened.
 
-Validation: independent review, clean tracked-source install/typecheck and all 1,514 offline tests passed. The driver/CLI focused suite passed 18 tests; the formerly slow fixture test completed within the unchanged deadline. Linux CI rerun remains the final startup-regression gate.
+Validation: independent review, clean tracked-source install/typecheck and all 1,514 offline tests passed. The driver/CLI focused suite passed 18 tests; the formerly slow fixture test completed within the unchanged deadline. The corrected development commit passed Linux CI, and the subsequent portal commit also passed the unchanged Linux offline gate.
 
 
 ### Synthetic example portal form — P3 optional UI (2026-10-09)
@@ -927,3 +927,12 @@ Validation: independent review, clean tracked-source install/typecheck and all 1
 Portal 0.2.0 shows the policy-ID form only when the host enables the example service, and enables generation only for a resolved environment checkpoint. It posts the currently displayed pin and clears pending/results when the policy or contract changes. Returned tenant, source digest, full pin and endpoint membership must match the loaded contract. The actual returned endpoint is labeled; the form does not claim the policy targets a user-selected endpoint. All example content is rendered as text, and malformed or stale responses clear the display. These are synthetic placeholders, not captured traffic.
 
 Validation: independent UI/scope review, clean tracked-source install/typecheck and all 1,514 offline tests passed. All eight real-browser tests and twelve portal/observation PostgreSQL tests passed. Browser regressions cover malicious text, invalid tenant/endpoint/source digest, malformed withheld results, stale policy/contract replies and the absent optional capability.
+
+
+### External runtime receipt pin — NB1 protected provenance boundary (2026-10-09)
+
+Git source connector 0.8.0 exposes a separate runtime-capture-pin subpath. Trusted host configuration binds one tenant/repository/service/revision/source digest/environment to protected artifact and signer references plus exact receipt/SPKI hashes. The resolver rejects source-tree paths, proxy/accessor inputs, changed artifacts or signer keys, malformed receipts and invalid signatures. Host authorization runs before reads and again before delivery. A bounded total deadline passes cancellation signals to protected ports; those ports must cancel their own underlying I/O.
+
+The returned `pinned_envelope` identifies only a verified external signed envelope. Repository/service/revision/source digest/environment are signed; tenant and policy remain independently host-bound. Handler source bytes, actual registration, deployment and capture-process identity are not established. D08 still rejects runtime observations; separate durable capture associations, authorized scheduling and full handler verification remain open. Existing revision snapshots and analysis checkpoints are not reused for receipts.
+
+Validation: independent boundary review, clean tracked-source install/typecheck and all 1,529 offline tests passed. Focused authorization/revocation, proxy, substitution, signature, hostile JSON and stalled-port regressions passed. No live capture or deployment is certified.

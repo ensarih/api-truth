@@ -1,15 +1,18 @@
 {
   "name": "@api-truth/connector-git-source",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./analysis-ports": "./src/analysis-ports.ts"
+    "./analysis-ports": "./src/analysis-ports.ts",
+    "./runtime-capture-pin": "./src/runtime-capture-pin.ts"
   },
   "dependencies": {
     "@api-truth/analyzer-host": "0.10.0",
     "@api-truth/ir": "0.0.0",
-    "@api-truth/orchestration": "0.0.0"
+    "@api-truth/orchestration": "0.0.0",
+    "@api-truth/analyzer-nodejs-swagger2-document": "0.38.0",
+    "@sinclair/typebox": "0.34.41"
   }
 }

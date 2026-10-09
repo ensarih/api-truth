@@ -71,3 +71,29 @@ local source-to-analyzer bridge, not remote-provider acquisition, branch
 selection, or proof of deployment/runtime behavior.
 
 The exact `java-spring-mvc@0.1.0` profile accepts one source tree and no classpath, manifest or startup options. Its AST toolchain must be prepared explicitly in the host project before immutable Git sessions are analyzed. The source checkout cannot select a compiler or dependency runtime.
+
+## External runtime capture pin boundary
+
+`createRuntimeCapturePinResolver` is a separate, optional boundary for an
+externally protected Node runtime receipt. The trusted host supplies an exact
+tenant/repository/service/revision/source-digest/environment binding, policy
+version, opaque receipt and key references, and the expected SHA-256 hashes of
+the receipt and Ed25519 public key's SPKI bytes. It must authorize the scope
+before the protected receipt and key readers are called, then reauthorize
+after verification before returning a pin. These readers must resolve
+host-managed artifacts; repository paths, committed receipt/key files, and
+references from the receipt or caller are never accepted as authority. The
+resolver enforces one total deadline (10 seconds by default, configurable up
+to 30 seconds) and passes an abort signal to each trusted port. Ports must
+honor the signal and enforce their own underlying I/O deadline: a promise
+race cannot cancel an uncooperative read.
+
+The resolver checks bounded strict JSON, the receipt signature and format,
+the configured signer, the exact signed repository/service/revision/source
+digest/environment, and the independent host hashes. It returns only receipt
+and signer hashes, opaque references, context, and an identity hash. Tenant and
+policy are **host-bound**, not fields signed by the existing receipt format.
+The result is `pinned_envelope`: it does not verify handler source bytes,
+deployment, capture-process identity, or observed route behavior. Runtime
+observations remain rejected by the D08 local analysis ports until a separate
+authorized job/checkpoint association and full verification gate exists.
