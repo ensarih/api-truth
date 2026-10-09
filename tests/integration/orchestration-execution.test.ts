@@ -23,6 +23,22 @@ const configuration = { fingerprint: "exec-config", document: {
       adapter_version: ANALYZER.analyzer_version }, intended_branches: ["main"], environments: [] }] }],
   inference: { enabled: false }, logs: { enabled: false },
 } };
+const withUnrelatedService = () => {
+  const document=structuredClone(configuration.document);
+  document.repositories.push({repository_id:"analytics",provider:"github",locator:"acme/analytics",
+    access_scope_id:"engineering",services:[{service_id:"metrics",root:".",
+      analyzer:{adapter_id:ANALYZER.analyzer_id,adapter_version:ANALYZER.analyzer_version},
+      intended_branches:["main"],environments:[]}]});
+  return document;
+};
+const flipActiveConfigWithoutLeaseTransition = async (database: Awaited<ReturnType<typeof createCatalogTestDatabase>>,
+  fingerprint: string, document: unknown) => {
+  const schema = quoteCatalogTestSchema(database.schema);
+  await createOrchestrationRepository(database.pool, { schema: database.schema }).registerConfiguration(admin,
+    { fingerprint, document });
+  await database.pool.query(`UPDATE ${schema}.orchestration_active_configurations
+    SET config_fingerprint=$2 WHERE tenant_id=$1`, [tenantId, fingerprint]);
+};
 const admin = { tenantId, principalId: "admin", capabilities: ["configuration.admin"] };
 const context = { tenantId, principalId: "connector", producerId: "github-adapter",
   allowedEventTypes: ["branch.updated", "pull_request.updated", "reconciliation.requested", "repository.baseline_requested"], allowedRepositories: ["commerce"],
@@ -1148,6 +1164,66 @@ test("configuration activation prevents an in-flight old reconciliation from wri
        WHERE job.tenant_id=$1 AND job.job_id=$2`, [tenantId, old!.jobId],
     );
     expect(state.rows).toEqual([{ old_state: "leased", fingerprint: "exec-config-next", branch_rows: "0" }]);
+  } finally { await database.cleanup(); }
+});
+
+test("branch reconciliation skips provider access when an unrelated active config changes", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const { result } = await preparedAnalysis("c".repeat(40));
+    const { repository, worker } = await activate(database, result);
+    await repository.ingestEvent(context, reconciliationEvent("scan-before-unrelated-config"));
+    const [claim] = await worker.claimJobs(workerIdentity, { limit: 1 });
+    expect(claim?.kind).toBe("branch_reconciliation");
+    await flipActiveConfigWithoutLeaseTransition(database,"exec-config-unrelated",withUnrelatedService());
+    let providerReads=0;
+    await expect(worker.runJob(workerIdentity,claim!.lease,{
+      exactBranchReconciler:{observe:async({branch}:{branch:string})=>{
+        providerReads++;
+        return {repositoryId:"commerce",branch,state:"absent",
+          providerEvidence:{provider:"github",provider_reference:"stale-read",order:{kind:"sequence",value:"2"}}};
+      }},
+    } as never)).rejects.toMatchObject({code:"JOB_SUPERSEDED"});
+    expect(providerReads).toBe(0);
+    const schema=quoteCatalogTestSchema(database.schema);
+    const state=await database.pool.query<{state:string;cancellation_requested:boolean;branchRows:string}>(
+      `SELECT job.state,job.cancellation_requested,
+        (SELECT count(*)::text FROM ${schema}.orchestration_branch_checkpoints WHERE tenant_id=$1) AS "branchRows"
+       FROM ${schema}.orchestration_jobs job WHERE job.tenant_id=$1 AND job.job_id=$2`,[tenantId,claim!.jobId]);
+    expect(state.rows).toEqual([{state:"leased",cancellation_requested:false,branchRows:"0"}]);
+  } finally { await database.cleanup(); }
+});
+
+test("PR reconciliation skips provider access when an unrelated active config changes", async () => {
+  const database = await createCatalogTestDatabase();
+  try {
+    const baseRevision="d".repeat(40),headRevision="e".repeat(40);
+    const { result } = await preparedAnalysis(baseRevision);
+    result.status = "success";
+    result.coverage = { status: "complete", analyzed_roots: ["."], diagnostic_ids: [] };
+    const { repository, worker } = await activate(database, result);
+    await repository.ingestEvent(context,{...pullRequestEvent(baseRevision,headRevision),
+      provider_evidence:{provider:"github",provider_reference:"pr-unrelated",order:{kind:"cursor",value:"cursor-1"}}});
+    const [claim] = await worker.claimJobs(workerIdentity,{limit:1});
+    expect(claim?.kind).toBe("pr_reconciliation");
+    await flipActiveConfigWithoutLeaseTransition(database,"exec-config-pr-unrelated",withUnrelatedService());
+    let providerReads=0;
+    await expect(worker.runJob(workerIdentity,claim!.lease,{
+      exactPullRequestReconciler:{observe:async()=>{
+        providerReads++;
+        return {repositoryId:"commerce",serviceId:"orders",pullRequestId:"42",state:"open",
+          baseBranch:"main",baseRevision,headBranch:"feature/orders",headRevision,
+          providerEvidence:{provider:"github",provider_reference:"stale-pr-read",order:{kind:"sequence",value:"4"}}};
+      }},
+    } as never)).rejects.toMatchObject({code:"JOB_SUPERSEDED"});
+    expect(providerReads).toBe(0);
+    const schema=quoteCatalogTestSchema(database.schema);
+    const state=await database.pool.query<{state:string;cancellation_requested:boolean;checkpointState:string}>(
+      `SELECT job.state,job.cancellation_requested,checkpoint.state AS "checkpointState"
+       FROM ${schema}.orchestration_jobs job JOIN ${schema}.orchestration_pr_checkpoints checkpoint
+         ON checkpoint.tenant_id=job.tenant_id AND checkpoint.current_job_id=job.job_id
+       WHERE job.tenant_id=$1 AND job.job_id=$2`,[tenantId,claim!.jobId]);
+    expect(state.rows).toEqual([{state:"leased",cancellation_requested:false,checkpointState:"pending"}]);
   } finally { await database.cleanup(); }
 });
 

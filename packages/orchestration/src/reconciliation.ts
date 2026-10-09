@@ -164,6 +164,11 @@ export const executeLeasedReconciliationJob = async (pool: Pool, options: { sche
       `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
     );
     const job = await validLease(client, selected.rows[0], worker, lease);
+    const active = await client.query<{ config_fingerprint: string }>(
+      `SELECT config_fingerprint FROM orchestration_active_configurations WHERE tenant_id=$1 FOR SHARE`,
+      [job.tenant_id],
+    );
+    if (active.rows[0]?.config_fingerprint !== job.config_fingerprint) fail("JOB_SUPERSEDED");
     if (job.kind !== "branch_reconciliation" || job.branch === null) {
       throw new OrchestrationError("RECONCILIATION_FAILED");
     }
@@ -346,6 +351,11 @@ const executeLeasedPullRequestReconciliationJob = async (pool: Pool, options: { 
       `SELECT * FROM orchestration_jobs WHERE tenant_id=$1 AND job_id=$2`, [lease.tenantId, lease.jobId],
     );
     const job = await validLease(client, selected.rows[0], worker, lease);
+    const active = await client.query<{ config_fingerprint: string }>(
+      `SELECT config_fingerprint FROM orchestration_active_configurations WHERE tenant_id=$1 FOR SHARE`,
+      [job.tenant_id],
+    );
+    if (active.rows[0]?.config_fingerprint !== job.config_fingerprint) fail("JOB_SUPERSEDED");
     if (job.kind !== "pr_reconciliation" || job.pull_request_id === null) {
       throw new OrchestrationError("RECONCILIATION_FAILED");
     }

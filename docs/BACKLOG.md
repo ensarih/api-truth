@@ -874,3 +874,10 @@ A read-only fixed-origin GitHub port binds tenant, repository identity and an ex
 Present results contain an immutable commit and an opaque provider reference without event order. Optional comparison describes only the two requested SHAs as identical/ahead/behind/diverged; it does not establish a former branch head or a history rewrite. A 404 remains unknown, never proof of absence. This standalone port is not a live D08 host: installation/token binding, host source authorization, current-config/lease fencing, provider-source materialization, deletion proof and live provider acceptance remain open.
 
 Validation: independent review, exact clean install/typecheck and all 1,480 offline tests passed. Thirty new reader scenarios cover configured-branch isolation, tenant/repository mismatches, inaccessible refs, response/ancestry inconsistencies, cancellation, byte limits and total timeout. Tests use deterministic transport; no live installation or deployment is certified.
+
+
+### Reconciliation active-config preflight — D08 defense in depth (2026-10-09)
+
+Both exact branch and pull-request reconciliation verify the active configuration fingerprint in a short transaction before invoking a provider port. A stale leased job fails as superseded with no provider request. Completion still rechecks lease, active configuration and subject generation; no database transaction spans network I/O. Provider-source authorization remains a trusted host responsibility, distinct from catalog reader grants.
+
+Validation: independent lock/transaction review, clean tracked-source install/typecheck and all 297 PostgreSQL tests passed. Branch and PR regression cases preserve an uncancelled lease while changing the active configuration and prove zero provider calls and no state promotion.
