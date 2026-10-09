@@ -1,6 +1,6 @@
 import {readFile} from "node:fs/promises";
 import {expect, test} from "vitest";
-import type {ContractSnapshot} from "../../packages/ir/src/index.js";
+import {parseContractSnapshot, type ContractSnapshot} from "../../packages/ir/src/index.js";
 import {buildSyntheticExample, SyntheticExampleError} from "../../packages/observations/src/index.js";
 
 const snapshot = JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json", import.meta.url), "utf8")) as ContractSnapshot;
@@ -159,4 +159,28 @@ test("negative numeric bounds choose a valid placeholder and reject impossible i
     items:{type:"array",items:{type:"object",properties:{sku:{type:"string"}},required:["sku"]}},
   };
   expect(buildSyntheticExample(negative,"ep-create",policy())).toMatchObject({status:"withheld"});
+});
+
+test("schema references use the literal IR component ID while policy paths use JSON Pointer decoding",()=>{
+  const input=view();
+  const schemas=input.snapshot.schemas as Record<string,{schema:Record<string,unknown>;schema_id:string;evidence_ids:string[]}>;
+  schemas["Foo~1Bar"]={schema_id:"Foo~1Bar",evidence_ids:["ev-type"],schema:{type:"object",properties:{"selected/name":{type:"string"}},required:["selected/name"]}};
+  schemas["Foo/Bar"]={schema_id:"Foo/Bar",evidence_ids:["ev-type"],schema:{type:"object",properties:{decoy:{type:"string"}},required:["decoy"]}};
+  (input.snapshot.schemas.CreateOrder!.schema as Record<string,unknown>).properties={payload:{$ref:"#/schemas/Foo~1Bar"}};
+  (input.snapshot.schemas.CreateOrder!.schema as Record<string,unknown>).required=["payload"];
+  const parsed=parseContractSnapshot(input.snapshot);
+  if(!parsed.ok)throw new Error(JSON.stringify(parsed.error.issues));
+  expect(parsed.value.schemas["Foo~1Bar"]?.schema_id).toBe("Foo~1Bar");
+  const parsedRoot=parsed.value.schemas.CreateOrder!.schema as {properties:Record<string,{$ref:string}>};
+  expect(parsedRoot.properties.payload!.$ref).toBe("#/schemas/Foo~1Bar");
+  input.snapshot=structuredClone(parsed.value);
+  const policyValue=policy({propertyPaths:["/payload/selected~1name"]});
+  const generated=buildSyntheticExample(input,"ep-create",policyValue);
+  expect(generated).toMatchObject({status:"generated",value:{payload:{"selected/name":"string"}}});
+
+  const changedDecoy=structuredClone(input);
+  changedDecoy.snapshot.schemas["Foo/Bar"]!.schema={type:"object",properties:{changed:{type:"integer"}},required:["changed"]};
+  const sameReferencedComponent=buildSyntheticExample(changedDecoy,"ep-create",policyValue);
+  expect(sameReferencedComponent).toMatchObject({status:"generated",fingerprints:{schemaSha256:generated.status==="generated"
+    ?generated.fingerprints.schemaSha256:""}});
 });

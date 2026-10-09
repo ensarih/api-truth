@@ -131,17 +131,13 @@ const withheld=(counts:MutableCount,rule?:string):SyntheticExampleResult=>{
 
 const schemaKeys=new Set(["$ref","type","properties","required","items","minItems","maxItems",
   "minLength","maxLength","minimum","maximum"]);
-const pointerDecode=(value:string):string|undefined=>{
-  if(/~(?![01])/.test(value))return undefined;
-  return value.replaceAll("~1","/").replaceAll("~0","~");
-};
 const schemaFingerprintMaterial=(root:unknown,snapshot:ContractSnapshot):unknown=>{
   const found=new Map<string,unknown>(),seen=new Set<string>();let visits=0;
   const walk=(schema:unknown):void=>{
     if(++visits>2048||!plain(schema))return;
     if(typeof schema.$ref==="string"&&schema.$ref.startsWith("#/schemas/")){
-      const id=pointerDecode(schema.$ref.slice("#/schemas/".length));
-      if(id&&!seen.has(id)&&Object.hasOwn(snapshot.schemas,id)){
+      const id=schema.$ref.slice("#/schemas/".length);
+      if(id.length>0&&!seen.has(id)&&Object.hasOwn(snapshot.schemas,id)){
         seen.add(id);const component=snapshot.schemas[id];if(component){found.set(id,component.schema);walk(component.schema);}
       }
     }
@@ -172,7 +168,7 @@ const generateValue=(raw:unknown,snapshot:ContractSnapshot,node:Trie,stack:Set<s
     if(Object.keys(raw).length!==1||typeof raw.$ref!=="string"||!raw.$ref.startsWith("#/schemas/")){
       count(counts,"schema_reference_unsupported");return undefined;
     }
-    const id=pointerDecode(raw.$ref.slice("#/schemas/".length));
+    const id=raw.$ref.slice("#/schemas/".length);
     if(!id||stack.has(id)||!Object.hasOwn(snapshot.schemas,id)){
       count(counts,"schema_reference_cycle_or_missing");return undefined;
     }

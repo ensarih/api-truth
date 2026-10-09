@@ -906,3 +906,10 @@ A separate trusted host resolver builds short-lived RS256 App JWT claims through
 This provider credential flow does not establish this host's source-access authorization or deployment state. A protected live host still needs operator-provisioned App/installation/secret bindings, authorization and lease/configuration fencing. Offline tests verify transport and protocol behavior only; real GitHub credential acceptance remains open.
 
 Validation: independent review and extra regression checks for App/suspension rechecks and invalid final clock; clean tracked-source install/typecheck and all 1,513 offline tests passed. Twenty-two token resolver tests include actual synthetic RSA JWT verification and composition with the exact branch reader; no live credential was minted in these tests.
+
+
+### Exact IR schema identifiers in synthetic examples — corrective slice (2026-10-09)
+
+Observations 0.4.1 aligns local schema lookup and fingerprint closure with the IR validator's literal schema-ID suffix semantics. Component IDs containing `~1` no longer select a different component containing `/`. Policy property paths still follow JSON Pointer escaping. A parse-valid conflicting-component regression proves the selected example shape and fingerprint depend only on the referenced literal component.
+
+Validation: clean tracked-source install/typecheck and all 1,514 offline tests passed, plus all eleven observation-query PostgreSQL cases. The conflicting identifier regression validates the fixture through the IR parser before generation and proves decoy-schema changes cannot alter the selected schema fingerprint.
