@@ -223,3 +223,19 @@ Java tests have separate configurations so the default offline suite requires no
 The opt-in `extract:openapi31` CLI targets the separate bounded OpenAPI 3.1.0/3.1.1 document profile. Its unit/CLI tests run in the ordinary offline gate; the Git document worker suite covers its actual PostgreSQL baseline, update and rejected malformed/deleted document revisions.
 
 The dedicated `test:java` gate also exercises actual AST declarations through catalog conversion, keyword matching and semantic source projection, including selector/body egress canaries and mismatched evidence/profile cases. It uses deterministic provider stubs; no model API is called.
+
+
+## CI PostgreSQL image source
+
+CI starts the isolated PostgreSQL service with both `deploy/compose.test.yml`
+and `deploy/compose.test.ci.yml`. The override uses the public
+[Docker Official Images repository on AWS ECR Public](https://gallery.ecr.aws/docker/library/postgres)
+at the exact same PostgreSQL 18.6-bookworm OCI index digest as the local image.
+Only the registry reference changes. The fixed project, synthetic credentials,
+loopback port, temporary storage and health checks remain in the base file;
+normal readiness and teardown commands operate on that same project.
+
+This avoids the Docker Hub unauthenticated pull quota that prevented CI
+PostgreSQL and Java integration jobs from starting. Local startup still uses
+the base Compose file. Registry availability remains a CI prerequisite;
+an image pull failure does not count as passing integration tests.

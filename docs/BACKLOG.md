@@ -1074,3 +1074,10 @@ Git connector 0.12.0 adds an explicit host opt-in bounded in-memory cache for su
 Swagger 2, OpenAPI 3.0 and OpenAPI 3.1 still reread and verify current selected bytes before lookup, run all projection/diagnostic/output checks, and rebuild evidence and result identities for the current request and revision. Failed parsing is not retained. Immutable parsed trees prevent later mutation from changing hits. The byte budget measures serialized JSON size rather than exact heap usage. This cache skips syntax parsing only; partial coverage, runtime unknowns and full D08 analysis remain unchanged. No snapshot reuse, migrations or deployment claims are added.
 
 Validation: independent review resolved proxy/parser substitution and mutable factory-scope findings. Focused tests cover all three profiles, byte/scope invalidation, bounded eviction, failed parsing, post-factory mutation, real Git sessions and disposal. A clean locked install/typecheck passed all 1,572 offline and 368 PostgreSQL tests.
+
+
+### CI PostgreSQL mirror at the existing immutable digest — P6 operating gate repair (2026-10-10)
+
+The `034e11e` and `77f8dd8` CI PostgreSQL/Java gates failed before integration tests because Docker Hub rejected unauthenticated image pulls. A CI-only Compose override now selects the Docker Official Images repository on AWS ECR Public at the exact existing PostgreSQL 18.6-bookworm OCI index digest. The index bytes and Linux amd64 manifest were verified against the same Docker Hub digest. The default local Compose file, fixed project, loopback-only port, synthetic credentials, temporary storage, readiness and teardown remain unchanged.
+
+Validation: read-only Compose configuration comparison confirmed the registry image reference is the only service-setting change; independent review and a clean locked install/typecheck passed all 1,573 offline tests. No local database was restarted or reset. Exact-commit CI startup and full gates remain the final acceptance check.

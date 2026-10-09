@@ -39,7 +39,10 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Start isolated PostgreSQL
-        run: npm run test:env:up
+        run: >-
+          docker compose --project-name api-truth-test
+          --file deploy/compose.test.yml --file deploy/compose.test.ci.yml
+          up --detach --wait --wait-timeout 60
       - name: Run PostgreSQL integration tests
         run: npm run test:integration
       - name: Stop isolated PostgreSQL
@@ -114,7 +117,10 @@ jobs:
       - name: Verify offline Java AST boundary
         run: npm run test:java
       - name: Start isolated PostgreSQL
-        run: npm run test:env:up
+        run: >-
+          docker compose --project-name api-truth-test
+          --file deploy/compose.test.yml --file deploy/compose.test.ci.yml
+          up --detach --wait --wait-timeout 60
       - name: Verify Java source updates through the durable worker
         run: npm run test:java:integration
       - name: Stop isolated PostgreSQL
