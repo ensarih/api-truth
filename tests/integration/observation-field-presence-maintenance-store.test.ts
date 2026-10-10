@@ -6,6 +6,7 @@ import {applyOrchestrationMigrations} from "../../packages/orchestration/src/ind
 import {applyObservationMigrations,compileFieldPresenceStoragePolicy} from "../../packages/observations/src/index.js";
 import {createCatalogTestDatabase,quoteCatalogTestSchema,type CatalogTestDatabase} from "./support/database.js";
 import {createFieldPresenceMaintenanceStore,type FieldPresenceMaintenanceManager} from "../../packages/observations/src/field-presence-maintenance-store.js";
+import {createFieldPresenceMaintenanceRunner} from "../../packages/observations/src/field-presence-maintenance-runner.js";
 import type {ContractSnapshot} from "../../packages/ir/src/index.js";
 
 const tenant="tenant-maintenance",repository="commerce",service="orders",environment="uat",policyId="owner-fields";
@@ -118,7 +119,11 @@ test("cleanup uses database expiry and permanent tombstones without requiring se
       completeness,policy_version FROM ${schema}.observation_records WHERE import_id=$1::uuid AND record_id=$3::uuid`,[importId,expiredImport,recordId]);
   await insertPresence({importId:expiredImport});
   await database.pool.query("SELECT pg_sleep(2.2)");
-  expect(await maintenance().cleanup(credential,request())).toEqual({removed:1});
+  const runner=createFieldPresenceMaintenanceRunner({maintenance:maintenance(),bindings:[binding],
+    credentialForBinding:async()=>credential});
+  try{expect(await runner.runOnce()).toEqual({status:"completed",attempted:1,succeeded:1,failed:0});}
+  finally{await runner.stop();}
+  expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_field_presence_results`)).rows[0].count).toBe(0);
   expect((await database.pool.query(`SELECT reason FROM ${schema}.observation_field_presence_tombstones`)).rows[0].reason).toBe("expired");
   await expect(insertPresence({importId:expiredImport})).rejects.toThrow();
 });
@@ -207,4 +212,48 @@ test("cleanup removes superseded rows and releases the policy-wide budget for th
   await insertPresence({revision:"2",fingerprint:secondFingerprint,recordId:otherRecordId});
   expect(await maintenance().cleanup(credential,request())).toEqual({removed:0});
   expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_field_presence_results`)).rows[0].count).toBe(1);
+});
+
+
+test("configured runner preserves live rows, removes a disabled batch once and keeps metadata/tombstones",async()=>{
+  await grant();await insertPresence();
+  const summaries:unknown[]=[];
+  const runner=createFieldPresenceMaintenanceRunner({maintenance:maintenance(),bindings:[binding],batchLimit:1,
+    credentialForBinding:async configured=>{expect(configured).toEqual(binding);return credential;},
+    onSummary:summary=>{summaries.push(summary);}});
+  try{
+    expect(await runner.runOnce()).toEqual({status:"completed",attempted:1,succeeded:1,failed:0});
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_field_presence_results`)).rows[0].count).toBe(1);
+    await database.pool.query(`UPDATE ${schema}.observation_field_presence_policy_heads SET enabled=false`);
+    expect(await runner.runOnce()).toEqual({status:"completed",attempted:1,succeeded:1,failed:0});
+    expect(await runner.runOnce()).toEqual({status:"completed",attempted:1,succeeded:1,failed:0});
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_field_presence_results`)).rows[0].count).toBe(0);
+    expect((await database.pool.query(`SELECT reason FROM ${schema}.observation_field_presence_tombstones`)).rows).toEqual([{reason:"deleted"}]);
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_records`)).rows[0].count).toBe(2);
+    expect(summaries).toHaveLength(3);
+    expect(JSON.stringify(summaries)).not.toMatch(/tenant-maintenance|owner-fields|maintenance-credential/);
+  }finally{await runner.stop();}
+});
+
+test("runner credentials and revoked owner grants cannot authorize deletion; a restored grant enables retry",async()=>{
+  await grant();await insertPresence();
+  await database.pool.query(`UPDATE ${schema}.observation_field_presence_policy_heads SET enabled=false`);
+  let supplied:unknown={opaque:"wrong-credential"};
+  const runner=createFieldPresenceMaintenanceRunner({maintenance:maintenance(),bindings:[binding],
+    credentialForBinding:async()=>supplied});
+  const preserved=async()=>{
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_field_presence_results`)).rows[0].count).toBe(1);
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_field_presence_tombstones`)).rows[0].count).toBe(0);
+  };
+  try{
+    const connect=vi.spyOn(database.pool,"connect");
+    expect(await runner.runOnce()).toEqual({status:"completed",attempted:1,succeeded:0,failed:1});
+    expect(connect).not.toHaveBeenCalled();connect.mockRestore();await preserved();
+    supplied=credential;
+    await database.pool.query(`UPDATE ${schema}.principal_scope_grants SET active=false`);
+    expect(await runner.runOnce()).toEqual({status:"completed",attempted:1,succeeded:0,failed:1});await preserved();
+    await database.pool.query(`UPDATE ${schema}.principal_scope_grants SET active=true`);
+    expect(await runner.runOnce()).toEqual({status:"completed",attempted:1,succeeded:1,failed:0});
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema}.observation_field_presence_results`)).rows[0].count).toBe(0);
+  }finally{await runner.stop();}
 });

@@ -185,8 +185,8 @@ These are storage integrity primitives, not an authenticated persistence service
 The host must still approve policies, establish body-to-parent correspondence,
 recheck current configuration/serving pins and grants atomically, bound source
 reads, and authorize retention maintenance independently. Expiry hides rows;
-physical cleanup requires the separate maintenance runner, which is not implemented
-here. Tombstones are not pruned; any future pruning needs a proven replay horizon.
+physical cleanup is available through the authenticated maintenance store and
+explicitly configured in-process runner below. Tombstones are not pruned; any future pruning needs a proven replay horizon.
 
 ## Host-authenticated owner-policy approval
 
@@ -272,7 +272,7 @@ Owner approval and durable import reject selected-revision and pointer-version
 views; those require a separate qualified provenance design. Their authority
 transactions set local ten-second lock and statement deadlines before acquiring
 locks. The historical metadata importer keeps its previous default behavior.
-Provider adapters, automatic cleanup scheduling and reviewed request/response
+Provider adapters, durable multi-process scheduling and reviewed request/response
 examples remain separate work.
 
 ## Authorized value-free presence queries
@@ -324,3 +324,37 @@ its `IncomingMessage` or `ServerContext` only as the opaque credential; the host
 manager must independently authenticate that context. Transport inputs cannot
 supply credentials, identities, access scopes or capabilities. The optional
 read-only surfaces do not expose owner approval, import or cleanup writes.
+
+
+## Bounded automatic presence cleanup
+
+`createFieldPresenceMaintenanceRunner({maintenance, bindings,
+credentialForBinding, intervalMs?, policiesPerTick?, batchLimit?, onSummary?})`
+wraps the authenticated maintenance store. It accepts at most 128 detached,
+immutable scope/policy bindings, with no duplicate policy identity. It discovers
+no branches, environments or policy history. Empty bindings are a valid no-op.
+Each configured binding needs its own host-provided opaque credential; the store
+still independently authenticates the cleanup capability and current owner grant.
+
+`start()` arms the first pass after the interval. `runOnce()` performs a manual
+pass, while concurrent calls return a frozen `busy` summary. A pass visits each
+selected binding at most once and rotates its cursor fairly even after failures.
+Defaults are a 60-second interval, four policies per pass and 20 rows per batch;
+limits are 60 seconds–24 hours, 1–16 policies and 1–100 rows. The next interval
+starts after settlement, including manual passes while automatic mode is active.
+No overlapping work or accumulated catch-up passes are scheduled.
+
+Credential acquisition has a ten-second deadline and an AbortSignal. `stop()`
+cancels the timer and pending credential reads, suppresses late credentials and
+waits for an already-started cleanup to settle before returning. Cleanup itself
+uses the store's bounded database transactions; it is not falsely reported as
+cancelled while deletion continues. Restart is allowed after stop completes.
+
+Frozen summaries contain only `status`, `attempted`, `succeeded` and `failed`;
+`completed` means the bounded pass settled, not that all configured policies or
+all retained rows were visited. A succeeded attempt can remove zero rows.
+Observer exceptions and rejected promises are isolated. Credentials, identifiers,
+removed record contents and callback/database errors are never included.
+The runner is in-process: it has no durable cursor, distributed lease, crash
+recovery or deployment scheduler. Those remain separate gates. Tombstones and
+original metadata stay intact, and live rows remain protected by the store.

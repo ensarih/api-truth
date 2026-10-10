@@ -44,7 +44,7 @@ provider or enterprise pilot claim.
 | NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
-| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries, optional portal/MCP presentation and bounded retention maintenance are implemented; live adapters, cleanup scheduling and durable reviewed samples remain separate gates. |
+| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries, optional portal/MCP presentation and bounded retention maintenance are implemented; live adapters, durable distributed scheduling and reviewed samples remain separate gates. Bounded in-process cleanup scheduling is implemented. |
 | P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
@@ -1209,7 +1209,9 @@ privacy/lineage, atomic rollback and real database-time expiry. Review exposed s
 now require an existing result at tombstone insertion and completed deletion at
 transaction commit. Public persistence
 and authorized query/maintenance services are still required; a SQL view or delete
-primitive does not grant authority. Physical cleanup scheduling remains open.
+primitive does not grant authority. Physical cleanup is now available through the
+authenticated maintenance store and bounded in-process runner documented below;
+durable distributed scheduling remains open.
 
 ### Host-authenticated owner-policy approval — P3 authority (2026-10-10)
 
@@ -1253,8 +1255,9 @@ focused PostgreSQL tests cover batch bounds, database expiry, live-row preservat
 revocation, detached bindings, inert identities, authorization deadlines, concurrent
 cleanup, rollback and quota release after generation replacement.
 
-Public authorized presence queries, real provider correspondence, automatic cleanup
-scheduling, reviewed request/response samples and downstream presentation remain
+At this checkpoint, public queries, automatic cleanup and downstream presentation
+were separate gates; their bounded implementations are documented below. Live
+provider correspondence, durable distributed scheduling and reviewed samples remain
 open. This slice does not infer required fields, promote observations to normative
 contracts or complete P3.
 
@@ -1357,3 +1360,26 @@ principal isolation, fixed errors and stale browser replies pass with them.
   stop/start, overlap, fairness and real PostgreSQL retention behavior. Durable
   multi-process scheduling, live source adapters and reviewed samples remain
   separate gates.
+
+
+### Bounded in-process retention runner — P3 (2026-10-10)
+
+Observations 0.14.0 adds an opt-in runner over the authenticated maintenance store.
+Only explicitly configured immutable scope/policy bindings are visited, fairly
+and within bounded per-pass/per-batch limits. Manual and automatic triggers share
+one active pass; the next interval begins after settlement with no catch-up queue.
+Credential reads have a ten-second abortable deadline. Stop cancels pending reads,
+ignores late credentials and drains already-started cleanup before returning;
+restart waits for that drain. Numeric-only frozen summaries and isolated observers
+withhold credentials, scope identifiers and callback/database errors.
+
+Real PostgreSQL composition covers live-row preservation, disabled-row cleanup,
+permanent tombstones, unchanged metadata, credential denial before storage, owner
+grant revocation/restoration and database-clock expiry. This closes bounded
+in-process scheduling only. Durable distributed scheduling, live source adapters,
+independently verified body correspondence and reviewed samples remain open.
+
+Validation: independent lifecycle/configuration review found no remaining blocker.
+A locked clean install passes 1,683 offline tests and 447 PostgreSQL tests. Eleven
+focused runner tests cover overlap, fair rotation, deadlines, stop/drain/restart,
+inert configuration, malformed cleanup results and observer isolation.

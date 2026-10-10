@@ -30,3 +30,6 @@ export type {FieldPresenceMaintenanceManager,FieldPresenceMaintenanceOptions,Fie
 export {createFieldPresenceQueryStore,FieldPresenceQueryError} from "./field-presence-query-store.js";
 export type {FieldPresenceQueryBinding,FieldPresenceQueryPrincipal,FieldPresenceQueryManager,FieldPresenceQueryStoreOptions,
   FieldPresenceQueryErrorCode} from "./field-presence-query-store.js";
+
+export {createFieldPresenceMaintenanceRunner} from "./field-presence-maintenance-runner.js";
+export type {FieldPresenceMaintenanceSummary,FieldPresenceMaintenanceRunnerOptions} from "./field-presence-maintenance-runner.js";
