@@ -221,3 +221,29 @@ The real Swagger middleware IR 1.1 baseline/catalog integration exercises this
 host. Runtime observation inputs are currently rejected before analyzer access;
 independent capture receipts need a pinned job input before durable reuse is
 safe. This does not remove standalone controlled-capture analysis.
+
+
+## Protected loaded-document verification summaries
+
+`createObservedLoadedDocumentVerificationStore` records a separate immutable
+`swagger-loaded-document-1` summary. The trusted host fixes source/environment
+scope, capture identity and opaque load artifact/key references with their hashes.
+Callers submit only that exact scope and capture identity. A preflight permission
+check precedes database lookup and verification. Both the captured association
+and an existing `protected-handler-bytes-1` summary must match before the
+host-installed composed verification port runs.
+
+The store validates the complete detached proof and match count, then rechecks
+permission and both parents in the same write transaction. Grant checks must use
+that client to lock/check database-local authority rows, with no network I/O.
+Exact replay returns the existing summary; a conflicting identity/result fails.
+Optional transaction finalization is atomic with insertion and rolls back on
+denial or failure. Hosts and pools must enforce callback/connection deadlines;
+SQL statements use a local ten-second timeout.
+
+Migration `0013_loaded_document_verifications` retains only scope, opaque
+references, digests, root/session and counts. Document prose, route/handler paths,
+body values and key bytes are excluded. Foreign keys require existing capture and
+handler verification, and a trigger prevents updates/deletes. This records
+historical capture-qualified verification metadata. Queue admission, current
+qualified readers and catalog/environment promotion are separate gates.

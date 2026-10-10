@@ -273,3 +273,16 @@ external evidence and incomplete/ambiguous matches must withhold a result.
 `protected-document-correspondence.test.ts` additionally distinguishes raw BOM/CRLF
 bytes from the canonical parsed value and preserves the pinned session/handlers.
 The pinned runtime case exercises both signatures from one actual request.
+
+
+### Durable loaded-document verification
+
+`tests/integration/observed-loaded-document-verifications.test.ts` uses disposable
+schemas on the existing local PostgreSQL test server. It checks capture/handler
+parent requirements, exact replay and concurrency, separate load identities,
+authorization revocation, malformed/mismatched proofs, atomic finalization and
+immutable foreign-key constrained summaries. A concrete signed-load/Git
+composition exercises the positive path. No catalog or environment pointer is
+promoted, and summaries contain no source document, route, handler or body data.
+The orchestration migration test also checks idempotent application of migration
+`0013_loaded_document_verifications` and rejection of checksum drift.

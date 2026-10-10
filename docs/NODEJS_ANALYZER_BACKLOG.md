@@ -806,3 +806,22 @@ Only explicit unobserved declaration diagnostics may survive; they do not imply
 API absence. The controlled collector withholds its unsigned binding receipt if
 the document gate fails. Durable admission, catalog promotion and deployment
 remain separate gates.
+
+
+### Durable loaded-document comparison summary (2026-10-10)
+
+The orchestration store separately persists the `swagger-loaded-document-1`
+composition after matching both its capture association and existing
+`protected-handler-bytes-1` summary. Exact host binding, detached bounded proof
+validation, transaction-local authorization and locked parent checks precede
+commit. Replay is idempotent; conflicting proof and failed finalization are
+withheld. Only scope, opaque references, hashes, root/session and counts persist.
+Queue admission/execution, current qualified readers and normative/deployment
+promotion remain separate work.
+
+Validation: TDD exposed the migration count and reviewed public-export list
+changes. Independent review and a clean locked install/typecheck passed all 1,763
+offline tests; the complete PostgreSQL suite passed all 461 tests. Real-Git and
+signed-load composition, concurrent replay, conflicting/distinct load identities,
+missing/forged parents, scoped denial, atomic finalization, immutable rows and
+configured-schema lookups are covered.
