@@ -113,8 +113,9 @@ combined lifecycle uses the public stores and preserves metadata and replay
 tombstones when derived presence is deleted. Each case creates and removes its
 own random test schema; the command does not reset the shared database.
 
-Only checked-in synthetic contracts and in-memory synthetic capture facts are
-used. Raw body/header canaries must stay out of stored observations and query
+Only checked-in synthetic contracts and synthetic capture facts are used.
+The combined case also reads an actual Ed25519-signed temporary source file;
+changing its body after signing must reject without inserting presence rows. Raw body/header canaries must stay out of stored observations and query
 results. Returned field presence is non-normative: an absent field does not prove
 that it is optional. This validates local component composition; live source
 provenance, reviewed traffic samples and distributed scheduling remain open.

@@ -1405,3 +1405,29 @@ Local setup now distinguishes the separate bounded Java and OpenAPI 3.1 profiles
 Validation: an independent review and a locked clean install/typecheck pass;
 `npm run test:presence` passes all 57 focused PostgreSQL cases across five files.
 The combined response-field case uses distinct credential and grant boundaries.
+
+
+### Selected signed field-presence file source — P3 bounded adapter (2026-10-10)
+
+Observation-file connector 0.2.0 adds a selected-parent source port for the
+presence importer. An externally configured Ed25519 key verifies a purpose-bound
+signed envelope containing independent full-pin/source/parent/selector facts and
+one bounded complete payload. The host scope allowlist is immutable; the file
+cannot choose its key, paths or scope. The reader touches only the exact selected
+UUID filename, rejects symlinks/nonregular/oversized/growing files and malformed
+UTF-8/strict JSON, honors aborts and returns fixed errors without values or paths.
+
+The signed source digest is checked against the current authorized snapshot by
+the importer; signature verification alone does not authorize a read or prove a
+real collector. The connector writes nothing and does not retain payloads. The
+host remains responsible for signer/source trust and retention of its source
+files. Live log providers, collector isolation and reviewed samples stay open.
+The composed PostgreSQL lifecycle now covers a genuine signed file and body
+alteration retaining the old signature, alongside the in-memory fixture.
+
+Validation: independent review, locked clean install/typecheck, 1,708 offline
+tests and 451 PostgreSQL tests pass. Twenty-five focused source-reader cases and
+four composed lifecycle cases cover valid request/response selectors, purpose/key
+mismatch, tampering, full lineage checks, active-source digest mismatch, bounds,
+abort and inert inputs. Restoring duplicate-capability acceptance in an isolated
+copy makes the identity regression fail; the reviewed reader passes it.

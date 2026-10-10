@@ -163,3 +163,6 @@ export const createSignedObservationFileReader = async (options: {root: string; 
     throw new ObservationFileError("OBSERVATION_FILE_INVALID_CONFIG");
   }
 };
+
+export {createSignedFieldPresenceFileReader,SignedFieldPresenceFileError} from "./field-presence.js";
+export type {SignedFieldPresenceFileErrorCode,SignedFieldPresenceFileBinding,SignedFieldPresenceFileReaderOptions} from "./field-presence.js";

@@ -1,12 +1,16 @@
-import {readFile} from "node:fs/promises";
+import {generateKeyPairSync,sign} from "node:crypto";
+import {mkdtemp,readFile,rm,writeFile} from "node:fs/promises";
+import {join} from "node:path";
+import {tmpdir} from "node:os";
 import {afterEach,beforeEach,expect,test} from "vitest";
 import {snapshotContentSha256,snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
 import {createAccessPolicyStore} from "../../packages/catalog/src/index.js";
 import {applyEnvironmentMigrations,createEnvironmentRepository} from "../../packages/environment/src/index.js";
-import {parseContractSnapshot,type ContractSnapshot} from "../../packages/ir/src/index.js";
+import {canonicalJsonStringify,parseContractSnapshot,type ContractSnapshot} from "../../packages/ir/src/index.js";
 import {applyObservationMigrations,createObservationStore,createFieldPresenceOwnerPolicyStore,
   createFieldPresenceImportStore,createFieldPresenceQueryStore,createFieldPresenceMaintenanceStore,
   createFieldPresenceMaintenanceRunner} from "../../packages/observations/src/index.js";
+import {createSignedFieldPresenceFileReader} from "../../connectors/observation-file/src/field-presence.js";
 import type {FieldPresenceImportReadPort} from "../../packages/observations/src/field-presence-import-store.js";
 import {applyOrchestrationMigrations,createOrchestrationRepository} from "../../packages/orchestration/src/index.js";
 import {applyOpenApiMigrations} from "../../packages/openapi/src/migrations.js";
@@ -29,7 +33,7 @@ const credentials={owner:Object.freeze({secret:"owner"}),metadata:Object.freeze(
 let database:CatalogTestDatabase,snapshot:ContractSnapshot;
 let pin:{tenantId:string;repositoryId:string;serviceId:string;environment:string;snapshotId:string;revision:string;
   configFingerprint:string;checkpointVersion:string};
-let windowStart:string,windowEnd:string;
+let windowStart:string,windowEnd:string,sourceRoot:string|undefined;
 const schema=()=>quoteCatalogTestSchema(database.schema);
 const context=(principalId:string)=>({tenantId,principalId});
 const event=(eventId:string,payload:unknown)=>({event_version:"1.0.0",event_id:eventId,event_type:"deployment.changed",
@@ -102,9 +106,16 @@ beforeEach(async()=>{
   const end=(await database.pool.query<{at:Date}>("SELECT date_trunc('milliseconds',clock_timestamp()-interval '10 seconds') AS at")).rows[0]!.at;
   windowStart=start.toISOString();windowEnd=end.toISOString();
 });
-afterEach(async()=>{await database.cleanup();});
+afterEach(async()=>{
+  try{await database.cleanup();}finally{
+    if(sourceRoot){const owned=sourceRoot;sourceRoot=undefined;
+      expect(owned.startsWith(join(tmpdir(),"api-truth-presence-capture-"))).toBe(true);
+      await rm(owned,{recursive:true,force:true});}
+  }
+});
 
-test("owner approval, metadata import, host-authenticated presence import, read, disable and cleanup compose without persisting values",async()=>{
+test.each(["memory","signed_file","tampered_signed_file","wrong_source_digest_signed_file"] as const)(
+  "%s: owner approval, metadata/presence import, read, disable and cleanup compose without persisting values",async mode=>{
   const owners=createFieldPresenceOwnerPolicyStore(database.pool,{schema:database.schema,bindings:[ownerBinding()],authorizeManager:ownerManager});
   const approved=await owners.approve(credentials.owner,policyRequest());
   expect(approved).toMatchObject({status:"approved",ownerPolicyRevision:"1",enabled:true});
@@ -131,18 +142,38 @@ test("owner approval, metadata import, host-authenticated presence import, read,
         revision:pin.revision,body:{id:"PRIVATE_VALUE_CANARY"},headers:{authorization:"PRIVATE_VALUE_CANARY"}}}]})});
   expect(await metadata.importBatch(credentials.metadata,metadataRequest())).toEqual({outcome:"inserted",imported:1});
   expect(await metadata.importBatch(credentials.metadata,metadataRequest())).toEqual({outcome:"existing",imported:1});
-  const readSource:FieldPresenceImportReadPort=async(_identity,request)=>{
+  let readSource:FieldPresenceImportReadPort=async(_identity,request)=>{
     const key=JSON.stringify([request.binding.tenantId,request.binding.repositoryId,request.binding.serviceId,request.binding.environment,
       request.importId,request.recordId,request.expectedPin.snapshotId,request.expectedPin.revision,request.expectedPin.configFingerprint,
       request.expectedPin.checkpointVersion,request.source.sourceId,request.source.sourceVersion,request.source.windowStart,request.source.windowEnd]);
     expect(request.selector).toEqual({endpointId:"ep-get",direction:"response",mediaType:"application/json",statusCode:200});
     const exact=sourceFixtures.get(key);if(!exact)throw new Error("NO_MATCHING_CAPTURE_FIXTURE");return exact;
   };
+  if(mode!=="memory"){
+    sourceRoot=await mkdtemp(join(tmpdir(),"api-truth-presence-capture-"));
+    const keypair=generateKeyPairSync("ed25519");
+    const captured=mode==="wrong_source_digest_signed_file"
+      ?{...sourceFixture,attestation:{...sourceFixture.attestation,sourceDigest:"sha256:"+"e".repeat(64)}}:sourceFixture;
+    const payload={version:"field-presence-source-1",...captured};
+    const signature=sign(null,Buffer.from(`api-truth:field-presence-source-1\n${canonicalJsonStringify(payload)}`),keypair.privateKey).toString("base64");
+    const signed=mode==="tampered_signed_file"?{...payload,payloadText:'{"id":"TAMPERED_CANARY"}'}:payload;
+    await writeFile(join(sourceRoot,`${importId}.${recordId}.presence.json`),JSON.stringify({payload:signed,signature}),{flag:"wx",mode:0o600});
+    readSource=await createSignedFieldPresenceFileReader({root:sourceRoot,
+      publicKeyPem:keypair.publicKey.export({type:"spki",format:"pem"}).toString(),sourceId:"gateway-log",
+      bindings:[{tenantId,repositoryId,serviceId,environment}]});
+  }
   const importer=createFieldPresenceImportStore(database.pool,{schema:database.schema,bindings:[importBinding()],
     authorizeManager:async credential=>credential===credentials.presence
       ?{tenantId,principalId:"presence-importer",capabilities:["observations.presence.import"]}:undefined,
     readObservation:readSource});
   const importRequest={policyId,ownerPolicyRevision:"1",importId,recordId,expectedPin:exactPin()};
+  if(mode==="tampered_signed_file"||mode==="wrong_source_digest_signed_file"){
+    await expect(importer.importObservation(credentials.presence,importRequest))
+      .rejects.toMatchObject({code:"FIELD_PRESENCE_IMPORT_SOURCE_INVALID",message:"FIELD_PRESENCE_IMPORT_SOURCE_INVALID"});
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema()}.observation_field_presence_results`)).rows[0]!.count).toBe(0);
+    expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema()}.observation_records`)).rows[0]!.count).toBe(1);
+    return;
+  }
   expect(await importer.importObservation(credentials.presence,importRequest)).toEqual({status:"inserted",fieldCount:1});
   expect(await importer.importObservation(credentials.presence,importRequest)).toEqual({status:"existing",fieldCount:1});
   const readers=createFieldPresenceQueryStore(database.pool,{schema:database.schema,bindings:[queryBinding()],
