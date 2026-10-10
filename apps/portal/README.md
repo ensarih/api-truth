@@ -91,3 +91,21 @@ text rendering for provider prose. **Load suggested pinned contract** reauthoriz
 that exact checkpoint and checks the returned source pin before displaying it.
 A changed pin is withheld. Empty shortlist text does not assert enterprise-wide
 API absence. This adds no embedding index or automatic provider call on page load.
+
+
+## Controlled loaded-document verification HTTP port
+
+Configure `loadedDocumentVerification: {readForPrincipal}` from the public query
+factory to enable `GET /api/loaded-document-verification`. Exact query parameters
+are repositoryId, serviceId, environment, snapshotId, revision, configFingerprint,
+checkpointVersion, configActivationCheckpoint and loadIdentityDigest. Serving
+and configuration activation checkpoints are separate versions. Unknown or
+duplicate parameters and caller identity/credentials are rejected.
+
+Host authentication supplies the principal. The reader independently
+authenticates the HTTP request and anchors it to that same principal, checks
+current selection and independent read grants, and returns only safe metadata.
+Responses use the existing byte bound, fixed errors and no-store policy. The
+route is absent without host configuration. This HTTP port adds no browser
+panel, artifact fetch or writes; controlled-load observations remain
+non-normative and do not establish deployment or request-handler behavior.

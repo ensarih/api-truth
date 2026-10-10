@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Separate loaded-document claims/renewals validate the current epoch and bound worker capacity. Loaded-document bounded execution commits its safe summary and successful lease state atomically. Supersession maintenance cancels active jobs from older configuration epochs under separate manager permission. A separate qualified metadata reader binds completed loaded-document results to exact current environment/source/configuration context and independent read grants. Portal/MCP presentation and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
+| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Separate loaded-document claims/renewals validate the current epoch and bound worker capacity. Loaded-document bounded execution commits its safe summary and successful lease state atomically. Supersession maintenance cancels active jobs from older configuration epochs under separate manager permission. A separate qualified metadata reader binds completed loaded-document results to exact current environment/source/configuration context and independent read grants. Optional MCP and portal HTTP metadata ports preserve the same identity and pin checks; a real PostgreSQL cross-surface case verifies agreement and revocation. Safe incremental multi-input reuse remains open. D08 still rejects runtime observations. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
@@ -1732,3 +1732,30 @@ offline tests. The full PostgreSQL run passed 497 of 499 cases with two timeouts
 a focused rerun of both affected files passed all 42 cases, including both
 timeouts. No test timeout was widened. Portal/MCP integration and safe
 incremental multi-input reuse remain open.
+
+
+### Optional loaded-document metadata transport ports — NB1 / D13 (2026-10-10)
+
+An optional read-only MCP tool and portal HTTP route now call the qualified
+loaded-document reader. Their strict requests contain the exact current pin,
+separate configuration activation checkpoint and configured load identity.
+Authentication supplies tenant/principal; the reader independently authenticates
+the opaque transport object and anchors it to that same identity. Caller
+identities, protected references, duplicate HTTP fields and qualified reuse
+pins are rejected. Identifier grammar matches the underlying reader.
+
+Both ports preserve fixed error mapping, no-store/bounded output and explicit
+controlled non-normative limitations. Failure mapping does not evaluate error
+getters or proxy traps. This adds a portal HTTP port, not a browser panel or
+artifact-fetch/write capability. It does not establish deployment, production
+request handling or normative API behavior.
+
+Validation: 23 focused offline tests and typecheck pass. Eleven focused
+PostgreSQL reader tests include an actual HTTP/MCP cross-surface case using the
+same completed proof and current synthetic catalog/serving context. Both return
+the same full pin, verification digest/counts and document hashes, hide protected
+references, deny after independent artifact-read revocation and withhold an old
+job after configuration activation advances.
+
+A clean staged archive passed locked installation, typecheck, all 1,793 offline
+tests and all 500 PostgreSQL tests for this transport slice.

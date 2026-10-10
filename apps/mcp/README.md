@@ -77,3 +77,22 @@ Changed authority or shortlist discards the complete response. The tool has
 `readOnlyHint: true`, `idempotentHint: false`, and `openWorldHint: true` because
 it may call the host-configured inference provider. Fixed error mapping and the
 existing output bound apply; the tool is absent without host configuration.
+
+
+## Controlled loaded-document verification metadata
+
+Configure `loadedDocumentVerification: {readForPrincipal}` from the public query
+read-store factory to register `api_truth_get_loaded_document_verification`.
+Its strict input names repository, service, environment, snapshot, immutable
+revision, configuration fingerprint, serving checkpoint, configuration activation
+checkpoint and host-configured load identity digest. The two checkpoints are
+separate versions. Authentication supplies tenant and principal; the opaque MCP
+context is independently authenticated by the reader manager and anchored to
+that same identity. Callers cannot provide credentials or protected references.
+
+The reader rechecks current selection, grants and completed proof in one
+transaction. Output remains bounded, read-only, controlled and non-normative:
+safe digests/counts and source context do not assert production deployment,
+registered request handling or normative API behavior. The tool is absent when
+the host has not configured this capability. No artifact-fetch or write tool is
+exposed.

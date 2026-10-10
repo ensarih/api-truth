@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import {isProxy} from "node:util/types";
 import { McpServer, type CallToolResult, type ServerContext } from "@modelcontextprotocol/server";
 import type { QueryReader, QueryObservationReader, QueryOperationReader, QueryCorpusOperationReader,
   QuerySelection, QuerySelector } from "@api-truth/query";
@@ -7,6 +8,7 @@ import type { createSemanticService } from "../../../packages/semantics/src/serv
 import type { createSemanticCorpusService } from "../../../packages/semantics/src/corpus-service.js";
 import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
 import type {createFieldPresenceQueryStore} from "../../../packages/observations/src/field-presence-query-store.js";
+import type {createLoadedDocumentVerificationReadStore} from "@api-truth/query";
 import * as z from "zod/v4";
 
 export type ApiTruthMcpPrincipal = Readonly<{ tenantId: string; principalId: string }>;
@@ -20,6 +22,7 @@ export type ApiTruthMcpOptions = Readonly<{
   corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
+  loadedDocumentVerification?: Pick<ReturnType<typeof createLoadedDocumentVerificationReadStore>, "readForPrincipal">;
 }>;
 
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -102,10 +105,15 @@ const syntheticExampleSchema = z.object({repositoryId: boundedIdentifier,service
   environment: boundedIdentifier,expectedCheckpointVersion: databaseVersion,
   policyId: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)}).strict();
 const presenceIdentifier=z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+const loadedDocumentIdentifier=z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/);
 const fieldPresenceSchema=z.object({repositoryId:presenceIdentifier,serviceId:presenceIdentifier,
   environment:presenceIdentifier,snapshotId:presenceIdentifier,revision:presenceIdentifier,
   configFingerprint:z.string().regex(/^sha256:[0-9a-f]{64}$/),checkpointVersion:databaseVersion,
   policyId:presenceIdentifier,ownerPolicyRevision:databaseVersion,limit:z.number().int().min(1).max(100)}).strict();
+const loadedDocumentVerificationSchema=z.object({repositoryId:loadedDocumentIdentifier,serviceId:loadedDocumentIdentifier,
+  environment:loadedDocumentIdentifier,snapshotId:loadedDocumentIdentifier,revision:z.string().regex(/^[A-Fa-f0-9]{12,128}$/),
+  configFingerprint:z.string().regex(/^sha256:[0-9a-f]{64}$/),checkpointVersion:databaseVersion,
+  configActivationCheckpoint:databaseVersion,loadIdentityDigest:z.string().regex(/^sha256:[0-9a-f]{64}$/)}).strict();
 
 const successSchema = z.object({ ok: z.literal(true), data: z.unknown() }).strict();
 const failureSchema = z.object({ ok: z.literal(false), error: z.enum(publicErrors) }).strict();
@@ -142,8 +150,9 @@ const parsePrincipal = (input: unknown): ApiTruthMcpPrincipal | undefined => {
 };
 
 const mapQueryError = (error: unknown): PublicError => {
-  if (error === null || typeof error !== "object") return "QUERY_UNAVAILABLE";
-  const descriptor = Object.getOwnPropertyDescriptor(error, "code");
+  if (error === null || typeof error !== "object" || isProxy(error)) return "QUERY_UNAVAILABLE";
+  let descriptor:PropertyDescriptor|undefined;
+  try{descriptor=Object.getOwnPropertyDescriptor(error,"code");}catch{return "QUERY_UNAVAILABLE";}
   if (descriptor === undefined || !("value" in descriptor)) return "QUERY_UNAVAILABLE";
   switch (descriptor.value) {
     case "QUERY_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
@@ -162,6 +171,11 @@ const mapQueryError = (error: unknown): PublicError => {
     case "FIELD_PRESENCE_QUERY_UNAUTHORIZED": return "NOT_FOUND_OR_DENIED";
     case "FIELD_PRESENCE_QUERY_STALE": return "STALE_SELECTION";
     case "FIELD_PRESENCE_QUERY_INVALID_REQUEST": return "INVALID_REQUEST";
+    case "LOADED_DOCUMENT_READ_UNAUTHORIZED": return "NOT_FOUND_OR_DENIED";
+    case "LOADED_DOCUMENT_READ_STALE": return "STALE_SELECTION";
+    case "INVALID_LOADED_DOCUMENT_READ_REQUEST": return "INVALID_REQUEST";
+    case "LOADED_DOCUMENT_READ_UNAVAILABLE": return "QUERY_UNAVAILABLE";
+    case "LOADED_DOCUMENT_READ_STORAGE_ERROR": return "QUERY_UNAVAILABLE";
     default: return "QUERY_UNAVAILABLE";
   }
 };
@@ -364,6 +378,19 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
         expectedPin:{tenantId:principal.tenantId,repositoryId:args.repositoryId,serviceId:args.serviceId,
           environment:args.environment,snapshotId:args.snapshotId,revision:args.revision,
           configFingerprint:args.configFingerprint,checkpointVersion:args.checkpointVersion}})));
+  }
+  if(typeof options.loadedDocumentVerification?.readForPrincipal==="function"){
+    const readLoadedDocument=options.loadedDocumentVerification.readForPrincipal.bind(options.loadedDocumentVerification);
+    server.registerTool("api_truth_get_loaded_document_verification",{
+      title:"Get controlled Swagger document load metadata",
+      description:"Read non-normative metadata for a signed, source-linked controlled Swagger document load at one exact authorized environment pin. This is controlled-load evidence only; it does not assert deployment, a registered runtime handler, or normative API behavior.",
+      inputSchema:loadedDocumentVerificationSchema,outputSchema,annotations:readOnlyAnnotations,
+    },async(args,context)=>execute(options,maxOutputBytes,context,async principal=>
+      readLoadedDocument(context,principal,{loadIdentityDigest:args.loadIdentityDigest,
+        expectedPin:{tenantId:principal.tenantId,repositoryId:args.repositoryId,serviceId:args.serviceId,
+          environment:args.environment,snapshotId:args.snapshotId,revision:args.revision,
+          configFingerprint:args.configFingerprint,checkpointVersion:args.checkpointVersion},
+        configActivationCheckpoint:args.configActivationCheckpoint})));
   }
   return server;
 };

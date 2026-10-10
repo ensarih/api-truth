@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {isProxy} from "node:util/types";
 import {validateOperationSearchOptions, type QueryReader, type QueryObservationReader,
   type QueryOperationReader, type QueryCorpusOperationReader, type QuerySelection,
-  type QueryContractResult} from "@api-truth/query";
+  type QueryContractResult, type createLoadedDocumentVerificationReadStore} from "@api-truth/query";
 import { parseStrictJson } from "../../../packages/ir/src/strict-json.js";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
@@ -20,6 +21,7 @@ export type PortalOptions = Readonly<{
   corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
+  loadedDocumentVerification?: Pick<ReturnType<typeof createLoadedDocumentVerificationReadStore>, "readForPrincipal">;
 }>;
 
 const page = `<!doctype html>
@@ -130,6 +132,8 @@ const safeId = (value: unknown): value is string => typeof value === "string"
   && /^[^\u0000-\u001f\u007f]{1,512}$/.test(value);
 const decimalVersion = (value: string): boolean => /^[1-9][0-9]{0,18}$/.test(value)
   && BigInt(value) <= 9223372036854775807n;
+const loadedDocumentIdentifier = (value:unknown):value is string=>typeof value==="string"
+  &&/^[A-Za-z0-9_.-]{1,128}$/.test(value);
 const headers = { "cache-control": "no-store", "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer", "content-security-policy":
   "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'" };
@@ -149,7 +153,11 @@ const json = (response: ServerResponse, status: number, body: unknown): void => 
   send(response, status, text, "application/json; charset=utf-8");
 };
 const error = (response: ServerResponse, failure: unknown): void => {
-  const code = failure && typeof failure === "object" && "code" in failure ? failure.code : undefined;
+  let code:unknown;
+  try{if(failure&&typeof failure==="object"&&!isProxy(failure)){
+    const descriptor=Object.getOwnPropertyDescriptor(failure,"code");
+    if(descriptor&&"value" in descriptor)code=descriptor.value;
+  }}catch{code=undefined;}
   if (code === "QUERY_NOT_FOUND_OR_DENIED") json(response, 404, { error: "NOT_FOUND" });
   else if (code === "QUERY_STALE_SELECTION" || code === "SEMANTIC_STALE_CONTEXT") json(response, 409, { error: "STALE_SELECTION" });
   else if (code === "QUERY_RESULT_LIMIT_EXCEEDED") json(response, 422, { error: "RESULT_LIMIT_EXCEEDED" });
@@ -166,6 +174,11 @@ const error = (response: ServerResponse, failure: unknown): void => {
   else if (code === "FIELD_PRESENCE_QUERY_UNAUTHORIZED") json(response, 404, {error:"NOT_FOUND"});
   else if (code === "FIELD_PRESENCE_QUERY_STALE") json(response, 409, {error:"STALE_SELECTION"});
   else if (code === "FIELD_PRESENCE_QUERY_INVALID_REQUEST") json(response, 400, {error:"INVALID_REQUEST"});
+  else if (code === "LOADED_DOCUMENT_READ_UNAUTHORIZED") json(response, 404, {error:"NOT_FOUND"});
+  else if (code === "LOADED_DOCUMENT_READ_STALE") json(response, 409, {error:"STALE_SELECTION"});
+  else if (code === "INVALID_LOADED_DOCUMENT_READ_REQUEST") json(response, 400, {error:"INVALID_REQUEST"});
+  else if (code === "LOADED_DOCUMENT_READ_UNAVAILABLE" || code === "LOADED_DOCUMENT_READ_STORAGE_ERROR")
+    json(response,503,{error:"QUERY_UNAVAILABLE"});
   else if (code === "INVALID_QUERY_SELECTION" || code === "INVALID_QUERY_CONTEXT"
     || code === "INVALID_QUERY_DETAIL" || code === "INVALID_QUERY_SEARCH")
     json(response, 400, { error: "INVALID_REQUEST" });
@@ -379,6 +392,8 @@ export const createPortalServer = (options: PortalOptions): Server => {
     ? options.examples.generate.bind(options.examples):undefined;
   const readPresence=typeof options.presence?.readForPrincipal==="function"
     ? options.presence.readForPrincipal.bind(options.presence):undefined;
+  const readLoadedDocument=typeof options.loadedDocumentVerification?.readForPrincipal==="function"
+    ? options.loadedDocumentVerification.readForPrincipal.bind(options.loadedDocumentVerification):undefined;
   const discoverCorpus=typeof options.corpusSemantic?.discoverAcrossServices==="function"
     ? options.corpusSemantic.discoverAcrossServices.bind(options.corpusSemantic):undefined;
   return createServer(async (request, response) => {
@@ -504,6 +519,21 @@ export const createPortalServer = (options: PortalOptions): Server => {
             repositoryId:values.repositoryId,serviceId:values.serviceId,environment:values.environment,
             snapshotId:values.snapshotId,revision:values.revision,configFingerprint:values.configFingerprint,
             checkpointVersion:values.checkpointVersion}}));return;
+      }
+      if(url.pathname==="/api/loaded-document-verification"&&readLoadedDocument){
+        const values=params(url,["repositoryId","serviceId","environment","snapshotId","revision",
+          "configFingerprint","checkpointVersion","configActivationCheckpoint","loadIdentityDigest"]);
+        if(!values||!["repositoryId","serviceId","environment","snapshotId"].every(key=>loadedDocumentIdentifier(values[key]))
+          ||!/^[A-Fa-f0-9]{12,128}$/.test(values.revision!)||!/^sha256:[0-9a-f]{64}$/.test(values.configFingerprint!)
+          ||!decimalVersion(values.checkpointVersion!)||!decimalVersion(values.configActivationCheckpoint!)
+          ||!/^sha256:[0-9a-f]{64}$/.test(values.loadIdentityDigest!)){
+          json(response,400,{error:"INVALID_REQUEST"});return;
+        }
+        json(response,200,await readLoadedDocument(request,principal,{loadIdentityDigest:values.loadIdentityDigest,
+          expectedPin:{tenantId:principal.tenantId,repositoryId:values.repositoryId,serviceId:values.serviceId,
+            environment:values.environment,snapshotId:values.snapshotId,revision:values.revision,
+            configFingerprint:values.configFingerprint,checkpointVersion:values.checkpointVersion},
+          configActivationCheckpoint:values.configActivationCheckpoint}));return;
       }
       if (url.pathname === "/api/observations" && typeof options.query.readMetadataObservations === "function") {
         const values = params(url, ["repositoryId", "serviceId", "environment"],

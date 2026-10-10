@@ -1,7 +1,14 @@
 import {mkdtemp,readFile,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+import {once} from "node:events";
+import type {IncomingMessage} from "node:http";
+import {Client,InMemoryTransport} from "@modelcontextprotocol/client";
 import {afterEach,beforeEach,expect,test,vi} from "vitest";
+import {createApiTruthMcpServer} from "../../apps/mcp/src/server.js";
+import {createPortalServer} from "../../apps/portal/src/server.js";
+import type {ServerContext} from "@modelcontextprotocol/server";
+import type {QueryReader} from "../../packages/query/src/index.js";
 import {snapshotContentSha256,snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
 import {createAccessPolicyStore} from "../../packages/catalog/src/index.js";
 import {applyEnvironmentMigrations,createEnvironmentRepository} from "../../packages/environment/src/index.js";
@@ -42,10 +49,12 @@ const schema=()=>quoteCatalogTestSchema(database.schema);
 const expectedPin=()=>({tenantId,repositoryId,serviceId,environment,...pin});
 const authorizeManager:LoadedDocumentReadManager=(credential)=>credential===importCredential
   ?Promise.resolve({tenantId,principalId,capabilities:["swagger.document.verify.read"]}):Promise.resolve(undefined);
-const readStore=(authorizeRead:LoadedDocumentReadAuthorizer=async()=>true)=>createLoadedDocumentVerificationReadStore(database.pool,{schema:database.schema,
+const readStore=(authorizeRead:LoadedDocumentReadAuthorizer=async()=>true,manager:LoadedDocumentReadManager=authorizeManager)=>createLoadedDocumentVerificationReadStore(database.pool,{schema:database.schema,
   tenantId,bindings:[{scope:fixture.scope,serviceRoot:sourceRoot,captureIdentityDigest:fixture.association.captureIdentityDigest,
-    loadIdentityDigest:loadedIdentity}],authorizeManager,authorizeRead});
+    loadIdentityDigest:loadedIdentity}],authorizeManager:manager,authorizeRead});
 let loadedIdentity:string;
+const portalServers:Array<ReturnType<typeof createPortalServer>>=[];
+const mcpClients:Array<{client:Client;server:ReturnType<typeof createApiTruthMcpServer>}>=[];
 
 beforeEach(async()=>{
   database=await createCatalogTestDatabase();root=await mkdtemp(join(tmpdir(),"loaded-document-read-repo-"));
@@ -127,7 +136,11 @@ beforeEach(async()=>{
     };
   }catch(error){await database.cleanup();await rm(root,{recursive:true,force:true});throw error;}
 });
-afterEach(async()=>{await database.cleanup();await rm(root,{recursive:true,force:true});});
+afterEach(async()=>{
+  for(const server of portalServers.splice(0)){server.closeAllConnections();server.close();await once(server,"close");}
+  await Promise.allSettled(mcpClients.splice(0).flatMap(({client,server})=>[client.close(),server.close()]));
+  await database.cleanup();await rm(root,{recursive:true,force:true});
+});
 
 test("reads current controlled-load verification metadata only, without requiring logs opt-in",async()=>{
   const before=await database.pool.query(`SELECT
@@ -222,4 +235,67 @@ test("an admitted but unfinished loaded-document job has no readable verificatio
   await expect(reader.readForPrincipal(importCredential,{tenantId,principalId},
     {loadIdentityDigest:pending.loadIdentityDigest,expectedPin:expectedPin(),configActivationCheckpoint:activationCheckpoint}))
     .rejects.toMatchObject({code:"LOADED_DOCUMENT_READ_UNAVAILABLE"});
+});
+
+test("portal and MCP read the same currently authorized controlled-load metadata and fail closed after changes",async()=>{
+  let portalRequest:IncomingMessage|undefined,mcpContext:ServerContext|undefined;
+  const manager:LoadedDocumentReadManager=(credential)=>Promise.resolve(credential===portalRequest||credential===mcpContext
+    ?{tenantId,principalId,capabilities:["swagger.document.verify.read"]}:undefined);
+  const queryUnavailable=async()=>{throw new Error("Unexpected query call");};
+  const query=Object.fromEntries(["searchServices","readContract","readEndpoint","readSchema","compareContracts"]
+    .map(key=>[key,queryUnavailable])) as unknown as QueryReader;
+
+  const portalStore=readStore(loadedReadAuth,manager);
+  const portal=createPortalServer({authenticate:async(request)=>{portalRequest=request;return {tenantId,principalId};},
+    query:{searchServices:query.searchServices,readContract:query.readContract,compareContracts:query.compareContracts,
+      readPublication:async()=>{throw new Error("Unexpected publication call");}},
+    loadedDocumentVerification:portalStore});
+  portalServers.push(portal);portal.listen(0,"127.0.0.1");await once(portal,"listening");
+  const address=portal.address();if(!address||typeof address==="string")throw new Error("Missing portal port");
+  const portalBase=`http://127.0.0.1:${address.port}`;
+
+  const mcpStore=readStore(loadedReadAuth,manager);
+  const mcp=createApiTruthMcpServer({query,authenticate:async(context)=>{mcpContext=context;return {tenantId,principalId};},
+    loadedDocumentVerification:mcpStore});
+  const client=new Client({name:"loaded-document-pg",version:"1.0.0"});
+  const [clientTransport,serverTransport]=InMemoryTransport.createLinkedPair();
+  await mcp.connect(serverTransport);await client.connect(clientTransport);mcpClients.push({client,server:mcp});
+
+  const request={repositoryId,serviceId,environment,snapshotId:pin.snapshotId,revision:pin.revision,
+    configFingerprint:pin.configFingerprint,checkpointVersion:pin.checkpointVersion,
+    configActivationCheckpoint:activationCheckpoint,loadIdentityDigest:loadedIdentity};
+  const queryPath="/api/loaded-document-verification?"+new URLSearchParams(request);
+  const portalResponse=await fetch(portalBase+queryPath,{headers:{authorization:"Bearer host-session"}});
+  expect(portalResponse.status).toBe(200);
+  const portalResult=await portalResponse.json() as Record<string,unknown>;
+  const mcpResponse=await client.callTool({name:"api_truth_get_loaded_document_verification",arguments:request});
+  expect(mcpResponse.isError).not.toBe(true);
+  const mcpResult=(mcpResponse.structuredContent as {data:Record<string,unknown>}).data;
+  expect(portalResult.pin).toEqual(mcpResult.pin);
+  expect(portalResult.verification).toEqual(mcpResult.verification);
+  expect(portalResult.document).toEqual(mcpResult.document);
+  for(const rendered of [JSON.stringify(portalResult),JSON.stringify(mcpResult)]){
+    expect(rendered).not.toContain(fixture.loadBinding.loadArtifactRef);
+    expect(rendered).not.toContain(fixture.loadBinding.loadConfiguredKeyRef);
+    expect(rendered).not.toContain("readOrder");expect(rendered).not.toContain("orders/{id}");
+  }
+
+  await database.pool.query(`UPDATE ${schema()}.trusted_loaded_document_read_grants SET artifact_allowed=false
+    WHERE tenant_id=$1 AND principal_id=$2 AND load_identity_digest=$3`,[tenantId,principalId,loadedIdentity]);
+  const portalDenied=await fetch(portalBase+queryPath,{headers:{authorization:"Bearer host-session"}});
+  expect(portalDenied.status).toBe(404);expect(await portalDenied.json()).toEqual({error:"NOT_FOUND"});
+  const mcpDenied=await client.callTool({name:"api_truth_get_loaded_document_verification",arguments:request});
+  expect(mcpDenied.structuredContent).toEqual({ok:false,error:"NOT_FOUND_OR_DENIED"});
+
+  await database.pool.query(`UPDATE ${schema()}.trusted_loaded_document_read_grants SET artifact_allowed=true,
+    config_activation_checkpoint=2 WHERE tenant_id=$1 AND principal_id=$2 AND load_identity_digest=$3`,
+    [tenantId,principalId,loadedIdentity]);
+  await database.pool.query(`UPDATE ${schema()}.orchestration_active_configurations SET checkpoint_version=2
+    WHERE tenant_id=$1 AND config_fingerprint=$2`,[tenantId,configFingerprint]);
+  const moved={...request,configActivationCheckpoint:"2"};
+  const movedPath="/api/loaded-document-verification?"+new URLSearchParams(moved);
+  const portalMoved=await fetch(portalBase+movedPath,{headers:{authorization:"Bearer host-session"}});
+  expect(portalMoved.status).toBe(503);expect(await portalMoved.json()).toEqual({error:"QUERY_UNAVAILABLE"});
+  const mcpMoved=await client.callTool({name:"api_truth_get_loaded_document_verification",arguments:moved});
+  expect(mcpMoved.structuredContent).toEqual({ok:false,error:"QUERY_UNAVAILABLE"});
 });

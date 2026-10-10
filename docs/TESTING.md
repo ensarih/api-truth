@@ -354,3 +354,13 @@ opening storage or exposing protected metadata, and check multiple controlled
 sessions on one source scope. The package API test checks the reviewed public
 exports. Run the focused PostgreSQL reader test with the existing local test
 service; it creates and removes only its own disposable schemas.
+
+
+The optional transport tests are
+`tests/unit/mcp-loaded-document-verification.test.ts` and
+`tests/unit/portal-loaded-document-verification.test.ts`. They check optional
+registration, exact request/identity mapping, schema rejection, fixed failures,
+output limits and hostile error objects. The PostgreSQL reader test also opens
+an actual portal HTTP server and linked MCP transport to verify same-record
+agreement, independently revoked artifact read policy and a moved configuration
+activation epoch. No model calls or actual deployment are involved.
