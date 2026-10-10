@@ -271,6 +271,35 @@ includes the active configuration epoch and service root. A tenant transaction
 lock serializes replay and queue quota. Exact replay is free; a new activation
 checkpoint requires new opt-in and creates a distinct intent. Migration `0014`
 retains only scope/references/hashes/configuration pins and immutable queued
-state. This admission does not execute verification. Separate leases, execution,
-atomic loaded-summary completion, supersession cleanup and qualified readers
+state. This admission does not execute verification. Execution, atomic loaded-summary completion, supersession cleanup and qualified readers
 remain open.
+
+
+## Loaded-document worker leases
+
+`createLoadedDocumentVerificationLeaseStore` exposes `claimOne` and `heartbeat`
+for the separate loaded-document profile. The host fixes tenant/principal,
+worker/instance and bounded repository/service allowlists. Capability
+`swagger.document.verify.execute` is checked before database access. Each claim
+and renewal validates the current configuration epoch, recomputed load/job
+identities, capture/handler parents, configured grants and independent
+database-local source/environment/artifact execution permission.
+
+Migration `0015` creates mutable lifecycle state and an immutable claim-attempt
+log, backfills existing admissions and installs an insert trigger. Admission
+quota counts queued/leased/retry-wait lifecycle rows. Admission and lease writes
+share the tenant transaction lock. At most two live leases per tenant and one
+per repository/service/environment are allowed; candidate scans stop at 32.
+No-work results explicitly have partial coverage.
+
+Leases last 120 seconds according to the database clock. A fresh random token is
+returned to the trusted worker; only its hash persists in lifecycle state, and
+claim history contains no token. The frozen lease result also carries the exact
+validated scope/artifact binding for the trusted verifier factory. Renewal requires the same live token, worker,
+instance and current authorized epoch. Reclaim rotates the token; expiry after
+the third claim reaches a fixed failed state. Hosts must bound callbacks and
+connections; SQL lock/statement timeouts remain two/ten seconds.
+
+This layer claims and renews jobs. Verification execution, atomic summary/result
+completion, retry scheduling, supersession cancellation and qualified readers
+are subsequent gates.

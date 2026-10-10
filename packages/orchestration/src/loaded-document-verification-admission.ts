@@ -281,7 +281,8 @@ export function createLoadedDocumentVerificationAdmissionStore(pool: Pool,
       let outcome: "queued" | "existing" = "existing";
       if (!prior.rows.length) {
         const quota = await client.query<{count: string}>(`SELECT count(*)::text AS count
-          FROM orchestration_loaded_document_verification_jobs WHERE tenant_id=$1 AND state='queued'`, [fixedTenant]);
+          FROM orchestration_loaded_document_verification_job_state
+          WHERE tenant_id=$1 AND state IN ('queued','leased','retry_wait')`, [fixedTenant]);
         if (quota.rows.length !== 1 || !/^[0-9]+$/.test(quota.rows[0]!.count))
           throw new LoadedDocumentVerificationAdmissionError("LOADED_DOCUMENT_ADMISSION_STORAGE_ERROR");
         if (BigInt(quota.rows[0]!.count) >= BigInt(maxQueued))

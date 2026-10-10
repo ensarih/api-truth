@@ -844,3 +844,24 @@ and typecheck passed all 1,763 offline tests; all 466 PostgreSQL tests passed fr
 the staged archive. Five focused PostgreSQL cases exercise concurrent replay and
 quota, exact load identity, epoch switchback, missing parents, malformed/hostile
 inputs, mismatched artifact opt-in, revoked grants and immutable intents.
+
+
+### Separate loaded-document worker leases (2026-10-10)
+
+The document-profile worker claims and renews separately from handler-byte jobs.
+It pins load/job/capture/configuration identities and current independent
+execution permission. Migration `0015` separates mutable lifecycle from immutable
+admissions and claim history, with backfill and insert-trigger initialization.
+Tenant quota tracks active state; worker capacity is two per tenant and one per
+repository/service/environment. Database-clock leases expire after 120 seconds;
+reclaim rotates token hashes, with a maximum of three claims. Bounded/filtered
+no-work results remain partial. Execution/atomic summary completion, retry
+scheduling, stale-job cleanup and qualified reads remain open.
+
+Validation: TDD exposed the absent module and incomplete policy fixture.
+Independent review corrected environment binding, capacity assertions and legacy
+backfill setup. A clean locked install/typecheck passed all 1,763 offline tests;
+all 472 PostgreSQL tests passed from the staged archive, including the final
+frozen full-binding return. Six focused cases cover upgrade/backfill, independent
+environments, concurrent tenant capacity, ownership/token expiry/reclaim, three
+attempts, current epoch/grant/artifact fences and immutable token-free history.

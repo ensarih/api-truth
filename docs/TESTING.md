@@ -298,3 +298,14 @@ active configuration epoch. Replay, epoch switchback and tenant quotas are
 checked without invoking a verifier or producing loaded summaries/catalog
 pointers. Migration application and the reviewed package-root API remain part
 of the existing orchestration regression tests.
+
+
+### Loaded-document lease lifecycle
+
+`tests/integration/loaded-document-verification-leases.test.ts` checks migration
+backfill, admission-trigger state, concurrent worker capacity, independent
+environments, token renewal/reclaim and three-attempt exhaustion on disposable
+PostgreSQL schemas. Claims and renewals must respect configuration epochs,
+configured grants and independent artifact execution permission. Claim history
+is immutable and token-free; lifecycle state retains only token hashes. The
+lease layer invokes no verifier and creates no loaded summary or catalog pointer.

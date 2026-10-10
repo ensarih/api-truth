@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Loaded-document leases/execution, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
+| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Separate loaded-document claims/renewals validate the current epoch and bound worker capacity. Loaded-document execution/atomic completion, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
@@ -1601,3 +1601,32 @@ and typecheck passed all 1,763 offline tests; all 466 PostgreSQL tests passed fr
 the staged archive. Five focused PostgreSQL cases exercise concurrent replay and
 quota, exact load identity, epoch switchback, missing parents, malformed/hostile
 inputs, mismatched artifact opt-in, revoked grants and immutable intents.
+
+
+### Loaded-document worker claims and renewal — NB1 (2026-10-10)
+
+A distinct lease store checks `swagger.document.verify.execute` before storage,
+then validates the current configuration epoch, recomputed load/job identities,
+capture/handler parents, configured grants and independent source/environment/
+artifact execution permission. Worker/instance identity and bounded repository/
+service allowlists are fixed by the host.
+
+Migration `0015` creates separate lifecycle state and immutable claim history,
+backfills existing admissions and enqueues new ones by trigger. Admission quota
+now counts active lifecycle rows. Shared tenant locking limits two live leases
+per tenant and one per repository/service/environment. Scans stop at 32 and
+no-work results have partial coverage. Database-clock leases last 120 seconds;
+only token hashes persist. Renewal rechecks authority and exact ownership;
+reclaim rotates tokens and expiry after three attempts becomes a fixed failure.
+
+This step claims/renews work without executing a verifier, storing a loaded
+summary or changing catalog/environment pointers. Atomic verification execution,
+retry scheduling, supersession cleanup and qualified reads remain open.
+
+Validation: TDD exposed the absent module and incomplete policy fixture.
+Independent review corrected environment binding, capacity assertions and legacy
+backfill setup. A clean locked install/typecheck passed all 1,763 offline tests;
+all 472 PostgreSQL tests passed from the staged archive, including the final
+frozen full-binding return. Six focused cases cover upgrade/backfill, independent
+environments, concurrent tenant capacity, ownership/token expiry/reclaim, three
+attempts, current epoch/grant/artifact fences and immutable token-free history.

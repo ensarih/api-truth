@@ -40,6 +40,11 @@ export { createLoadedDocumentVerificationAdmissionStore, LoadedDocumentVerificat
 export type { LoadedDocumentVerificationAdmissionBinding, LoadedDocumentVerificationAdmissionOptions,
   LoadedDocumentAdmissionAuthorization, LoadedDocumentVerificationAdmissionReceipt }
   from "./loaded-document-verification-admission.js";
+export { createLoadedDocumentVerificationLeaseStore, LoadedDocumentVerificationLeaseError }
+  from "./loaded-document-verification-leases.js";
+export type { LoadedDocumentVerificationLeaseBinding, LoadedDocumentVerificationLeaseOptions,
+  LoadedDocumentVerificationLease, LoadedDocumentVerificationNoWork }
+  from "./loaded-document-verification-leases.js";
 export { createCaptureVerificationAdmissionStore, CaptureVerificationAdmissionError } from "./capture-verification-admission.js";
 export type { CaptureVerificationAdmissionOptions, CaptureVerificationAdmissionReceipt } from "./capture-verification-admission.js";
 export { createCaptureVerificationLeaseStore, CaptureVerificationLeaseError } from "./capture-verification-leases.js";
