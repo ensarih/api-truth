@@ -309,3 +309,20 @@ PostgreSQL schemas. Claims and renewals must respect configuration epochs,
 configured grants and independent artifact execution permission. Claim history
 is immutable and token-free; lifecycle state retains only token hashes. The
 lease layer invokes no verifier and creates no loaded summary or catalog pointer.
+
+
+### Loaded-document verification execution
+
+`tests/integration/loaded-document-verification-runner.test.ts` exercises the
+separate worker with disposable PostgreSQL schemas and a signed proof fixture
+backed by an actual temporary Git checkout. This fixture signs synthetic capture
+metadata; it does not run a framework server. Pinned framework process behavior
+remains covered by the separate runtime conformance suite.
+
+The host factory receives the exact frozen lease binding and an abort signal.
+It must honor the deadline and finish cleanup before settling. Verification runs
+outside database transactions. Final storage rechecks configuration, parents,
+grants, independent execution policy and the current live lease. Migration
+`0016` ties the summary, immutable completion result and successful lifecycle
+state together, including digest, counts, attempt and database timestamp.
+Only fixed error codes persist. No catalog or deployment pointer is changed.

@@ -309,7 +309,7 @@ export function createLoadedDocumentVerificationLeaseStore(pool: Pool, options: 
         WHERE job.tenant_id=$1 AND job.repository_id=ANY($2::text[]) AND job.service_id=ANY($3::text[])
           AND job.config_fingerprint=$4 AND job.config_document_sha256=$5 AND job.config_checkpoint_version=$6
           AND state.available_at<=clock_timestamp()
-          AND (state.state='queued' OR state.state='leased' AND state.lease_expires_at<=clock_timestamp())
+          AND (state.state IN ('queued','retry_wait') OR state.state='leased' AND state.lease_expires_at<=clock_timestamp())
         ORDER BY job.admitted_at,job.job_id LIMIT ${WINDOW}`,
       [tenantId, repositories, services, active.fingerprint, active.documentSha256, active.checkpointVersion]);
       for (const job of candidates.rows) {
@@ -321,7 +321,8 @@ export function createLoadedDocumentVerificationLeaseStore(pool: Pool, options: 
           FOR UPDATE SKIP LOCKED`, [tenantId, job.job_id]);
         const state = locked.rows[0];
         if (locked.rows.length !== 1 || !state) continue;
-        const ready = state.state === "queued" || state.state === "leased" && state.lease_expired === true;
+        const ready = state.state === "queued" || state.state === "retry_wait"
+          || state.state === "leased" && state.lease_expired === true;
         if (!ready) continue;
         if (state.attempt_count >= MAX_ATTEMPTS) {
           if (state.state !== "leased") throw new LoadedDocumentVerificationLeaseError("LOADED_DOCUMENT_LEASE_STORAGE_ERROR");
@@ -345,9 +346,10 @@ export function createLoadedDocumentVerificationLeaseStore(pool: Pool, options: 
           orchestration_loaded_document_verification_job_state
           SET state='leased',attempt_count=attempt_count+1,lease_worker_id=$3,lease_instance_id=$4,lease_token_hash=$5,
             lease_expires_at=clock_timestamp()+($6::integer * interval '1 millisecond'),safe_error_code=NULL,
+            verification_error_code=NULL,
             row_version=row_version+1,updated_at=clock_timestamp()
           WHERE tenant_id=$1 AND job_id=$2 AND attempt_count<$7
-            AND (state='queued' OR state='leased' AND lease_expires_at<=clock_timestamp())
+            AND (state IN ('queued','retry_wait') OR state='leased' AND lease_expires_at<=clock_timestamp())
           RETURNING lease_expires_at,attempt_count`,
         [tenantId, job.job_id, workerId, instanceId, hash(token), LEASE_MS, MAX_ATTEMPTS]);
         if (updated.rows.length !== 1 || !(updated.rows[0]!.lease_expires_at instanceof Date)) continue;

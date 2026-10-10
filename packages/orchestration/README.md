@@ -303,3 +303,27 @@ connections; SQL lock/statement timeouts remain two/ten seconds.
 This layer claims and renews jobs. Verification execution, atomic summary/result
 completion, retry scheduling, supersession cancellation and qualified readers
 are subsequent gates.
+
+## Loaded-document verification runner
+
+`createLoadedDocumentVerificationRunner` claims one separately admitted load job
+and passes its frozen binding to a trusted `verificationPortFactory`. Verification
+runs outside a database transaction. The context supplies an abort signal and a
+bounded deadline; the factory/port must honor both and complete resource cleanup
+before settling. Optional `dispose` also finishes before result storage.
+
+Heartbeats renew ownership during verification. Deadline expiry, revoked
+permission or lost ownership prevents late successful output from being stored.
+Finalization takes the same tenant lock as admission/claims, rechecks the current
+configuration epoch, capture and handler-byte parents, scoped grants, independent
+artifact execution permission and exact live token/attempt. Migration `0016`
+commits the safe summary, immutable per-job result and successful lifecycle state
+in one transaction. Their identity, digest, counts, attempt and database completion
+time must agree. Successful state and results are immutable.
+
+Deterministic unverified proof fails terminally. Transient failures persist only
+a fixed code and use database-clock backoff, with at most three claims. No source
+content, raw errors, signing key bytes or lease tokens enter result storage.
+Historical load correspondence does not establish production deployment presence
+or normative API behavior. Supersession maintenance and qualified downstream reads
+remain separate gates.

@@ -42,8 +42,11 @@ async function applyBase(db: CatalogTestDatabase) {
   await applyOrchestrationMigrationManifest(db.pool, {schema: db.schema}, manifest);
 }
 async function applyLeaseMigration(db: CatalogTestDatabase) {
-  const sql = await readFile(new URL("../../packages/orchestration/migrations/0015_loaded_document_verification_leases.sql", import.meta.url), "utf8");
-  await applyOrchestrationMigrationManifest(db.pool, {schema: db.schema}, [{version: "0015_loaded_document_verification_leases", sql}]);
+  const manifest = await Promise.all([
+    "0015_loaded_document_verification_leases", "0016_loaded_document_verification_results",
+  ].map(async version => ({version,
+    sql: await readFile(new URL(`../../packages/orchestration/migrations/${version}.sql`, import.meta.url), "utf8")})));
+  await applyOrchestrationMigrationManifest(db.pool, {schema: db.schema}, manifest);
 }
 async function setup(applyLeases = true) {
   const db = await createCatalogTestDatabase();

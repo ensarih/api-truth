@@ -40,6 +40,11 @@ export { createLoadedDocumentVerificationAdmissionStore, LoadedDocumentVerificat
 export type { LoadedDocumentVerificationAdmissionBinding, LoadedDocumentVerificationAdmissionOptions,
   LoadedDocumentAdmissionAuthorization, LoadedDocumentVerificationAdmissionReceipt }
   from "./loaded-document-verification-admission.js";
+export { createLoadedDocumentVerificationRunner, LoadedDocumentVerificationRunnerError }
+  from "./loaded-document-verification-runner.js";
+export type { LoadedDocumentVerificationRunnerPort, LoadedDocumentVerificationRunContext,
+  LoadedDocumentVerificationRunnerOptions, LoadedDocumentVerificationRunResult }
+  from "./loaded-document-verification-runner.js";
 export { createLoadedDocumentVerificationLeaseStore, LoadedDocumentVerificationLeaseError }
   from "./loaded-document-verification-leases.js";
 export type { LoadedDocumentVerificationLeaseBinding, LoadedDocumentVerificationLeaseOptions,

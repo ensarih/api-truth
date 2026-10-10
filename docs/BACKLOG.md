@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Separate loaded-document claims/renewals validate the current epoch and bound worker capacity. Loaded-document execution/atomic completion, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
+| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Separate loaded-document claims/renewals validate the current epoch and bound worker capacity. Loaded-document bounded execution commits its safe summary and successful lease state atomically. Supersession cleanup, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
@@ -1630,3 +1630,32 @@ all 472 PostgreSQL tests passed from the staged archive, including the final
 frozen full-binding return. Six focused cases cover upgrade/backfill, independent
 environments, concurrent tenant capacity, ownership/token expiry/reclaim, three
 attempts, current epoch/grant/artifact fences and immutable token-free history.
+
+
+### Atomic loaded-document verification execution — NB1 (2026-10-10)
+
+A separate worker runs a host-configured verification port outside database
+transactions, renews ownership and supplies a deadline/abort signal. The host
+port must cooperate with cancellation and complete cleanup before settling;
+late results are fenced from persistence. Factory bindings include the exact
+capture, load artifact, source, environment and configuration epoch.
+
+Finalization shares the admission tenant lock and rechecks configuration,
+capture/byte parents, configured grants, independent artifact execution policy
+and live ownership. Migration `0016` requires the immutable result, safe summary
+and successful state to agree on identity, digest, counts, attempt and database
+completion time. Failed finalization rolls back all completion writes. Fixed
+unverified proofs fail terminally; transient failures use database-clock retry
+backoff with at most three claims. No raw error, token or source content persists.
+
+This records historical controlled-load evidence. It does not publish a catalog
+snapshot or establish deployment presence or normative API behavior. Superseded
+job cleanup and downstream qualified reads remain separate follow-up work.
+
+Validation: a clean locked installation/typecheck passed all 1,765 offline tests;
+all 481 PostgreSQL tests passed from the staged archive. Nine focused PostgreSQL
+cases cover composed signed-load/Git proof, atomic success, deterministic failure,
+deadline/abort cleanup, deadline during factory creation, retry backoff and the
+three-claim limit, revoked execution policy, injected result-write rollback,
+missing-result constraints and immutable successful records. Two offline tests
+check denied execution and hostile configuration without storage/protected reads.
