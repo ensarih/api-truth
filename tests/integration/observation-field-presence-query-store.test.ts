@@ -131,6 +131,18 @@ test("reads only current authorized value-free field states",async()=>{
   expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
 });
 
+test("anchored reads still require an exact authenticated principal and the current grant",async()=>{
+  const repository=store();
+  await expect(repository.readForPrincipal(readCredential,{tenantId,principalId},request()))
+    .resolves.toMatchObject({status:"resolved",pin});
+  await expect(repository.readForPrincipal(readCredential,{tenantId,principalId:"another-reader"},request()))
+    .rejects.toMatchObject({code:"FIELD_PRESENCE_QUERY_UNAUTHORIZED"});
+  const access=createAccessPolicyStore(database.pool,{schema:database.schema});
+  await access.putGrant({tenantId},{principalId,scopeId:readAccessScopeId,active:false});
+  await expect(repository.readForPrincipal(readCredential,{tenantId,principalId},request()))
+    .rejects.toMatchObject({code:"FIELD_PRESENCE_QUERY_UNAUTHORIZED"});
+});
+
 test("unauthorized read fails before database access",async()=>{
   const connect=vi.spyOn(database.pool,"connect");
   await expect(store(async()=>undefined).read(readCredential,request())).rejects.toMatchObject({code:"FIELD_PRESENCE_QUERY_UNAUTHORIZED"});

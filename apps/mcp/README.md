@@ -41,3 +41,22 @@ When the host also supplies `searchOperationCandidatesAcrossServices`, the separ
 ## Synthetic schema examples
 
 When the host supplies `examples: {generate}`, the read-only `api_truth_get_synthetic_example` tool accepts only repository, service, environment, expected serving checkpoint, and a host-configured policy ID. Authentication supplies tenant and principal. The service authorizes and rechecks the current pin; callers cannot provide property allowlists or snapshots. A generated result is a deterministic, non-normative placeholder, not observed traffic or runtime validation proof. No model or source execution is involved. The tool is absent unless the host enables it.
+
+## Observed field presence
+
+Supplying `presence: {readForPrincipal}` registers the read-only
+`api_truth_get_field_presence` tool. Inputs require repository, service,
+environment, snapshot ID, revision, configuration fingerprint, serving checkpoint,
+policy ID, owner-policy revision and a limit of 1–100. Identity, credential,
+capability and access-scope arguments are rejected, as are qualified views.
+
+Use `createFieldPresenceQueryStore` for this port. MCP authentication supplies the
+transport principal; the store independently authenticates the opaque
+`ServerContext` through its host manager and requires that same tenant/principal.
+A model-supplied principal never authorizes access. The host must provide both
+authentication integrations; there is no bundled login or live log provider.
+
+Output contains only owner-selected present/absent states, current full pin,
+policy/source provenance and truncation. Observations are explicitly non-normative
+and do not establish requiredness or validation. Existing output limits and fixed
+errors apply. Owner policy, import and cleanup writes remain unavailable.

@@ -5,6 +5,7 @@ import type { QueryReader, QueryObservationReader, QueryOperationReader, QueryCo
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
 import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
+import type {createFieldPresenceQueryStore} from "../../../packages/observations/src/field-presence-query-store.js";
 import * as z from "zod/v4";
 
 export type ApiTruthMcpPrincipal = Readonly<{ tenantId: string; principalId: string }>;
@@ -16,6 +17,7 @@ export type ApiTruthMcpOptions = Readonly<{
   maxOutputBytes?: number;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
+  presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
 }>;
 
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -94,6 +96,11 @@ const corpusCandidateSchema = z.object({environment: boundedIdentifier,
 const syntheticExampleSchema = z.object({repositoryId: boundedIdentifier,serviceId: boundedIdentifier,
   environment: boundedIdentifier,expectedCheckpointVersion: databaseVersion,
   policyId: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)}).strict();
+const presenceIdentifier=z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+const fieldPresenceSchema=z.object({repositoryId:presenceIdentifier,serviceId:presenceIdentifier,
+  environment:presenceIdentifier,snapshotId:presenceIdentifier,revision:presenceIdentifier,
+  configFingerprint:z.string().regex(/^sha256:[0-9a-f]{64}$/),checkpointVersion:databaseVersion,
+  policyId:presenceIdentifier,ownerPolicyRevision:databaseVersion,limit:z.number().int().min(1).max(100)}).strict();
 
 const successSchema = z.object({ ok: z.literal(true), data: z.unknown() }).strict();
 const failureSchema = z.object({ ok: z.literal(false), error: z.enum(publicErrors) }).strict();
@@ -144,6 +151,9 @@ const mapQueryError = (error: unknown): PublicError => {
     case "EXAMPLE_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
     case "EXAMPLE_STALE_CONTEXT": return "STALE_SELECTION";
     case "EXAMPLE_INVALID_REQUEST": return "INVALID_REQUEST";
+    case "FIELD_PRESENCE_QUERY_UNAUTHORIZED": return "NOT_FOUND_OR_DENIED";
+    case "FIELD_PRESENCE_QUERY_STALE": return "STALE_SELECTION";
+    case "FIELD_PRESENCE_QUERY_INVALID_REQUEST": return "INVALID_REQUEST";
     default: return "QUERY_UNAVAILABLE";
   }
 };
@@ -323,6 +333,18 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
       generate(principal,{selection:selection(principal,args.repositoryId,args.serviceId,
         {kind:"environment",environment:args.environment,expectedCheckpointVersion:args.expectedCheckpointVersion}),
       policyId:args.policyId})));
+  }
+  if(typeof options.presence?.readForPrincipal==="function"){
+    const readPresence=options.presence.readForPrincipal.bind(options.presence);
+    server.registerTool("api_truth_get_field_presence",{
+      title:"Get observed API field presence",
+      description:"Read owner-selected, value-free present/absent states for one exact current environment pin and policy generation. These observations are non-normative and do not establish requiredness, schemas or runtime validation. A bounded page reports truncation.",
+      inputSchema:fieldPresenceSchema,outputSchema,annotations:readOnlyAnnotations,
+    },async(args,context)=>execute(options,maxOutputBytes,context,async principal=>
+      readPresence(context,principal,{policyId:args.policyId,ownerPolicyRevision:args.ownerPolicyRevision,limit:args.limit,
+        expectedPin:{tenantId:principal.tenantId,repositoryId:args.repositoryId,serviceId:args.serviceId,
+          environment:args.environment,snapshotId:args.snapshotId,revision:args.revision,
+          configFingerprint:args.configFingerprint,checkpointVersion:args.checkpointVersion}})));
   }
   return server;
 };

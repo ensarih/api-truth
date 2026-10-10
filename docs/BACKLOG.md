@@ -44,7 +44,7 @@ provider or enterprise pilot claim.
 | NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
-| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries and bounded retention maintenance are implemented; portal/MCP presentation, live adapters, cleanup scheduling and durable reviewed samples remain separate gates. |
+| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries, optional portal/MCP presentation and bounded retention maintenance are implemented; live adapters, cleanup scheduling and durable reviewed samples remain separate gates. |
 | P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
@@ -1299,7 +1299,7 @@ authorization deadlines, inert identities, detached bindings and fixed errors.
 Restoring the erroneous counter equality in an isolated test copy reproduces the
 stale-pin failure; the reviewed implementation passes the same regression.
 
-#### Next P3 acceptance: portal/MCP presence presentation
+#### Portal/MCP presence presentation acceptance
 
 - Bind independently authenticated presence-reader credentials to the same
   tenant/principal authenticated by the transport before accessing storage;
@@ -1314,3 +1314,46 @@ stale-pin failure; the reviewed implementation passes the same regression.
   transport error sanitization and stale browser responses before closing this
   gate. Owner writes, live source adapters, scheduled cleanup and reviewed samples
   remain separate work.
+
+### Principal-bound portal/MCP field presence — P3 (2026-10-10)
+
+Observations 0.13.0 adds a shared `readForPrincipal` path: transport credentials
+must independently authenticate as the same tenant/principal before storage is
+contacted. An inert detached principal anchor alone cannot authorize a read.
+Existing current pin, policy and grant checks remain in the same transaction.
+
+Portal 0.3.0 and MCP 0.2.0 expose optional read-only presence surfaces with exact
+environment pin, policy generation and explicit 1–100 limit. Tenant comes from
+transport authentication; caller credentials, identities, access scopes,
+capabilities and qualified fields reject. Output caps and sanitized fixed errors
+apply. No owner approval, import or cleanup write is exposed.
+
+The portal's optional form checks the displayed unqualified pin, source digest,
+policy generation, endpoint membership and exact value-free result shapes. It
+shows provenance and present/absent states as text with non-normative/truncation
+labels. Contract or policy changes suppress pending replies; malformed, denied or
+stale responses clear output. Controlled browser tests include vendor JSON media,
+native timestamp precision, forbidden extra values and delayed responses.
+
+A locked clean install passes 1,672 offline tests, 445 PostgreSQL tests and
+10 browser tests. Transport regressions first fail without the new surfaces;
+principal isolation, fixed errors and stale browser replies pass with them.
+
+#### Next P3 acceptance: bounded automatic retention cleanup
+
+- Schedule only immutable explicitly configured policy/scope bindings; do not
+  discover all branches or scan a policy history to decide what to clean.
+- Use the authenticated maintenance store and independent host credentials for
+  each bounded batch. Retain grants, tombstones, database-clock TTL and live-row
+  protection; scheduling alone grants no authority.
+- Rotate through configured policies fairly with a bounded count per pass and
+  one in-flight pass. Schedule the next interval after settlement; avoid overlap
+  and accumulated catch-up work.
+- Abort bounded credential reads on stop and suppress late results. Drain an
+  already-started cleanup before stop returns rather than reporting cancellation
+  while database mutations continue unseen.
+- Report only frozen numeric summaries and fixed status; withhold scope IDs,
+  credentials, traffic values and callback/database error text. Prove timer,
+  stop/start, overlap, fairness and real PostgreSQL retention behavior. Durable
+  multi-process scheduling, live source adapters and reviewed samples remain
+  separate gates.

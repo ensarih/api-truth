@@ -8,6 +8,7 @@ import {ObservationImportError,withAuthorizedObservationPin,type ExpectedObserva
 
 export type FieldPresenceQueryBinding=Readonly<{tenantId:string;repositoryId:string;serviceId:string;environment:string;
   policyId:string;ownerAccessScopeId:string;readAccessScopeId:string}>;
+export type FieldPresenceQueryPrincipal=Readonly<{tenantId:string;principalId:string}>;
 export type FieldPresenceQueryManager=(credential:unknown,binding:FieldPresenceQueryBinding,signal:AbortSignal)=>Promise<unknown>;
 export type FieldPresenceQueryStoreOptions=Readonly<{schema:string;bindings:readonly FieldPresenceQueryBinding[];
   authorizeManager:FieldPresenceQueryManager}>;
@@ -44,6 +45,15 @@ const digest=/^sha256:[0-9a-f]{64}$/;
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const bindingKeys=["tenantId","repositoryId","serviceId","environment","policyId","ownerAccessScopeId","readAccessScopeId"] as const;
 type Request=Readonly<{binding:FieldPresenceQueryBinding;ownerPolicyRevision:string;expectedPin:ExpectedObservationPin;limit:number}>;
+type Result=Readonly<{status:"resolved";kind:"observed_field_presence";nonNormative:true;
+  pin:Readonly<{tenantId:string;repositoryId:string;serviceId:string;environment:string;snapshotId:string;revision:string;
+    configFingerprint:string;checkpointVersion:string;sourceDigest:string}>;
+  policy:Readonly<{policyId:string;ownerPolicyRevision:string;policyFingerprint:string;configActivationCheckpoint:string;
+    endpointId:string;direction:"request"|"response";mediaType:string;statusCode?:number;propertyPaths:readonly string[]}>;
+  records:readonly Readonly<{importId:string;recordId:string;source:Readonly<{sourceId:string;sourceVersion:string;
+    windowStart:string;windowEnd:string;importedAt:string;expiresAt:string}>;scope:Readonly<{sourceDigest:string;endpointId:string;
+    direction:"request"|"response";mediaType:string;statusCode?:number}>;
+    fields:readonly Readonly<{path:string;state:"present"|"absent"}>[]} >[];truncated:boolean}>;
 const bindingKey=(binding:Pick<FieldPresenceQueryBinding,"tenantId"|"repositoryId"|"serviceId"|"environment"|"policyId">)=>
   JSON.stringify([binding.tenantId,binding.repositoryId,binding.serviceId,binding.environment,binding.policyId]);
 const bindingValue=(input:unknown):FieldPresenceQueryBinding|undefined=>{
@@ -65,6 +75,11 @@ const parseRequest=(input:unknown,bindings:ReadonlyMap<string,FieldPresenceQuery
     environment:binding.environment,snapshotId:scope.snapshotId as string,revision:scope.revision as string,
     configFingerprint:scope.configFingerprint as string,checkpointVersion:scope.checkpointVersion as string});
   return Object.freeze({binding,ownerPolicyRevision:raw.ownerPolicyRevision as string,expectedPin,limit:Number(raw.limit)});
+};
+const parsePrincipal=(input:unknown):FieldPresenceQueryPrincipal|undefined=>{
+  const raw=fields(input,["tenantId","principalId"]);
+  if(!raw||!identifier(raw.tenantId)||!identifier(raw.principalId))return undefined;
+  return Object.freeze({tenantId:raw.tenantId as string,principalId:raw.principalId as string});
 };
 type Identity=Readonly<{tenantId:string;principalId:string;capabilities:readonly string[]}>;
 const identity=(input:unknown,tenantId:string):Identity|undefined=>{
@@ -141,17 +156,12 @@ export const createFieldPresenceQueryStore=(pool:Pool,optionsInput:FieldPresence
     catch{return fail("FIELD_PRESENCE_QUERY_UNAUTHORIZED");}
     const parsed=identity(raw,binding.tenantId);if(!parsed)return fail("FIELD_PRESENCE_QUERY_UNAUTHORIZED");return parsed;
   };
-  return Object.freeze({async read(credential:unknown,input:unknown):Promise<Readonly<{status:"resolved";kind:"observed_field_presence";
-    nonNormative:true;pin:Readonly<{tenantId:string;repositoryId:string;serviceId:string;environment:string;
-    snapshotId:string;revision:string;configFingerprint:string;checkpointVersion:string;sourceDigest:string}>;policy:Readonly<{policyId:string;
-      ownerPolicyRevision:string;policyFingerprint:string;configActivationCheckpoint:string;endpointId:string;
-      direction:"request"|"response";mediaType:string;statusCode?:number;propertyPaths:readonly string[]}>;
-    records:readonly Readonly<{importId:string;recordId:string;source:Readonly<{sourceId:string;sourceVersion:string;
-      windowStart:string;windowEnd:string;importedAt:string;expiresAt:string}>;scope:Readonly<{sourceDigest:string;
-      endpointId:string;direction:"request"|"response";mediaType:string;statusCode?:number}>;
-      fields:readonly Readonly<{path:string;state:"present"|"absent"}>[]} >[];truncated:boolean}>>{
+  const perform=async(credential:unknown,input:unknown,anchor?:FieldPresenceQueryPrincipal):Promise<Result>=>{
     const request=parseRequest(input,byKey),binding=request.binding,pin=request.expectedPin;
+    if(anchor&&anchor.tenantId!==binding.tenantId)return fail("FIELD_PRESENCE_QUERY_UNAUTHORIZED");
     const caller=await authorize(credential,binding);
+    if(anchor&&(caller.tenantId!==anchor.tenantId||caller.principalId!==anchor.principalId))
+      return fail("FIELD_PRESENCE_QUERY_UNAUTHORIZED");
     try{return await withAuthorizedObservationPin(pool,schemaSql,options.schema as string,pinIdentity(caller),pin,
       async(client,authorized)=>{
         const active=await client.query<{config_fingerprint:string;checkpoint_version:string}>(`SELECT config_fingerprint,checkpoint_version::text
@@ -245,6 +255,13 @@ export const createFieldPresenceQueryStore=(pool:Pool,optionsInput:FieldPresence
           records:Object.freeze(records),truncated});
       },{additionalScopeIds:[binding.ownerAccessScopeId,binding.readAccessScopeId],requireUnqualifiedPin:true,boundedTransaction:true});
     }catch(error){return mapError(error);}
-  }});
+  };
+  return Object.freeze({
+    read:(credential:unknown,input:unknown)=>perform(credential,input),
+    readForPrincipal:async(credential:unknown,principalInput:unknown,input:unknown)=>{
+      const principal=parsePrincipal(principalInput);if(!principal)return fail("FIELD_PRESENCE_QUERY_UNAUTHORIZED");
+      return perform(credential,input,principal);
+    },
+  });
 };
 const pinIdentity=(identity:Identity)=>Object.freeze({tenantId:identity.tenantId,principalId:identity.principalId,capabilities:identity.capabilities});

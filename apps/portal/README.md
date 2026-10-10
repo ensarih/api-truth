@@ -45,3 +45,31 @@ Choosing **Load pinned contract** requests that candidate's exact environment ch
 When the host supplies `examples: {generate}`, `POST /api/examples` accepts strict JSON with only repository, service, environment, expected serving checkpoint, and a host-configured policy ID. The same authenticated, bounded request-body path as discovery applies. Tenant and principal come from the host, and the request cannot supply property allowlists or a snapshot. The service authorizes and rechecks the current pin before returning a deterministic, non-normative placeholder. Without the service, the route returns 404 and the browser form is hidden.
 
 The browser form becomes available only after a resolved environment contract supplies a serving checkpoint. It sends that displayed checkpoint and the user's policy ID, then shows the returned endpoint scope and value as text under an explicit synthetic, non-normative label. Before display, it checks the returned tenant, repository, service, revision, configuration, source digest, serving checkpoint, and endpoint membership against the loaded contract. Changing the contract or policy while a request is pending discards its result; denied, malformed, or stale responses clear the displayed example. The form does not use traffic samples, inference providers, or source execution.
+
+## Observed field presence
+
+Supplying `presence: {readForPrincipal}` enables **Observed field presence** and
+`GET /api/field-presence`. All query fields are required: repository/service IDs,
+environment, snapshot ID, revision, configuration fingerprint, serving checkpoint,
+policy ID, owner-policy revision and limit (1–100). Duplicate or unknown fields,
+credentials, identities, capabilities, access scopes and qualified views reject.
+Existing authentication, no-store responses, output cap and fixed errors apply.
+
+Wire `createFieldPresenceQueryStore` for this port. The transport supplies its
+authenticated principal and passes `IncomingMessage` only as an opaque credential.
+The store's host manager must independently authenticate that request, establish
+the read capability and return the same tenant/principal before database access.
+The owner/read grants, current serving/configuration pin and enabled policy are
+rechecked by the store; a browser-supplied pin does not grant authority.
+
+The form requires a current unqualified environment contract and a configured
+policy/version. It validates the full returned pin and source digest, policy
+generation, endpoint membership and value-free record shapes before displaying
+provenance and selected present/absent states as text. Changes to the selected
+service, environment or policy invalidate pending replies; malformed, denied and
+stale responses clear output. Truncation and non-normative observations are
+explicit. Absence in a sample does not establish that a field is optional.
+
+Without a configured presence reader, the panel is hidden and its route returns
+404. This surface does not expose owner writes, read bodies or implement a live
+log provider. Browser coverage is in `tests/browser/field-presence.spec.ts`.

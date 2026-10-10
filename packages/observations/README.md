@@ -309,4 +309,18 @@ includes the full pin, policy fingerprint/generation, source provenance, exact
 parent UUIDs and selected `present`/`absent` states. The explicit limit is 1–100;
 one extra row detects truncation without returning an unbounded history. Values,
 bodies and inferred requiredness are absent. Errors contain fixed codes only.
-Portal/MCP presentation and live provider adapters remain separate gates.
+Live provider adapters remain separate gates.
+
+`readForPrincipal(credential, {tenantId, principalId}, request)` additionally
+anchors the independently authenticated reader to the transport's authenticated
+principal. The anchor is strictly parsed and detached before any asynchronous
+work. A supplied principal alone never grants authority: the manager must still
+authenticate the opaque credential, supply `observations.presence.read`, and
+return the same tenant/principal before storage is contacted. Existing current
+pin, grant, policy and lineage checks apply unchanged.
+
+Portal and MCP hosts may provide this store as `presence`. The transport passes
+its `IncomingMessage` or `ServerContext` only as the opaque credential; the host's
+manager must independently authenticate that context. Transport inputs cannot
+supply credentials, identities, access scopes or capabilities. The optional
+read-only surfaces do not expose owner approval, import or cleanup writes.

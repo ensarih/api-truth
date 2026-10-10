@@ -28,5 +28,5 @@ export type {FieldPresenceImportBinding,FieldPresenceImportManager,FieldPresence
 export {createFieldPresenceMaintenanceStore,FieldPresenceMaintenanceError} from "./field-presence-maintenance-store.js";
 export type {FieldPresenceMaintenanceManager,FieldPresenceMaintenanceOptions,FieldPresenceMaintenanceErrorCode} from "./field-presence-maintenance-store.js";
 export {createFieldPresenceQueryStore,FieldPresenceQueryError} from "./field-presence-query-store.js";
-export type {FieldPresenceQueryBinding,FieldPresenceQueryManager,FieldPresenceQueryStoreOptions,
+export type {FieldPresenceQueryBinding,FieldPresenceQueryPrincipal,FieldPresenceQueryManager,FieldPresenceQueryStoreOptions,
   FieldPresenceQueryErrorCode} from "./field-presence-query-store.js";

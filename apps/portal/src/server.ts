@@ -6,6 +6,8 @@ import { parseStrictJson } from "../../../packages/ir/src/strict-json.js";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
 import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
+import type {createFieldPresenceQueryStore} from "../../../packages/observations/src/field-presence-query-store.js";
+import {fieldPresenceScript} from "./field-presence-browser.js";
 
 export type PortalPrincipal = Readonly<{ tenantId: string; principalId: string }>;
 export type PortalOptions = Readonly<{
@@ -14,6 +16,7 @@ export type PortalOptions = Readonly<{
     & Partial<QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader>;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
+  presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
 }>;
 
 const page = `<!doctype html>
@@ -32,6 +35,7 @@ const page = `<!doctype html>
 <button type="submit">View contract</button></form><p id="contract-status" role="status"></p>
 <div id="contract-summary"></div><ul id="endpoints"></ul><ul id="schemas"></ul><ul id="evidence"></ul>
 <a id="download" hidden>Download this published OpenAPI version</a><pre id="detail"></pre></section>
+<section id="presence" hidden><h2>Observed field presence</h2><p>Read which selected fields appeared in observed requests or responses. Values are hidden. These observations do not define required or optional fields.</p><form id="presence-form"><label>Policy ID <input name="policyId" maxlength="128" required autocomplete="off"></label><label>Policy version <input name="ownerPolicyRevision" maxlength="19" value="1" required inputmode="numeric"></label><label>Record limit <input name="limit" type="number" min="1" max="100" value="20" required></label><button type="submit" disabled>Read observed fields</button></form><p id="presence-status" role="status"></p><pre id="presence-result"></pre></section>
 <section id="examples" hidden><h2>Synthetic schema example</h2><p>Generate a deterministic placeholder from a configured policy. It is synthetic, non-normative, and does not show observed traffic or prove runtime validation.</p><form id="example-form"><label>Policy ID <input name="policyId" maxlength="128" required autocomplete="off"></label><button type="submit" disabled>Generate synthetic example</button></form><p id="example-status" role="status"></p><pre id="example-result"></pre></section>
 <section id="discovery" hidden><h2>Find an API for this task</h2><form id="candidates" hidden><p>Find keyword candidates in the current authorized environment. This checks words in existing API context; it does not use an inference provider.</p><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Find candidate APIs</button></form><p id="candidate-status" role="status"></p><ul id="candidate-results"></ul><form id="discover"><p>Selected endpoint documentation, source route and handler identifiers, and your task text may be sent to the host-configured inference provider.</p><fieldset id="discovery-endpoints"><legend>Choose API operations</legend></fieldset><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Find an API for this task</button></form><p id="discovery-status" role="status"></p><ul id="discovery-results"></ul></section>
 <section><h2>Compare contracts</h2><form id="compare"><label>From
@@ -77,7 +81,7 @@ contract.addEventListener('submit',async event=>{event.preventDefault();const ge
   try{const params=selection(),body=await fetchJson('/api/contract?'+params);if(generation!==selectionGeneration)return;
     if(body.status!=='resolved'){contractStatus.textContent='Contract state: '+body.status+'. No contract is available here.';return;}
     if(requestedCandidate){const item=requestedCandidate.item;if(requestedCandidate.generation!==corpusGeneration||params.get('repositoryId')!==item.repositoryId||params.get('serviceId')!==item.serviceId||params.get('kind')!=='environment'||params.get('value')!==item.selector.selector.environment||params.get('expectedVersion')!==item.pin.checkpointVersion||!['snapshotId','revision','configFingerprint','checkpointVersion','selectedRevision'].every(field=>body.pin?.[field]===item.pin[field])||body.selector?.repositoryId!==item.repositoryId||body.selector?.serviceId!==item.serviceId||body.selector?.selector?.kind!=='environment'||body.selector.selector.environment!==item.selector.selector.environment||body.selector.selector.expectedCheckpointVersion!==item.pin.checkpointVersion||!body.endpoints.some(endpoint=>endpoint.endpointId===item.endpointId)){contractStatus.textContent='Pinned candidate is stale. Search again.';return;}}
-    contractStatus.textContent='Contract available. Analyzed at '+body.analyzedAt+'.';currentResolved={params,body};
+    contractStatus.textContent='Contract available. Analyzed at '+body.analyzedAt+'.';currentResolved={params,body};refreshPresence();
     if(examplesEnabled&&params.get('kind')==='environment'&&body.pin?.checkpointVersion){exampleButton.disabled=false;exampleStatus.textContent='Enter a configured policy ID to generate a synthetic, non-normative example.';}
     else if(examplesEnabled)exampleStatus.textContent='Synthetic examples require a current environment selection with a serving checkpoint.';
     const coverage=document.createElement('p');coverage.textContent='Coverage: '+body.coverage.status+'.';summary.append(coverage);
@@ -114,7 +118,7 @@ compare.addEventListener('submit',async event=>{event.preventDefault();compareSt
   try{const body=await fetchJson('/api/compare?'+params);compareStatus.textContent=body.status==='compared'?'Comparison ready.':
       'Comparison unavailable: '+body.beforeStatus+' / '+body.afterStatus+'.';
     if(body.status==='compared')changes.textContent=JSON.stringify(body.differences,null,2);}
-  catch{compareStatus.textContent='The comparison is unavailable.';}});`;
+  catch{compareStatus.textContent='The comparison is unavailable.';}});`+fieldPresenceScript;
 const style = `:root{font-family:system-ui,sans-serif;color:#17212b;background:#f7f9fb}main{max-width:54rem;margin:3rem auto;padding:1.5rem;background:white;border:1px solid #dce3e9;border-radius:.75rem}section{margin-top:2rem;border-top:1px solid #dce3e9;padding-top:1rem}form{display:flex;flex-wrap:wrap;gap:1rem;align-items:end}form[hidden]{display:none}label{display:grid;gap:.35rem}input,select,button,textarea{font:inherit;padding:.55rem .7rem}button{cursor:pointer}li{padding:.45rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}#download{display:inline-block;margin:1rem 0}#download[hidden]{display:none}`;
 
 const MAX_JSON_BYTES = 1_000_000;
@@ -153,6 +157,9 @@ const error = (response: ServerResponse, failure: unknown): void => {
   else if (code === "EXAMPLE_STALE_CONTEXT") json(response, 409, { error: "STALE_SELECTION" });
   else if (code === "EXAMPLE_INVALID_REQUEST") json(response, 400, { error: "INVALID_REQUEST" });
   else if (code === "EXAMPLE_STORAGE_ERROR") json(response, 503, { error: "EXAMPLE_UNAVAILABLE" });
+  else if (code === "FIELD_PRESENCE_QUERY_UNAUTHORIZED") json(response, 404, {error:"NOT_FOUND"});
+  else if (code === "FIELD_PRESENCE_QUERY_STALE") json(response, 409, {error:"STALE_SELECTION"});
+  else if (code === "FIELD_PRESENCE_QUERY_INVALID_REQUEST") json(response, 400, {error:"INVALID_REQUEST"});
   else if (code === "INVALID_QUERY_SELECTION" || code === "INVALID_QUERY_CONTEXT"
     || code === "INVALID_QUERY_DETAIL" || code === "INVALID_QUERY_SEARCH")
     json(response, 400, { error: "INVALID_REQUEST" });
@@ -358,6 +365,8 @@ export const createPortalServer = (options: PortalOptions): Server => {
     ? options.semantic.discover.bind(options.semantic) : undefined;
   const generateExample=typeof options.examples?.generate==="function"
     ? options.examples.generate.bind(options.examples):undefined;
+  const readPresence=typeof options.presence?.readForPrincipal==="function"
+    ? options.presence.readForPrincipal.bind(options.presence):undefined;
   return createServer(async (request, response) => {
     let principal: PortalPrincipal | undefined;
     try { principal = await options.authenticate(request); } catch { /* Fail closed. */ }
@@ -379,7 +388,8 @@ export const createPortalServer = (options: PortalOptions): Server => {
         .replace("__SEMANTIC_ENABLED__", String(semanticDiscover !== undefined))
         .replace("__CANDIDATE_ENABLED__", String(typeof options.query.readOperationCandidates === "function"))
         .replace("__CORPUS_ENABLED__", String(typeof options.query.searchOperationCandidatesAcrossServices === "function"))
-        .replace("__EXAMPLES_ENABLED__", String(generateExample !== undefined)),
+        .replace("__EXAMPLES_ENABLED__", String(generateExample !== undefined))
+        .replace("__PRESENCE_ENABLED__", String(readPresence !== undefined)),
       "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {
@@ -459,6 +469,21 @@ export const createPortalServer = (options: PortalOptions): Server => {
         json(response, 200, discovered); return;
       }
       if (request.method !== "GET") { (request.method === "POST" ? jsonClose : json)(response, 400, {error: "INVALID_REQUEST"}); return; }
+      if(url.pathname==="/api/field-presence"&&readPresence){
+        const values=params(url,["repositoryId","serviceId","environment","snapshotId","revision",
+          "configFingerprint","checkpointVersion","policyId","ownerPolicyRevision","limit"]);
+        const id=(value:unknown)=>typeof value==="string"&&value.length<=128&&/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
+        if(!values||!["repositoryId","serviceId","environment","snapshotId","revision","policyId"].every(key=>id(values[key]))
+          ||!/^sha256:[0-9a-f]{64}$/.test(values.configFingerprint!)||!decimalVersion(values.checkpointVersion!)
+          ||!decimalVersion(values.ownerPolicyRevision!)||!/^(?:[1-9]|[1-9][0-9]|100)$/.test(values.limit!)){
+          json(response,400,{error:"INVALID_REQUEST"});return;
+        }
+        json(response,200,await readPresence(request,principal,{policyId:values.policyId,
+          ownerPolicyRevision:values.ownerPolicyRevision,limit:Number(values.limit),expectedPin:{tenantId:principal.tenantId,
+            repositoryId:values.repositoryId,serviceId:values.serviceId,environment:values.environment,
+            snapshotId:values.snapshotId,revision:values.revision,configFingerprint:values.configFingerprint,
+            checkpointVersion:values.checkpointVersion}}));return;
+      }
       if (url.pathname === "/api/observations" && typeof options.query.readMetadataObservations === "function") {
         const values = params(url, ["repositoryId", "serviceId", "environment"],
           ["expectedCheckpointVersion", "limit", "endpointId"]);
