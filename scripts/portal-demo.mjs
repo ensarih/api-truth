@@ -1,0 +1,10 @@
+import {register} from 'node:module';
+import {readFile} from 'node:fs/promises';
+register('./portal-demo-loader.mjs',import.meta.url);
+const {createPortalServer}=await import('../apps/portal/src/server.ts');
+const {createPortalDemoQuery}=await import('../apps/portal/src/demo-query.ts');
+const snapshot=JSON.parse(await readFile(new URL('../tests/fixtures/ir/express-snapshot.json',import.meta.url),'utf8'));
+const principal=Object.freeze({tenantId:'local-demo',principalId:'local-viewer'});
+const server=createPortalServer({authenticate:async()=>principal,environments:async()=>['uat','staging'],query:createPortalDemoQuery(snapshot,principal)});
+server.listen(4317,'127.0.0.1',()=>process.stdout.write('Synthetic portal demo: http://127.0.0.1:4317/ (orders in UAT; staging empty)\n'));
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(()=>process.exit(0)));

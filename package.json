@@ -46,7 +46,8 @@
     "extract:java": "node scripts/extract-java.mjs",
     "extract:openapi31": "node scripts/extract-openapi31.mjs",
     "dependencies:inventory": "node scripts/dependency-inventory.mjs",
-    "test:presence": "node scripts/test-environment.ts ready && vitest run --config vitest.integration.config.ts tests/integration/observation-field-presence-owner-store.test.ts tests/integration/observation-field-presence-import-store.test.ts tests/integration/observation-field-presence-query-store.test.ts tests/integration/observation-field-presence-maintenance-store.test.ts tests/integration/observation-field-presence-lifecycle.test.ts --maxWorkers=2"
+    "test:presence": "node scripts/test-environment.ts ready && vitest run --config vitest.integration.config.ts tests/integration/observation-field-presence-owner-store.test.ts tests/integration/observation-field-presence-import-store.test.ts tests/integration/observation-field-presence-query-store.test.ts tests/integration/observation-field-presence-maintenance-store.test.ts tests/integration/observation-field-presence-lifecycle.test.ts --maxWorkers=2",
+    "portal:demo": "node --experimental-transform-types scripts/portal-demo.mjs"
   },
   "engines": {
     "node": "24.6.0",

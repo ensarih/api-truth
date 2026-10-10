@@ -115,3 +115,9 @@ non-normative and do not establish deployment or request-handler behavior.
 The search and cross-service task forms use environment dropdowns. The host supplies `environments(principal)`, returning only configured names visible to that authenticated tenant and principal. `GET /api/environments` accepts no query parameters, returns at most 128 names, removes duplicates, and sorts them. Choices do not grant access: each subsequent query still authorizes its requested scope. With no provider or a failed list, service search can use All environments; forms requiring an environment remain disabled.
 
 Find a service matches a case-insensitive substring in repository and service IDs. It is not full-text API search. Optional operation candidate search checks evidence-backed paths, summaries, descriptions and source identifiers by keyword. Semantic inference remains a separate explicit action.
+
+## Local design demo
+
+Run `npm run portal:demo` and open http://127.0.0.1:4317/. This loopback-only demo uses synthetic fixture data and requires no database or provider keys. `orders` is available in `uat`; `staging` has no matching sample service. Text and environment filters are applied by the demo query adapter. Never use this demo authentication or query adapter as a production host.
+
+The portal presents service cards, operations, parameter/request/response tables, and expandable source JSON. Environment changes automatically refresh service search, clear the previous contract, and discard late search/detail replies. The layout supports desktop and mobile widths.
