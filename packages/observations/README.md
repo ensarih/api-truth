@@ -187,3 +187,38 @@ recheck current configuration/serving pins and grants atomically, bound source
 reads, and authorize retention maintenance independently. Expiry hides rows;
 physical cleanup requires the separate maintenance runner, which is not implemented
 here. Tombstones are not pruned; any future pruning needs a proven replay horizon.
+
+## Host-authenticated owner-policy approval
+
+`createFieldPresenceOwnerPolicyStore(pool, {schema, bindings, authorizeManager})`
+provides `approve(credential, {policy, expectedOwnerRevision, expectedPin})` and
+`disable(credential, {tenantId, repositoryId, serviceId, environment, policyId,
+expectedOwnerRevision})`. The host configures at most 128 immutable bindings from
+exact scope/policy ID to an independent owner access scope. Callers cannot choose
+that owner access scope. The trusted `authorizeManager` port must authenticate the
+credential and return the matching tenant/principal and
+`observations.policy.manage` capability; a caller-supplied identity is insufficient.
+Its ten-second deadline aborts and suppresses late results with a fixed denial.
+
+Approval requires a complete compiled opt-in policy and an exact snapshot,
+revision and serving checkpoint. In one transaction it locks the current
+configuration activation epoch, serving checkpoint, catalog/source grants and
+independent owner grant, then the policy head. The supported schema paths are
+preflighted without reading traffic. An initial approval expects revision `0` and
+creates `1`; later changes require the expected current revision and the next
+owner revision. Concurrent conflicting approvals have one winner. Exact enabled
+retries are idempotent, while disabled generations cannot be replayed to re-enable.
+Owner access scope transfers are deliberately unsupported.
+
+Disabling requires the independently authenticated capability and current owner
+scope grant, with an exact expected owner revision. It remains available after
+catalog/source reader grants are withdrawn because it does not require those
+reads or current log opt-in. It uses the same environment/head lock order, bounded
+database lock/statement deadlines, and leaves static revision history intact.
+Disabling hides derived rows through the live view; it does not physically delete
+them. Errors contain fixed codes and no callback, credential or SQL parameter data.
+
+This service approves static storage policy only. It does not read bodies,
+establish transport provenance, persist observed presence, authorize public SQL
+reads or run retention cleanup. Those require the separate import, query and
+maintenance services. No owner write API is exposed through portal/MCP here.

@@ -1210,3 +1210,19 @@ now require an existing result at tombstone insertion and completed deletion at
 transaction commit. Public persistence
 and authorized query/maintenance services are still required; a SQL view or delete
 primitive does not grant authority. Physical cleanup scheduling remains open.
+
+### Host-authenticated owner-policy approval — P3 authority (2026-10-10)
+
+Observations 0.10.0 adds an owner-policy store with immutable host scope bindings,
+independent manager authentication/capability and owner grants. Approval locks
+exact configuration epoch, current serving pin and catalog/source/owner authority
+before schema preflight and policy-head CAS. Exact live retries are idempotent;
+a disabled generation requires a new revision. Disable uses independent owner
+authority even when source/catalog read grants are withdrawn.
+
+Nine focused PostgreSQL tests cover denial before connection, callback failures,
+late-result suppression, inert identities, detached policies/bindings, stale pins,
+valid concurrent CAS contenders, replay and revocation. Root review corrected a
+race test whose second contender originally failed schema preflight rather than
+CAS. Body provenance, authenticated derived imports/queries, retention maintenance
+and public owner-management surfaces remain separate gates.

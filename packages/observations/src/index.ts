@@ -18,3 +18,6 @@ export {compileFieldPresenceStoragePolicy, buildFieldPresenceStorageProposal,
 export type {FieldPresenceStoragePolicy, CompiledFieldPresenceStoragePolicy,
   FieldPresenceStorageHostContext, FieldPresenceStorageProposal,
   FieldPresenceStorageEligibility} from "./field-presence-storage-policy.js";
+export {createFieldPresenceOwnerPolicyStore, FieldPresenceOwnerStoreError} from "./field-presence-owner-store.js";
+export type {FieldPresenceOwnerBinding, FieldPresenceOwnerManager, FieldPresenceOwnerStoreOptions,
+  FieldPresenceOwnerStoreErrorCode} from "./field-presence-owner-store.js";
