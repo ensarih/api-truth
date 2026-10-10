@@ -876,3 +876,8 @@ execution or job management. It returns safe digests/counts and fixed limitation
 with no protected references, document body, route or handler content. Logs need
 not be enabled. This metadata does not promote normative API or deployment claims.
 Portal/MCP presentation and safe incremental multi-input reuse remain open.
+
+
+### Multi-input reuse eligibility (2026-10-10)
+
+The pinned routing-controllers 0.9.0 source profile remains partial without authoritative production startup/deployment evidence. It cannot supply a complete successful base for incremental multi-input reuse. `query-multi-input-reuse-gate.test.ts` verifies that unchanged analysis inputs and complete empty deltas still produce fresh, current-revision snapshots, and that a changed route-prefix manifest refreshes the output. The safe reuse optimization remains open; startup and completeness gates are not relaxed.

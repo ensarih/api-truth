@@ -364,3 +364,8 @@ output limits and hostile error objects. The PostgreSQL reader test also opens
 an actual portal HTTP server and linked MCP transport to verify same-record
 agreement, independently revoked artifact read policy and a moved configuration
 activation epoch. No model calls or actual deployment are involved.
+
+
+### Multi-input reuse rejection gate
+
+`tests/integration/query-multi-input-reuse-gate.test.ts` uses actual Git commits, the routing-controllers 0.9.0 analyzer and disposable PostgreSQL schemas. It proves that a genuinely incomplete base is not reused despite identical source/manifest inputs and an explicitly trusted empty delta, checks fresh evidence revisions across chained updates, and changes the manifest to verify `/v2/orders`. Run together with `tests/integration/query-reused-revision.test.ts` to retain the separate complete source-only reuse gate. No model or live framework is involved.
