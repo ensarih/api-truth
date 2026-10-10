@@ -172,6 +172,19 @@ test("batch output is count-only and switchback never revives canceled old jobs"
   } finally { await db.cleanup(); }
 });
 
+test("a denied first candidate consumes only one slot in the declared callback window", async () => {
+  const {db, orchestration} = await setup();
+  try {
+    await admit(db, "window-one", 2);
+    await admit(db, "window-two", 2);
+    await activate(db, orchestration, "config-window");
+    const denied = vi.fn(async () => false);
+    const result = await maintenance(db, denied, 1).cancelSuperseded();
+    expect(result).toEqual({cancelledCount: 0, coverage: "partial", batchLimited: true});
+    expect(denied).toHaveBeenCalledTimes(1);
+  } finally { await db.cleanup(); }
+});
+
 test("preflight denial and hostile configuration cause no database or manager callback work", async () => {
   const {db, authorizeCancel} = await setup();
   try {

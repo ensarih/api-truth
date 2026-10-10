@@ -168,7 +168,7 @@ export function createCaptureVerificationMaintenance(pool: Pool, options: Captur
       [tenantId, repositories, services, active.fingerprint, active.documentSha256,
         active.checkpointVersion, (batchSize as number) + 1]);
       let cancelledCount = 0;
-      for (const job of candidates.rows) {
+      for (const job of candidates.rows.slice(0, batchSize as number)) {
         if (cancelledCount >= (batchSize as number)) break;
         if (!oldJob(job, active, tenantId))
           throw new CaptureVerificationMaintenanceError("CAPTURE_MAINTENANCE_STORAGE_ERROR");

@@ -1687,3 +1687,16 @@ all 488 PostgreSQL tests passed from the staged archive. Seven focused cases
 cover live lease cancellation/quota release, removed-service manager permission,
 checkpoint switchback, late worker rejection, strict denied-first scan bounds,
 unchanged completed proof/result history and pre-storage hostile-input denial.
+
+### Handler verification maintenance scan-window fix — NB1 (2026-10-10)
+
+Independent review of loaded-document maintenance exposed the same issue in the
+older capture-maintenance loop: a lookahead candidate could receive a manager
+callback when earlier candidates were denied. Iteration now stops at the declared
+scan window regardless of authorization outcome. Count-only partial coverage and
+lookahead reporting remain intact. A red regression demonstrated two callbacks
+with a batch of one; all seven focused PostgreSQL cases pass after the fix.
+
+The reviewed fix also passed a clean locked install/typecheck and all 1,765 offline
+tests. The focused seven PostgreSQL maintenance tests passed in that same staged
+checkout; the preceding migration slice passed the full 488-test PostgreSQL suite.
