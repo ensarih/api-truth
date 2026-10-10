@@ -38,7 +38,7 @@ for(const qualified of [false,true])test(`cross-service candidates require an ex
     searchOperationCandidatesAcrossServices:async()=>{searchCalls++;
       return delaySearch?new Promise<CorpusOperationSearchResult>(resolve=>{releaseSearch=resolve;}):candidate;},
   };
-  const server=createPortalServer({authenticate:async request=>
+  const server=createPortalServer({environments:async()=>["uat","staging"],authenticate:async request=>
     request.headers.authorization==="Bearer corpus-browser"?principal:undefined,
   query,semantic:{discover:async()=>{discoverCalls++;return {status:"no_match" as const,
     reason:"none",verification:"inferred" as const,review:"unreviewed" as const,
@@ -49,7 +49,7 @@ for(const qualified of [false,true])test(`cross-service candidates require an ex
   await page.setExtraHTTPHeaders({authorization:"Bearer corpus-browser"});
   try{
     await page.goto(`http://127.0.0.1:${address.port}/`);
-    await page.locator('#corpus input[name="environment"]').fill("uat");
+    await page.locator('#corpus select[name="environment"]').selectOption("uat");
     await page.locator('#corpus textarea[name="intentQuery"]').fill("read stored orders");
     await page.getByRole("button",{name:"Search across services"}).click();
     await expect(page.locator("#corpus-status")).toContainText("incomplete");

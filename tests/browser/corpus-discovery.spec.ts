@@ -30,13 +30,13 @@ test("cross-service inference is explicit, namespaced, pin checked and ignores l
     readContract:async(_context,selection)=>{selections.push(selection);const group=groups().groups[0]!;
       return {status:"resolved",selector:selection as typeof group.selector,pin:wrongPin?{...group.pin,revision:"changed"}:group.pin,snapshot,publication:{status:"absent"}};},
     compareContracts:async()=>({status:"unavailable",beforeStatus:"unknown",afterStatus:"unknown"}),readPublication:async()=>{throw Error("unused");}};
-  const server=createPortalServer({query,authenticate:async()=>context,corpusSemantic:{discoverAcrossServices:async(principal,request)=>{
+  const server=createPortalServer({environments:async()=>["uat","staging"],query,authenticate:async()=>context,corpusSemantic:{discoverAcrossServices:async(principal,request)=>{
     expect(principal).toEqual(context);calls.push(request);return delayed?new Promise(resolve=>{release=resolve;}):result;}}});
   server.listen(0,"127.0.0.1");await once(server,"listening");const address=server.address();if(!address||typeof address==="string")throw Error();
   try{
     await page.goto(`http://127.0.0.1:${address.port}/`);const form=page.locator('#corpus-discovery');
     await expect(form).toBeVisible();expect(calls).toHaveLength(0);
-    await form.locator('[name="environment"]').fill("uat");await form.locator('[name="intentQuery"]').fill("read records");
+    await form.locator('[name="environment"]').selectOption("uat");await form.locator('[name="intentQuery"]').fill("read records");
     await page.getByRole('button',{name:'Compare candidates with inference'}).click();
     await expect(page.locator('#corpus-discovery-status')).toContainText('inferred, unreviewed and non-normative');
     await expect(page.locator('#corpus-discovery-status')).toContainText('incomplete');
@@ -52,10 +52,10 @@ test("cross-service inference is explicit, namespaced, pin checked and ignores l
     await expect(page.locator('#contract-status')).toContainText('stale');
     delayed=true;await page.getByRole('button',{name:'Compare candidates with inference'}).click();
     await expect(page.locator('#corpus-discovery-status')).toContainText('Comparing');
-    await form.locator('[name="environment"]').fill('staging');release?.(groups());
+    await form.locator('[name="environment"]').selectOption('staging');release?.(groups());
     await expect(page.locator('#corpus-discovery-results')).toBeEmpty();await expect(page.locator('#corpus-discovery-status')).toContainText('Inputs changed');
     delayed=false;result={status:"shortlist_no_match",environment:"uat",scope:"keyword_candidates",matchMode:"keyword",complete:true,verification:"inferred",review:"unreviewed",normative:false};
-    await form.locator('[name="environment"]').fill('uat');await page.getByRole('button',{name:'Compare candidates with inference'}).click();
+    await form.locator('[name="environment"]').selectOption('uat');await page.getByRole('button',{name:'Compare candidates with inference'}).click();
     await expect(page.locator('#corpus-discovery-status')).toContainText('may still exist outside this shortlist');
     const wrong=groups();result={...wrong,groups:wrong.groups.map((group,index)=>index?group:{...group,selector:{...group.selector,selector:{kind:"environment",environment:"staging",expectedCheckpointVersion:"7"}}})};
     await page.getByRole('button',{name:'Compare candidates with inference'}).click();

@@ -57,7 +57,7 @@ test("search, service selection, UAT details, export, and unknown state work in 
       return {status: "resolved", selector: rawSelection as QuerySelection, pin, records: [], truncated: false};
     },
   };
-  const server = createPortalServer({
+  const server = createPortalServer({environments:async()=>["uat","staging"],
     authenticate: async (request) => {
       if (request.headers.authorization !== "Bearer browser-fixture") return undefined;
       authenticatedPaths.push(request.url ?? "");
@@ -73,7 +73,7 @@ test("search, service selection, UAT details, export, and unknown state work in 
   try {
     await page.goto(`http://127.0.0.1:${address.port}/`);
     await page.locator("#search input[name=query]").fill("orders");
-    await page.locator("#search input[name=environment]").fill("uat");
+    await page.locator("#search select[name=environment]").selectOption("uat");
     await page.getByRole("button", { name: "Search", exact: true }).click();
     await expect(page.locator("#search-status")).toHaveText("Results");
 

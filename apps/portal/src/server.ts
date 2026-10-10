@@ -17,6 +17,8 @@ export type PortalOptions = Readonly<{
   authenticate(request: IncomingMessage): Promise<PortalPrincipal | undefined>;
   query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">
     & Partial<QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader>;
+  /** Return only configured environment names visible to the authenticated principal. */
+  environments?: (principal: PortalPrincipal) => Promise<readonly string[]>;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
   corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
@@ -29,9 +31,9 @@ const page = `<!doctype html>
 <title>API Truth</title><link rel="stylesheet" href="/style.css"></head>
 <body><main><h1>API Truth</h1><p>Browse the APIs available to you.</p>
 <section><h2>Find a service</h2><form id="search"><label>Service <input name="query" maxlength="128" autocomplete="off"></label>
-<label>Environment <input name="environment" maxlength="512" placeholder="e.g. uat"></label>
-<button type="submit">Search</button></form><p id="search-status" role="status"></p><ul id="results"></ul></section>
-${corpusDiscoveryMarkup}<section id="corpus-section" hidden><h2>Find API candidates across services</h2><p>Search existing authorized APIs by keyword in one current environment. Results are lexical candidates, not a guarantee that an API fulfills your task.</p><form id="corpus"><label>Environment <input name="environment" maxlength="512" required placeholder="e.g. uat"></label><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Search across services</button></form><p id="corpus-status" role="status"></p><ul id="corpus-results"></ul></section>
+<label>Environment <select name="environment" data-environment-select disabled><option value="">All environments</option></select></label>
+<button type="submit">Search</button></form><p id="environment-status" role="status"></p><p id="search-status" role="status"></p><ul id="results"></ul></section>
+${corpusDiscoveryMarkup}<section id="corpus-section" hidden><h2>Find API candidates across services</h2><p>Search existing authorized APIs by keyword in one current environment. Results are lexical candidates, not a guarantee that an API fulfills your task.</p><form id="corpus"><label>Environment <select name="environment" data-environment-select required disabled><option value="">Choose an environment</option></select></label><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Search across services</button></form><p id="corpus-status" role="status"></p><ul id="corpus-results"></ul></section>
 <section><h2>View a contract</h2><form id="contract"><label>Repository <input name="repositoryId" maxlength="512" required></label>
 <label>Service <input name="serviceId" maxlength="512" required></label><label>Selection
 <select name="kind"><option value="environment">Environment</option><option value="branch">Branch</option>
@@ -65,6 +67,7 @@ const download=document.getElementById('download'),compareStatus=document.getEle
 const selection=()=>{const data=new FormData(contract),params=new URLSearchParams({repositoryId:String(data.get('repositoryId')||''),
   serviceId:String(data.get('serviceId')||''),kind:String(data.get('kind')||''),value:String(data.get('value')||'')});if(contract.dataset.expectedVersion)params.set('expectedVersion',contract.dataset.expectedVersion);return params;};
 const fetchJson=async(path,init={})=>{const response=await fetch(path,{...init,credentials:'same-origin'});if(!response.ok)throw Error('unavailable');return response.json();};
+const loadEnvironments=async()=>{const controls=[...document.querySelectorAll('[data-environment-select]')],message=document.getElementById('environment-status');for(const control of controls)if(control.required)control.form.querySelector('button[type=submit]').disabled=true;try{const body=await fetchJson('/api/environments');if(!Array.isArray(body.environments)||body.environments.length>128||body.environments.some(name=>typeof name!=='string'||!name.length||name.length>512||/[\\u0000-\\u001f\\u007f]/.test(name)))throw Error('invalid');for(const control of controls){for(const name of body.environments){const option=document.createElement('option');option.value=name;option.textContent=name;control.append(option);}control.disabled=control.required&&!body.environments.length;if(control.required)control.form.querySelector('button[type=submit]').disabled=control.disabled;}message.textContent=body.environments.length?'':'No environment choices are configured for your access.';}catch{for(const control of controls){control.disabled=control.required;if(control.required)control.form.querySelector('button[type=submit]').disabled=true;}message.textContent='Environment choices are unavailable. Service search can still use all environments.';}};loadEnvironments();
 const showDetail=async(path)=>{detail.textContent='Loading…';try{const data=await fetchJson(path);detail.textContent=JSON.stringify(data,null,2);}
   catch{detail.textContent='Details are unavailable.';}};
 search.addEventListener('submit',async event=>{event.preventDefault();results.replaceChildren();status.textContent='Loading…';
@@ -423,6 +426,14 @@ export const createPortalServer = (options: PortalOptions): Server => {
       "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {
+      if (url.pathname === "/api/environments") {
+        if (url.search.length) { json(response, 400, {error: "INVALID_REQUEST"}); return; }
+        const names = options.environments ? await options.environments(Object.freeze({...principal})) : [];
+        if (!Array.isArray(names) || names.length > 128 || names.some(name => !safeId(name))) {
+          json(response, 503, {error: "QUERY_UNAVAILABLE"}); return;
+        }
+        json(response, 200, {environments: [...new Set(names)].sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b)))}); return;
+      }
       if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples"].includes(url.pathname)) {
         if (url.search.length > 0) { jsonClose(response, 400, {error: "INVALID_REQUEST"}); return; }
         const candidate = url.pathname === "/api/candidates";
