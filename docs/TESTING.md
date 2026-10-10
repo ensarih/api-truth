@@ -388,3 +388,14 @@ owner grants and revocation, concurrent replay and conflicting decisions,
 revocation serialization with a transaction-held grant lock, bounded newest-first
 reads, changed serving pins, immutable rows, owner foreign keys and digest-tamper
 rejection. Database tests use disposable schemas on the shared test instance.
+
+### Private semantic history transports
+
+`tests/unit/portal-semantic-history.test.ts` exercises HTTP identity injection,
+strict pinned inputs, body/output bounds, host opt-in, browser write origins and
+fixed conflict/denial/hostile-error handling. The linked-client MCP protocol suite
+is `tests/contract/mcp-semantic-history-tools.test.ts`; it also checks write
+annotations and canonical bigint/version inputs. The cross-surface case in
+`tests/integration/semantic-history.test.ts` uses the actual transactional service
+and PostgreSQL schema to prove shared receipts, exact replay, revocation and stale
+checkpoint withholding. No live provider or model-based test judge is used.

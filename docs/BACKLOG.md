@@ -45,7 +45,7 @@ provider or enterprise pilot claim.
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries, optional portal/MCP presentation and bounded retention maintenance are implemented; live adapters, durable distributed scheduling and reviewed samples remain separate gates. Bounded in-process cleanup scheduling is implemented. |
-| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, bounded per-service semantic shortlist comparison with optional portal/MCP access, provider binding, private history metadata and optional same-principal owner annotations are implemented; a semantic corpus index, full retained-prose review and live evaluation remain. |
+| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, bounded per-service semantic shortlist comparison with optional portal/MCP access, provider binding, private history metadata and optional same-principal owner annotations with HTTP/MCP ports are implemented; a semantic corpus index, full retained-prose review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
@@ -1794,3 +1794,26 @@ transaction, rather than treating ordinary source-read permission as ownership.
 Validation: independent review approved; typecheck, all 1,838 offline tests and
 56 focused PostgreSQL semantic service/history/corpus tests pass. Provider ports
 are synthetic; no live-model quality or full prose approval is claimed.
+
+### Private semantic history HTTP/MCP ports — P4 (2026-10-10)
+
+Added explicit optional host ports for bounded private history reads, owner
+annotation reads and versioned metadata decisions. MCP advertises the record tool
+as a metadata write; portal JSON writes add origin/fetch-metadata checks and an
+explicit trusted HTTPS-proxy origin option. Both derive identity from host
+authentication, require pinned branch/environment selectors and delegate current
+source/owner authorization to the same transactional semantic service. Conflicts
+have a distinct fixed error; exact retries recover a receipt without another row.
+
+The real PostgreSQL cross-surface test reads the same private history and decisions
+through HTTP and MCP, replays an HTTP-created decision through MCP, denies both
+after owner revocation, and rejects the old serving checkpoint. These are transport
+ports, not a browser review panel or production host integration. Full retained
+prose approval, shared owner workflows, semantic indexing and live quality gates
+remain open. The running synthetic demo stays available without this optional
+service.
+
+Validation: TDD regressions and independent review approved; typecheck, all
+1,883 offline tests, 17 PostgreSQL history/transport tests and 15 existing browser
+regressions pass. The 45 focused transport tests include host opt-in, strict
+identity/pin/version inputs, origin gating, fixed errors and response bounds.

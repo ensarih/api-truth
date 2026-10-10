@@ -121,3 +121,44 @@ Find a service matches a case-insensitive substring in repository and service ID
 Run `npm run portal:demo` and open http://127.0.0.1:4317/. This loopback-only demo uses synthetic fixture data and requires no database or provider keys. `orders` is available in `uat`; `staging` has no matching sample service. Text and environment filters are applied by the demo query adapter. Never use this demo authentication or query adapter as a production host.
 
 The portal presents service cards, operations, parameter/request/response tables, and expandable source JSON. Environment changes automatically refresh service search, clear the previous contract, and discard late search/detail replies. The layout supports desktop and mobile widths.
+
+## Private semantic history HTTP ports
+
+Portal 0.4.1 accepts an explicit `semanticHistory` service separately from
+inference discovery. The following JSON-only POST routes share the semantic
+service's current authorization and private history checks:
+
+| Route | Additional fields |
+| --- | --- |
+| `/api/semantic-history` | `limit` (1–20) |
+| `/api/semantic-history/reviews` | `historyId`, `limit` (1–20) |
+| `/api/semantic-history/review` | `historyId`, `decision`, `expectedVersion` |
+
+All bodies require `repositoryId`, `serviceId`, `view`, and 1–16 unique
+`endpointIds`. Branch/environment views must carry the displayed expected
+pointer/checkpoint version. IDs and versions use canonical decimal strings;
+decisions are `acknowledged`, `follow_up`, or `dismissed`. Extra identity fields,
+query parameters, duplicate JSON keys and bodies over 8 KiB are rejected. Reads
+and writes derive the principal from host authentication and never call a model.
+The semantic service requires an independent, transaction-held owner policy for
+annotation reads/writes; private inference history reads retain their existing
+source-read authority. A version conflict returns HTTP 409 `REVIEW_CONFLICT`.
+
+Metadata writes reject cross-origin/same-site browser requests. Direct HTTP hosts
+compare `Origin` to their HTTP request origin. A host behind an HTTPS proxy must
+set the trusted, canonical `semanticHistoryWriteOrigin`, for example
+`https://portal.example`; it is not a request field. Browser fetch metadata must
+be same-origin or none. Authenticated non-browser requests may omit Origin; host
+login/session integration remains required. Responses are bounded and no-store.
+An uncertain write response does not prove rollback; retry the exact decision
+and expected version to retrieve an idempotent receipt.
+
+This slice adds HTTP ports; the browser review panel and production host wiring
+remain separate. Decisions are metadata-only, inferred and non-normative. They
+cannot approve provider prose absent from the archive, edit API contracts, or
+expose another principal's private history. The loopback synthetic demo does not
+enable this optional capability.
+
+Hosts may supply only the history methods they intend to expose; omitted methods
+have no registered tool/HTTP route. A read-only host need not expose annotation
+writes. Supplying a method does not replace the service's independent owner policy.

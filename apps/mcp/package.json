@@ -1,13 +1,13 @@
 {
   "name": "@api-truth/mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "dependencies": {
     "@api-truth/query": "0.1.0",
     "@modelcontextprotocol/server": "2.2.0",
     "zod": "4.2.0",
-    "@api-truth/semantics": "0.7.2",
+    "@api-truth/semantics": "0.7.4",
     "@api-truth/observations": "0.14.0"
   },
   "devDependencies": {

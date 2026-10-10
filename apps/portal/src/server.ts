@@ -8,6 +8,7 @@ import {validateOperationSearchOptions, type QueryReader, type QueryObservationR
   type QueryContractResult, type createLoadedDocumentVerificationReadStore} from "@api-truth/query";
 import { parseStrictJson } from "../../../packages/ir/src/strict-json.js";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
+import {parseSemanticHistoryReview,type SemanticHistoryReviewRequest} from "../../../packages/semantics/src/reviews.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
 import type { createSemanticCorpusService } from "../../../packages/semantics/src/corpus-service.js";
 import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
@@ -23,6 +24,9 @@ export type PortalOptions = Readonly<{
   /** Return only configured environment names visible to the authenticated principal. */
   environments?: (principal: PortalPrincipal) => Promise<readonly string[]>;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
+  /** Trusted public origin when serving history writes behind an HTTPS proxy. */
+  semanticHistoryWriteOrigin?: string;
+  semanticHistory?: Partial<Pick<ReturnType<typeof createSemanticService>, "readHistory" | "readHistoryReviews" | "recordHistoryReview">>;
   corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
@@ -143,6 +147,7 @@ const error = (response: ServerResponse, failure: unknown): void => {
   else if (code === "QUERY_RESULT_LIMIT_EXCEEDED") json(response, 422, { error: "RESULT_LIMIT_EXCEEDED" });
   else if (code === "SEMANTIC_NOT_FOUND_OR_DENIED") json(response, 404, { error: "NOT_FOUND" });
   else if (code === "SEMANTIC_INVALID_REQUEST") json(response, 400, { error: "INVALID_REQUEST" });
+  else if (code === "SEMANTIC_REVIEW_CONFLICT") json(response, 409, {error: "REVIEW_CONFLICT"});
   else if (code === "SEMANTIC_STORAGE_ERROR") json(response, 503, { error: "SEMANTIC_UNAVAILABLE" });
   else if (code === "SEMANTIC_CORPUS_INVALID_REQUEST") json(response, 400, {error:"INVALID_REQUEST"});
   else if (code === "SEMANTIC_CORPUS_STALE_CONTEXT") json(response, 409, {error:"STALE_SELECTION"});
@@ -360,14 +365,58 @@ const parseExampleBody=(input:unknown,principal:PortalPrincipal):
   return selected?{selection:selected,policyId:body.policyId}:undefined;
 };
 
+const historyRoutes=["/api/semantic-history","/api/semantic-history/reviews","/api/semantic-history/review"] as const;
+const parseHistoryBody=(input:unknown,principal:PortalPrincipal,mode:"history"|"reviews"|"write"):
+ {selected:QuerySelection;endpointIds:string[];limit?:number;historyId?:string;request?:SemanticHistoryReviewRequest}|undefined=>{
+  try{
+    if(!input||typeof input!=="object"||Array.isArray(input)||Object.getPrototypeOf(input)!==Object.prototype)return undefined;
+    const body=input as Record<string,unknown>;
+    const keys=["repositoryId","serviceId","view","endpointIds",...(mode==="write"?["historyId","decision","expectedVersion"]
+      :mode==="reviews"?["historyId","limit"]:["limit"])];
+    if(Object.keys(body).sort().join(",")!==keys.sort().join(","))return undefined;
+    const parsed=parseDiscoveryBody({repositoryId:body.repositoryId,serviceId:body.serviceId,view:body.view,
+      endpointIds:body.endpointIds,intentQuery:"Read private semantic history"},principal);
+    if(!parsed)return undefined;
+    if(mode==="write")return {...parsed,request:parseSemanticHistoryReview({historyId:body.historyId,
+      decision:body.decision,expectedVersion:body.expectedVersion})};
+    if(typeof body.limit!=="number"||!Number.isInteger(body.limit)||body.limit<1||body.limit>20)return undefined;
+    const historyId=mode==="reviews"?parseSemanticHistoryReview({historyId:body.historyId,decision:"acknowledged",expectedVersion:"0"}).historyId:undefined;
+    return {...parsed,limit:body.limit,...(historyId===undefined?{}:{historyId})};
+  }catch{return undefined;}
+};
+/** JSON-only write requests additionally reject browser cross-origin and same-site requests. */
+const sameOriginWrite=(request:IncomingMessage,configuredOrigin?:string):boolean=>{
+  const site=request.headers["sec-fetch-site"],origin=request.headers.origin;
+  if(site!==undefined&&site!=="same-origin"&&site!=="none")return false;
+  if(origin===undefined)return true; // Authenticated non-browser clients need not send Origin.
+  try{
+    const parsed=new URL(origin);
+    return (parsed.protocol==="http:"||parsed.protocol==="https:")&&parsed.origin===origin
+      &&parsed.origin===(configuredOrigin??`http://${request.headers.host}`);
+  }catch{return false;}
+};
+
 /** The host supplies authentication. No request header becomes a principal by itself. */
 export const createPortalServer = (options: PortalOptions): Server => {
   if (!options || typeof options.authenticate !== "function" || !options.query
     || ["searchServices", "readContract", "compareContracts", "readPublication"].some((name) =>
       typeof options.query[name as keyof PortalOptions["query"]] !== "function"))
     throw new Error("PORTAL_HOST_REQUIRED");
+  if(options.semanticHistoryWriteOrigin!==undefined){
+    try{
+      const origin=new URL(options.semanticHistoryWriteOrigin);
+      if(options.semanticHistoryWriteOrigin.length>2048||!["http:","https:"].includes(origin.protocol)
+        ||origin.origin!==options.semanticHistoryWriteOrigin)throw new Error();
+    }catch{throw new Error("PORTAL_HOST_REQUIRED");}
+  }
   const semanticDiscover = typeof options.semantic?.discover === "function"
     ? options.semantic.discover.bind(options.semantic) : undefined;
+  const readHistory=typeof options.semanticHistory?.readHistory==="function"
+    ?options.semanticHistory.readHistory.bind(options.semanticHistory):undefined;
+  const readHistoryReviews=typeof options.semanticHistory?.readHistoryReviews==="function"
+    ?options.semanticHistory.readHistoryReviews.bind(options.semanticHistory):undefined;
+  const recordHistoryReview=typeof options.semanticHistory?.recordHistoryReview==="function"
+    ?options.semanticHistory.recordHistoryReview.bind(options.semanticHistory):undefined;
   const generateExample=typeof options.examples?.generate==="function"
     ? options.examples.generate.bind(options.examples):undefined;
   const readPresence=typeof options.presence?.readForPrincipal==="function"
@@ -383,7 +432,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
       (request.method === "POST" ? jsonClose : json)(response, 401, { error: "NOT_AUTHORIZED" }); return;
     }
     if (!request.url || request.url.length > 2048 || (request.method !== "GET"
-      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples"]
+      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples", ...historyRoutes]
         .includes(request.url.split("?", 1)[0]!)))) {
       (request.method === "POST" ? jsonClose : json)(response, 400, { error: "INVALID_REQUEST" }); return;
     }
@@ -411,17 +460,22 @@ export const createPortalServer = (options: PortalOptions): Server => {
         }
         json(response, 200, {environments: [...new Set(names)].sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b)))}); return;
       }
-      if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples"].includes(url.pathname)) {
+      if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples", ...historyRoutes].includes(url.pathname)) {
         if (url.search.length > 0) { jsonClose(response, 400, {error: "INVALID_REQUEST"}); return; }
+        const historyMode=url.pathname===historyRoutes[0]?"history":url.pathname===historyRoutes[1]?"reviews":url.pathname===historyRoutes[2]?"write":undefined;
+        const historyPort=historyMode==="history"?readHistory:historyMode==="reviews"?readHistoryReviews:recordHistoryReview;
         const candidate = url.pathname === "/api/candidates";
         const corpus = url.pathname === "/api/corpus-candidates";
         const corpusDiscovery = url.pathname === "/api/corpus-discover";
         const example=url.pathname === "/api/examples";
-        if (request.method !== "POST" || (corpusDiscovery?discoverCorpus===undefined:example?generateExample===undefined:candidate
+        if (request.method !== "POST" || (historyMode?historyPort===undefined:corpusDiscovery?discoverCorpus===undefined:example?generateExample===undefined:candidate
           ? typeof options.query.readOperationCandidates !== "function"
           : corpus?typeof options.query.searchOperationCandidatesAcrossServices !== "function"
             : semanticDiscover === undefined)) {
           (request.method === "POST" ? jsonClose : json)(response, 404, {error: "NOT_FOUND"}); return;
+        }
+        if(historyMode==="write"&&!sameOriginWrite(request,options.semanticHistoryWriteOrigin)){
+          jsonClose(response,403,{error:"NOT_AUTHORIZED"});return;
         }
         const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
         const length = request.headers["content-length"];
@@ -438,6 +492,15 @@ export const createPortalServer = (options: PortalOptions): Server => {
         let body: unknown;
         try { body = parseStrictJson(new TextDecoder("utf-8", {fatal: true}).decode(raw), {maxDepth: 8, maxNodes: 128}); }
         catch { json(response, 400, {error: "INVALID_REQUEST"}); return; }
+        if(historyMode){
+          const requestData=parseHistoryBody(body,principal,historyMode);
+          if(!requestData){json(response,400,{error:"INVALID_REQUEST"});return;}
+          const {selected,endpointIds}=requestData;
+          const result=historyMode==="history"?await readHistory!(principal,selected,endpointIds,requestData.limit!)
+            :historyMode==="reviews"?await readHistoryReviews!(principal,selected,endpointIds,requestData.historyId!,requestData.limit!)
+              :await recordHistoryReview!(principal,selected,endpointIds,requestData.request!);
+          json(response,200,result);return;
+        }
         if(example){
           const requestData=parseExampleBody(body,principal);
           if(!requestData){json(response,400,{error:"INVALID_REQUEST"});return;}

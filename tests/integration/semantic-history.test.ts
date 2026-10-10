@@ -1,3 +1,7 @@
+import {once} from "node:events";
+import {Client,InMemoryTransport} from "@modelcontextprotocol/client";
+import {createApiTruthMcpServer} from "../../apps/mcp/src/server.js";
+import {createPortalServer} from "../../apps/portal/src/server.js";
 import {readFile} from "node:fs/promises";
 import {afterEach,beforeEach,expect,test,vi} from "vitest";
 import type {ContractSnapshot,InstallationConfig} from "../../packages/ir/src/index.js";
@@ -363,4 +367,50 @@ test('owner grant lock serializes a concurrent revocation with the review transa
   await revoke;expect(blocked).toBe(true);
   await expect(reviewService().readHistoryReviews(context(),selection(),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
  }finally{release();revoker.release();}
+});
+
+test('MCP and portal history ports share authorized private records and metadata decisions',async()=>{
+ const {semantic,history}=await archivedReview();
+ const unused=vi.fn(async()=>{throw Error('unused');});
+ const query={searchServices:vi.fn(async()=>({services:[],truncated:false as const})),readContract:unused,
+  readEndpoint:unused,readSchema:unused,compareContracts:unused,readPublication:unused};
+ const portal=createPortalServer({query,authenticate:async()=>context(),semanticHistory:semantic});
+ const mcp=createApiTruthMcpServer({query,authenticate:async()=>context(),semanticHistory:semantic});
+ const client=new Client({name:'semantic-review-cross-surface',version:'1'});
+ const [ct,st]=InMemoryTransport.createLinkedPair();
+ portal.listen(0,'127.0.0.1');await once(portal,'listening');
+ try{
+  await mcp.connect(st);await client.connect(ct);
+  const address=portal.address();if(!address||typeof address==='string')throw Error('no address');
+  const host=`http://127.0.0.1:${address.port}`;
+  const base={repositoryId,serviceId,view:selection().selector,endpointIds:['ep-get']};
+  const post=(path:string,body:unknown)=>fetch(host+path,{method:'POST',headers:{'content-type':'application/json',origin:host},body:JSON.stringify(body)});
+  const historyResponse=await post('/api/semantic-history',{...base,limit:20});
+  expect(historyResponse.status).toBe(200);const portalHistory=await historyResponse.json();
+  const mcpHistory=await client.callTool({name:'api_truth_get_semantic_history',arguments:{...base,limit:20}});
+  expect(mcpHistory.structuredContent).toEqual({ok:true,data:portalHistory});
+  expect(JSON.stringify(portalHistory)).not.toMatch(/CANARY_PROVIDER|CANARY_MODEL_KEY/);
+  const review={historyId:history.historyId,decision:'follow_up',expectedVersion:'1'};
+  const writeResponse=await post('/api/semantic-history/review',{...base,...review});
+  expect(writeResponse.status).toBe(200);const receipt=await writeResponse.json() as Record<string,unknown>;
+  const replay=await client.callTool({name:'api_truth_record_semantic_history_review',arguments:{...base,...review}});
+  expect(replay.structuredContent).toEqual({ok:true,data:{...receipt,replayed:true}});
+  const readArgs={...base,historyId:history.historyId,limit:20};
+  const portalReviews=await (await post('/api/semantic-history/reviews',readArgs)).json();
+  expect((await client.callTool({name:'api_truth_get_semantic_history_reviews',arguments:readArgs})).structuredContent).toEqual({ok:true,data:portalReviews});
+  expect(portalReviews).toMatchObject({metadataOnly:true,nonNormative:true,verification:'inferred',records:[{reviewVersion:'2',decision:'follow_up'},{reviewVersion:'1'}]});
+  const conflicting={...base,...review,decision:'dismissed'};
+  expect((await post('/api/semantic-history/review',conflicting)).status).toBe(409);
+  expect((await client.callTool({name:'api_truth_record_semantic_history_review',arguments:conflicting})).structuredContent).toEqual({ok:false,error:'REVIEW_CONFLICT'});
+  await database.pool.query(`UPDATE ${schema()}.principal_scope_grants SET active=false WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='owner-review'`,[tenantId,principalId]);
+  expect((await post('/api/semantic-history/reviews',readArgs)).status).toBe(404);
+  expect((await client.callTool({name:'api_truth_get_semantic_history_reviews',arguments:readArgs})).structuredContent).toEqual({ok:false,error:'NOT_FOUND_OR_DENIED'});
+  expect((await post('/api/semantic-history',{...base,limit:20})).status).toBe(200);
+  await database.pool.query(`UPDATE ${schema()}.environment_serving_checkpoints SET version=8 WHERE tenant_id=$1`,[tenantId]);
+  expect((await post('/api/semantic-history/review',{...base,...review})).status).toBe(409);
+  expect((await client.callTool({name:'api_truth_get_semantic_history_reviews',arguments:readArgs})).structuredContent).toEqual({ok:false,error:'STALE_SELECTION'});
+  expect(unused).not.toHaveBeenCalled();
+ }finally{
+  await Promise.allSettled([client.close(),mcp.close()]);portal.closeAllConnections();portal.close();await once(portal,'close');
+ }
 });

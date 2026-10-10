@@ -96,3 +96,37 @@ safe digests/counts and source context do not assert production deployment,
 registered request handling or normative API behavior. The tool is absent when
 the host has not configured this capability. No artifact-fetch or write tool is
 exposed.
+
+## Private semantic history and owner annotations
+
+MCP 0.3.1 accepts a separate explicit `semanticHistory` host service with
+`readHistory`, `readHistoryReviews`, and `recordHistoryReview`. It exposes:
+
+| Tool | Additional input | Effect |
+| --- | --- | --- |
+| `api_truth_get_semantic_history` | `limit` (1–20) | Read the caller's archived inference metadata. |
+| `api_truth_get_semantic_history_reviews` | `historyId`, `limit` (1–20) | Read owner annotations on one private history record. |
+| `api_truth_record_semantic_history_review` | `historyId`, `decision`, `expectedVersion` | Append a metadata decision with version conflict checking. |
+
+Every request requires repository/service, 1–16 unique endpoint IDs and an
+explicit view. Branch/environment views require the expected pointer/checkpoint
+version. History IDs are positive canonical PostgreSQL bigint strings; expected
+review versions are canonical nonnegative strings through 9223372036854775806.
+Decisions are `acknowledged`, `follow_up`, or `dismissed`. Identity comes only
+from host authentication. The configured semantic service rechecks source access,
+current configuration/pin, private ownership and an independent owner policy for
+annotation reads/writes. Ordinary source-read permission alone is insufficient.
+
+History and annotation reads are read-only. The record tool explicitly advertises
+`readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true` and
+`openWorldHint: false`: exact retries replay the receipt; a different decision at
+the same expected version returns `REVIEW_CONFLICT`. It mutates only private
+annotation metadata. None of these tools calls an inference provider, edits a
+contract, approves semantic prose, or promotes API claims. Outputs remain
+inferred and non-normative. The existing output bounds and fixed errors apply;
+a response limit/failure does not prove that a submitted write was rolled back.
+Retry the exact request to resolve an uncertain receipt safely.
+
+Hosts may supply only the history methods they intend to expose; omitted methods
+have no registered tool/HTTP route. A read-only host need not expose annotation
+writes. Supplying a method does not replace the service's independent owner policy.

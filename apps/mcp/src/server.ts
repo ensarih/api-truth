@@ -19,6 +19,7 @@ export type ApiTruthMcpOptions = Readonly<{
   authenticate(context: ServerContext): Promise<ApiTruthMcpPrincipal | undefined>;
   maxOutputBytes?: number;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
+  semanticHistory?: Partial<Pick<ReturnType<typeof createSemanticService>, "readHistory" | "readHistoryReviews" | "recordHistoryReview">>;
   corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
@@ -34,6 +35,7 @@ const publicErrors = [
   "NOT_AUTHORIZED",
   "NOT_FOUND_OR_DENIED",
   "STALE_SELECTION",
+  "REVIEW_CONFLICT",
   "RESULT_LIMIT_EXCEEDED",
   "RESULT_TOO_LARGE",
   "QUERY_UNAVAILABLE",
@@ -46,6 +48,8 @@ const boundedIdentifier = z.string().min(1).max(MAX_IDENTIFIER_LENGTH)
 const boundedSearch = z.string().max(128).regex(/^[^\u0000-\u001f\u007f]*$/);
 const databaseVersion = z.string().regex(/^[1-9][0-9]{0,18}$/)
   .refine((value) => BigInt(value) <= 9223372036854775807n);
+const reviewVersion = z.string().regex(/^(?:0|[1-9][0-9]{0,18})$/)
+  .refine((value) => BigInt(value) <= 9223372036854775806n);
 
 const revisionView = z.object({
   kind: z.literal("revision"),
@@ -88,6 +92,13 @@ const discoverySchema = z.object({repositoryId: boundedIdentifier, serviceId: bo
   view: discoveryViewSchema, endpointIds: z.array(boundedIdentifier).min(1).max(16)
     .refine((ids) => new Set(ids).size === ids.length), intentQuery: z.string().min(1).max(512)
       .regex(/^[^\u0000-\u001f\u007f]+$/).refine(isSemanticIntentQuerySafe)}).strict();
+const semanticHistorySelectionSchema = z.object({repositoryId: boundedIdentifier, serviceId: boundedIdentifier,
+  view: discoveryViewSchema, endpointIds: z.array(boundedIdentifier).min(1).max(16)
+    .refine((ids) => new Set(ids).size === ids.length)}).strict();
+const semanticHistorySchema = semanticHistorySelectionSchema.extend({limit: z.number().int().min(1).max(20)}).strict();
+const semanticHistoryReviewsSchema = semanticHistorySchema.extend({historyId: databaseVersion}).strict();
+const semanticHistoryReviewSchema = semanticHistorySelectionSchema.extend({historyId: databaseVersion,
+  decision: z.enum(["acknowledged", "follow_up", "dismissed"]), expectedVersion: reviewVersion}).strict();
 const observationSchema = z.object({repositoryId: boundedIdentifier, serviceId: boundedIdentifier,
   environment: boundedIdentifier, expectedCheckpointVersion: databaseVersion.optional(),
   endpointId: boundedIdentifier.optional(), maxResults: z.number().int().min(1).max(100).default(20)}).strict();
@@ -161,6 +172,7 @@ const mapQueryError = (error: unknown): PublicError => {
     case "INVALID_QUERY_SEARCH": return "INVALID_REQUEST";
     case "SEMANTIC_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
     case "SEMANTIC_STALE_CONTEXT": return "STALE_SELECTION";
+    case "SEMANTIC_REVIEW_CONFLICT": return "REVIEW_CONFLICT";
     case "SEMANTIC_INVALID_REQUEST": return "INVALID_REQUEST";
     case "SEMANTIC_CORPUS_INVALID_REQUEST": return "INVALID_REQUEST";
     case "SEMANTIC_CORPUS_STALE_CONTEXT": return "STALE_SELECTION";
@@ -241,7 +253,7 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
     || options.query === null || typeof options.query !== "object") throw new TypeError("INVALID_MCP_OPTIONS");
   const maxOutputBytes = parseOutputLimit(options.maxOutputBytes);
   const server = new McpServer({ name: "api-truth", version: "0.0.0" }, {
-    instructions: "Read-only API Truth catalog. Every contract read uses an explicit revision, branch, or environment view and returns immutable pins when resolved.",
+    instructions: "API Truth catalog. Every contract read uses an explicit revision, branch, or environment view and returns immutable pins when resolved. Hosts may enable private same-principal semantic review metadata annotations.",
   });
 
   server.registerTool("api_truth_search_services", {
@@ -309,6 +321,38 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
       discoverSemantic(principal,
         selection(principal, args.repositoryId, args.serviceId, args.view),
         args.endpointIds, args.intentQuery)));
+  }
+
+  if (typeof options.semanticHistory?.readHistory === "function") {
+    const readHistory = options.semanticHistory.readHistory.bind(options.semanticHistory);
+    server.registerTool("api_truth_get_semantic_history", {
+      title: "Get private semantic discovery history",
+      description: "Read bounded private same-principal discovery metadata for selected endpoints at an explicit authorized pin. Results remain inferred and non-normative; review decisions are metadata annotations only, with no prose approval or model call.",
+      inputSchema: semanticHistorySchema, outputSchema, annotations: readOnlyAnnotations,
+    }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
+      readHistory(principal, selection(principal, args.repositoryId, args.serviceId, args.view),
+        args.endpointIds, args.limit)));
+  }
+  if (typeof options.semanticHistory?.readHistoryReviews === "function") {
+    const readHistoryReviews = options.semanticHistory.readHistoryReviews.bind(options.semanticHistory);
+    server.registerTool("api_truth_get_semantic_history_reviews", {
+      title: "Get private semantic history review metadata",
+      description: "Read bounded private same-principal review metadata annotations for one history ID and selected endpoints at an explicit authorized pin. Discovery remains inferred and non-normative, with no prose approval or model call.",
+      inputSchema: semanticHistoryReviewsSchema, outputSchema, annotations: readOnlyAnnotations,
+    }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
+      readHistoryReviews(principal, selection(principal, args.repositoryId, args.serviceId, args.view),
+        args.endpointIds, args.historyId, args.limit)));
+  }
+  if (typeof options.semanticHistory?.recordHistoryReview === "function") {
+    const recordHistoryReview = options.semanticHistory.recordHistoryReview.bind(options.semanticHistory);
+    server.registerTool("api_truth_record_semantic_history_review", {
+      title: "Record private semantic history review metadata",
+      description: "Record a private same-principal acknowledged, follow_up, or dismissed metadata annotation for one history ID and expected review version at an explicit authorized pin. Discovery remains inferred and non-normative, with no prose approval or model call.",
+      inputSchema: semanticHistoryReviewSchema, outputSchema,
+      annotations: {...readOnlyAnnotations, readOnlyHint: false},
+    }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
+      recordHistoryReview(principal, selection(principal, args.repositoryId, args.serviceId, args.view),
+        args.endpointIds, {historyId: args.historyId, decision: args.decision, expectedVersion: args.expectedVersion})));
   }
 
   if (typeof options.query.readOperationCandidates === "function") {
