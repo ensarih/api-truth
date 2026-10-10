@@ -69,3 +69,30 @@ Candidates rank bounded declared document text or qualified source route/handler
 The optional `QueryCorpusOperationReader.searchOperationCandidatesAcrossServices(context, {tenantId, environment, intentQuery, limit?})` searches only services configured for that explicit environment in the active configuration. One repeatable-read transaction resolves each service's current serving checkpoint and authorized snapshot. Repository and deployment grants are filtered before reading service context; source, snapshot, and all evidence grants are checked before matching. Each candidate carries its repository, service, endpoint, own exact environment selector and checkpoint pin. Results are deterministically ordered by lexical score, then repository, service, and endpoint ID. This is a keyword candidate list over visible authorized current services, not a semantic enterprise index or a claim that the operation fulfills the user's task.
 
 The reader inspects at most 200 configured services, searches at most 20 authorized services and 5,000 total endpoints, bounds combined configuration/snapshot JSON to 4 MiB, and applies a 10-second cumulative database deadline. It reads and validates the active configuration once in the repeatable-read transaction, then reuses that validated copy for each service. Before each corpus query it resets PostgreSQL's statement timeout to the remaining deadline and races the query against that deadline; an expired or cancelled query returns a generic `unknown` with `scan_limit` and destroys the pending database connection. Configuration and snapshot queries check serialized size in PostgreSQL and withhold oversized documents before sending them to the reader. It returns at most 20 candidates. Limits and unresolved or partial contracts make `complete: false` or a generic `unknown` result; denied services contribute no identifiers or counts. `no_match` is returned only for a complete scan of at least one visible authorized service and means no lexical match in that scope. A result pin can become stale after the search; consumers must reauthorize and check that exact pin before a later operation. This capability performs no model calls and does not scan branches or unconfigured repositories.
+
+## Qualified loaded-document verification reads
+
+`createLoadedDocumentVerificationReadStore` combines a controlled verification
+record with an exact authorized environment selection. The host configures immutable source,
+capture and load identities. `readForPrincipal` requires a separate
+`swagger.document.verify.read` capability and anchors the authenticated identity
+to the expected caller before opening storage. The request supplies an exact
+unqualified snapshot/revision/serving checkpoint and configuration activation
+checkpoint; these are separate versions.
+
+One bounded transaction checks the active configuration, current environment
+selection, source digest, configured/snapshot/serving access scopes, independent
+source/environment/artifact read permission and completed verification parents.
+The host `authorizeRead` callback must read and lock its independent policy in
+that transaction; admission, execution and management permission do not grant
+read access. The callback must not write or fetch protected artifacts. Historical
+records from another configuration epoch or source cannot silently satisfy the
+current selection. Log collection need not be enabled. Multiple controlled load
+sessions for one source checkout are supported through distinct load identities.
+
+The result contains only allowlisted verification/document digests, counts,
+source context and fixed limitations. It is a controlled-load observation and
+remains non-normative. The environment selection supplies context; this record
+does not prove a production request used the captured handler. No protected
+artifact/key references, routes, handler content, request/response bodies or raw
+errors are returned. The reader performs no writes or contract promotion.

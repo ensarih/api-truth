@@ -865,3 +865,14 @@ all 472 PostgreSQL tests passed from the staged archive, including the final
 frozen full-binding return. Six focused cases cover upgrade/backfill, independent
 environments, concurrent tenant capacity, ownership/token expiry/reclaim, three
 attempts, current epoch/grant/artifact fences and immutable token-free history.
+
+
+### Qualified loaded-document metadata read boundary (2026-10-10)
+
+The separate query reader combines completed controlled-load proof with an exact
+current source/environment pin and configuration activation epoch. Read capability
+and independent source/environment/artifact read policy are separate from worker
+execution or job management. It returns safe digests/counts and fixed limitations,
+with no protected references, document body, route or handler content. Logs need
+not be enabled. This metadata does not promote normative API or deployment claims.
+Portal/MCP presentation and safe incremental multi-input reuse remain open.

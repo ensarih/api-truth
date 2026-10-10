@@ -337,3 +337,20 @@ release, token invalidation, switchback and late worker completion. Cleanup
 returns partial, count-only coverage and never reads protected artifact/key
 references. Migration `0017` keeps the fixed cancellation reason separate from
 verification failure and immutable historical results.
+
+
+### Qualified loaded-document metadata reads
+
+`tests/integration/loaded-document-verification-reader.test.ts` combines the
+signed synthetic capture/load fixture and actual temporary Git checkout with
+disposable PostgreSQL schemas. Its catalog and serving context are synthetic
+stand-ins, not extraction results from that checkout or a deployed service.
+The reader requires an exact current environment pin, source digest, separate
+configuration activation epoch, completed worker result and independent read
+permission in the same transaction. Log collection is disabled in this fixture.
+
+The offline reader tests reject hostile input without evaluating getters,
+opening storage or exposing protected metadata, and check multiple controlled
+sessions on one source scope. The package API test checks the reviewed public
+exports. Run the focused PostgreSQL reader test with the existing local test
+service; it creates and removes only its own disposable schemas.

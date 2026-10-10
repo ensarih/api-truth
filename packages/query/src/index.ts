@@ -10,3 +10,10 @@ export type { QueryOperationReader } from "./reader.js";
 export { searchOperationCandidates, validateOperationSearchOptions } from "./operation-search.js";
 export type { OperationCandidate, OperationSearchOptions, OperationSearchResult } from "./operation-search.js";
 export type { QueryCorpusOperationReader, CorpusOperationSearchResult, CorpusOperationCandidate } from "./reader.js";
+export {createLoadedDocumentVerificationReadStore, LoadedDocumentVerificationReadError}
+  from "./loaded-document-verification-reader.js";
+export type {LoadedDocumentReadScope, LoadedDocumentReadBinding, LoadedDocumentReadPrincipal,
+  LoadedDocumentReadAuthorization, LoadedDocumentReadManager, LoadedDocumentReadAuthorizer,
+  LoadedDocumentVerificationReadOptions, LoadedDocumentVerificationReadRequest,
+  LoadedDocumentVerificationReadResult, LoadedDocumentVerificationReadErrorCode}
+  from "./loaded-document-verification-reader.js";
