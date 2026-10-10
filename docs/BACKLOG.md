@@ -1383,3 +1383,25 @@ Validation: independent lifecycle/configuration review found no remaining blocke
 A locked clean install passes 1,683 offline tests and 447 PostgreSQL tests. Eleven
 focused runner tests cover overlap, fair rotation, deadlines, stop/drain/restart,
 inert configuration, malformed cleanup results and observer isolation.
+
+
+### Combined local presence lifecycle — P3 validation (2026-10-10)
+
+`npm run test:presence` runs the focused database-backed owner/import/query/
+maintenance suites plus one combined lifecycle. The combined case uses public
+owner approval, metadata import, body-field import, principal-bound read, disable
+and runner-cleanup factories. SQL only bootstraps the synthetic catalog and checks
+stored results; policies, metadata parents and derived rows are created through
+their services. Different host credentials have independently bounded grants.
+
+The in-memory synthetic capture matches independently configured parent IDs,
+full pin, source window and exact response selector. It does not derive its
+attestation from a read request. The test checks exact retries, value-free current
+pin/provenance, reader grant revocation/restoration, disabled-policy withholding,
+physical deletion with tombstones, and original metadata preservation. It proves
+local composition, not live collector trust or reviewed request/response samples.
+Local setup now distinguishes the separate bounded Java and OpenAPI 3.1 profiles.
+
+Validation: an independent review and a locked clean install/typecheck pass;
+`npm run test:presence` passes all 57 focused PostgreSQL cases across five files.
+The combined response-field case uses distinct credential and grant boundaries.

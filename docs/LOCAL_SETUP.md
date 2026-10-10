@@ -98,6 +98,27 @@ npm run openapi:roundtrip
 The command prints a synthetic JSON summary with `outcome: "passed"`. It does
 not publish to a remote service.
 
+### Validate the observed-field lifecycle
+
+With the fixed disposable PostgreSQL service ready, run:
+
+```sh
+npm run test:presence
+```
+
+The focused suite exercises owner approval, gateway URL-to-endpoint metadata
+matching, selected body-field projection, durable value-free imports, exact-pin
+principal-bound reads, authority revocation and policy disable/cleanup. The
+combined lifecycle uses the public stores and preserves metadata and replay
+tombstones when derived presence is deleted. Each case creates and removes its
+own random test schema; the command does not reset the shared database.
+
+Only checked-in synthetic contracts and in-memory synthetic capture facts are
+used. Raw body/header canaries must stay out of stored observations and query
+results. Returned field presence is non-normative: an absent field does not prove
+that it is optional. This validates local component composition; live source
+provenance, reviewed traffic samples and distributed scheduling remain open.
+
 ## 4. Format the synthetic delivery sequence
 
 The reference driver creates seven validated event envelopes in order:
@@ -180,7 +201,9 @@ diagnostics. See the [detailed analyzer matrix](../analyzers/typescript/README.m
 Other explicit profiles are `nodejs-routing-controllers@0.9.0`, standalone
 Swagger 2 `0.15.0`, Swagger middleware `0.33.0`, and OpenAPI 3.0
 `0.2.0`. Document profiles read only an explicitly selected contained
-JSON/YAML document; OpenAPI 3.1 input remains unsupported. These profiles have
+JSON/YAML document. The separate `openapi31-document@0.1.0` profile supports a
+bounded OpenAPI 3.1 JSON/YAML subset; broader dialect/resource semantics remain
+unsupported. These profiles have
 separate limits and do not automatically select an adapter or prove deployed
 startup. See their adapter READMEs for exact support and diagnostics.
 
@@ -216,8 +239,10 @@ startup entry point. A host may opt into a bounded selected-entrypoint mode;
 that proves static source reachability only and does not establish that a
 deployment starts that file.
 
-Java/Spring and additional Node.js frameworks are not supported by this
-adapter. Runtime-log examples, a production CI/deployment connector, and a
+Java/Spring is available through the separate bounded `java-spring-mvc@0.1.0`
+profile and [pinned Java setup](JAVA_TEST_ENVIRONMENT.md); the Express adapter
+does not analyze Java. Broader Spring and additional Node.js framework coverage
+remain open. Runtime-log examples, a production CI/deployment connector, and a
 protected enterprise pilot remain separate work. Portal and MCP packages are
 host-embedded read surfaces, not a ready-to-run authenticated installation.
 The nine-step Phase 1 release scenario, including failed rollout, rollback,

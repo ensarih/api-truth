@@ -91,6 +91,7 @@ The commands marked available are runnable now. Environment commands always targ
 | `npm run check` | **Available:** strict type checks and all offline suites used by CI |
 | `npm run test:env:up` | **Available:** start the pinned disposable PostgreSQL service and wait up to 60 seconds for health |
 | `npm run test:env:ready` | **Available:** verify Docker, `pg_isready`, and a real SQL query |
+| `npm run test:presence` | **Available:** require the existing fixed PostgreSQL service and validate owner approval, metadata/body imports, exact-pin value-free queries, revocation and retention cleanup through public factories in isolated schemas; synthetic-only source facts, no provider credentials |
 | `npm run test:integration` | **Available:** require the running fixed database, then run real isolation and rollback tests with up to two workers |
 | `npm run test:env:down` | **Available:** remove only the fixed Compose project's containers, network, and volumes |
 
