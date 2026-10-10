@@ -240,3 +240,15 @@ This avoids the Docker Hub unauthenticated pull quota that prevented CI
 PostgreSQL and Java integration jobs from starting. Local startup still uses
 the base Compose file. Registry availability remains a CI prerequisite;
 an image pull failure does not count as passing integration tests.
+
+
+### Semantic question conformance
+
+`npx vitest run tests/unit/semantic-question-corpus.test.ts` checks 35 curated
+synthetic questions plus boundary assertions using actual analyzer-produced
+snapshots. The fixture pins keyword route ranks and representative scores and
+supplies deterministic provider outcomes for protocol/citation checks. Similar
+entity names with different actions, mixed intent, ambiguity, incomplete context,
+closed-scope no-match and wrong-environment candidates are covered. Every curated
+case executes a discovery outcome. These checks are not a live model accuracy
+benchmark or evidence that an inference understands business behavior.

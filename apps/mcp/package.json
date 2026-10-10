@@ -7,7 +7,7 @@
     "@api-truth/query": "0.1.0",
     "@modelcontextprotocol/server": "2.2.0",
     "zod": "4.2.0",
-    "@api-truth/semantics": "0.7.1",
+    "@api-truth/semantics": "0.7.2",
     "@api-truth/observations": "0.14.0"
   },
   "devDependencies": {

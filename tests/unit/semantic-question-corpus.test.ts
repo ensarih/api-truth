@@ -10,11 +10,12 @@ import type {AnalyzerRequest,ContractSnapshot} from "../../packages/ir/src/index
 import {runGroundedSemanticDiscovery} from "../../packages/semantics/src/index.js";
 import type {SemanticProviderRequest} from "../../packages/semantics/src/types.js";
 import {searchOperationCandidates} from "../../packages/query/src/operation-search.js";
+import {createSemanticCorpusService} from "../../packages/semantics/src/corpus-service.js";
 
 type Question={id:string;profile:"express"|"routing"|"swagger2";intentQuery:string;
   context?:"partial_empty"|"closed_contract";
-  matcher:{status:"candidates";routes:string[];complete:boolean}|{status:"no_match";scope:"selected_contract"}
-    |{status:"unknown";reason:string};discovery:"suggestions"|"ambiguous"|"no_match"|"no_context"|"not_evaluated"};
+  matcher:{status:"candidates";routes:string[];complete:boolean;scores?:number[]}|{status:"no_match";scope:"selected_contract"}
+    |{status:"unknown";reason:string};discovery:"suggestions"|"ambiguous"|"no_match"|"no_context"};
 const questions=JSON.parse(await (await import("node:fs/promises")).readFile(
   new URL("../fixtures/semantics/questions.json",import.meta.url),"utf8")) as Question[];
 const roots:string[]=[];
@@ -69,6 +70,14 @@ const discoveryInput=(snapshot:ContractSnapshot,intentQuery:string)=>({snapshot,
   inference:{enabled:true as const,provider:"openai" as const,model:"synthetic-evaluation"},
   endpointIds:snapshot.endpoints.map(endpoint=>endpoint.endpoint_id),intentQuery});
 
+test("curated manifest uses distinct questions and executes every discovery outcome",()=>{
+  expect(questions.length).toBeGreaterThanOrEqual(30);
+  expect(new Set(questions.map(question=>question.id)).size).toBe(questions.length);
+  for(const question of questions)expect(["suggestions","ambiguous","no_match","no_context"]).toContain(question.discovery);
+});
+
+// Provider outcomes below are deterministic contract fixtures; they validate grounding and status handling,
+// not live-model semantic accuracy.
 test.each(questions)("question corpus: $id",async question=>{
   const snapshot=await makeSnapshot(question.profile);
   if(question.context==="partial_empty"){
@@ -82,10 +91,11 @@ test.each(questions)("question corpus: $id",async question=>{
   expect(match.status).toBe(question.matcher.status);
   if(question.matcher.status==="candidates"){
     expect(match).toMatchObject({status:"candidates",complete:question.matcher.complete});
-    if(match.status==="candidates")expect(match.candidates.map(item=>route(snapshot,item.endpointId)))
-      .toEqual(question.matcher.routes);
+    if(match.status==="candidates"){
+      expect(match.candidates.map(item=>route(snapshot,item.endpointId))).toEqual(question.matcher.routes);
+      if(question.matcher.scores)expect(match.candidates.map(item=>item.score)).toEqual(question.matcher.scores);
+    }
   }else expect(match).toMatchObject(question.matcher);
-  if(question.discovery==="not_evaluated")return;
   const provider=vi.fn(async(request:SemanticProviderRequest)=>{
     if("intentQuery" in request)expect(request.intentQuery).toBe(intentQuery);
     if(question.discovery==="no_context")throw new Error("provider must not be called without usable context");
@@ -93,7 +103,7 @@ test.each(questions)("question corpus: $id",async question=>{
       const candidateEndpointIds=snapshot.endpoints.filter(endpoint=>question.matcher.status==="candidates"
         &&question.matcher.routes.includes(route(snapshot,endpoint.endpoint_id))).map(endpoint=>endpoint.endpoint_id);
       expect(candidateEndpointIds).toHaveLength(2);
-      return {status:"ambiguous",candidateEndpointIds,reason:"The selected contract has multiple matching invoice operations."};
+      return {status:"ambiguous",candidateEndpointIds,reason:"Multiple selected operations are candidates; clarify the action and entity."};
     }
     if(question.discovery==="no_match")return {status:"no_match",reason:"No selected operation matches this wording."};
     const selectedRoute=question.matcher.status==="candidates"?question.matcher.routes[0]:undefined;
@@ -153,4 +163,23 @@ test("rejects provider citations outside the selected endpoint's documents",asyn
   await expect(runGroundedSemanticDiscovery(input,async()=>({status:"suggestions",suggestions:[{
     endpointId:endpoint.endpoint_id,intent:"Invoice lookup",summary:"Possible match",evidenceIds:[foreign]}]})))
     .rejects.toMatchObject({code:"SEMANTIC_OUTPUT_REJECTED"});
+});
+
+test("does not send analyzer candidates from another environment to a provider",async()=>{
+  const snapshot=await makeSnapshot("swagger2"),matcher=searchOperationCandidates(matcherInput(snapshot),
+    {intentQuery:"look up invoice",limit:16});
+  expect(matcher.status).toBe("candidates");if(matcher.status!=="candidates")return;
+  const candidate={...matcher.candidates[0]!,repositoryId:snapshot.source.repository_id,
+    serviceId:snapshot.service.service_id,selector:selection(snapshot,"7"),pin:pin(snapshot,"7")};
+  const search=vi.fn(async()=>({status:"candidates" as const,matchMode:"keyword" as const,
+    scope:"visible_authorized_services" as const,environment:"uat",candidates:[candidate],complete:false,
+    truncated:false,incompleteReason:"incomplete_scan" as const}));
+  const discover=vi.fn(async()=>{throw new Error("wrong environment must stop before provider call");});
+  const service=createSemanticCorpusService({corpusReader:{searchOperationCandidatesAcrossServices:search,
+    readContract:vi.fn(async()=>{throw new Error("wrong environment must stop before contract read");})},
+    semanticService:{discover}});
+  await expect(service.discoverAcrossServices({tenantId:"tenant-a",principalId:"reader"},
+    {environment:"uat",intentQuery:"look up invoice",limit:16}))
+    .rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
+  expect(discover).not.toHaveBeenCalled();
 });

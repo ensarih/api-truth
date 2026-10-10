@@ -162,12 +162,16 @@ const validDiscoveryResult=(input:unknown,group:Group,allowedEvidence:ReadonlyMa
   if(top==="disabled")return copyJson(fields(input,["status"])) as SemanticAnalysisResult|undefined;
   if(top==="no_context"){
     const value=fields(input,Object.hasOwn(input as object,"contextCoverage")?["status","contextCoverage"]:["status"]);
-    return value&&validCoverage(value.contextCoverage,group)?copyJson(value) as SemanticAnalysisResult:undefined;
+    return value&&validCoverage(value.contextCoverage,group)
+      &&(value.contextCoverage as {analyzedEndpointIds:unknown[]}).analyzedEndpointIds.length===0
+      ?copyJson(value) as SemanticAnalysisResult:undefined;
   }
   const candidates=new Set(group.candidates.map(item=>item.endpointId));
   const common=(value:Record<string,unknown>)=>{
     const provenance=fields(value.provenance,["provider","model","promptVersion","selector","pin"]);
-    return value.verification==="inferred"&&value.review==="unreviewed"&&value.normative===false&&!!provenance
+    const coverage=fields(value.contextCoverage,["status","requestedEndpointIds","analyzedEndpointIds","omittedEndpointIds"]);
+    return validCoverage(value.contextCoverage,group)&&!!coverage&&Array.isArray(coverage.analyzedEndpointIds)
+      &&coverage.analyzedEndpointIds.length>0&&value.verification==="inferred"&&value.review==="unreviewed"&&value.normative===false&&!!provenance
       &&["openai","gemini","claude"].includes(String(provenance.provider))&&safeText(provenance.model,128)
       &&["semantic-discovery-1","semantic-discovery-source-1"].includes(String(provenance.promptVersion))
       &&equal(provenance.pin,group.pin)&&equal(provenance.selector,group.selector.selector);
@@ -175,9 +179,10 @@ const validDiscoveryResult=(input:unknown,group:Group,allowedEvidence:ReadonlyMa
   if(top==="suggestions"){
     const value=fields(input,["status","suggestions","verification","review","normative","provenance",...(Object.hasOwn(input as object,"contextCoverage")?["contextCoverage"]:[])]);
     if(!value||!Array.isArray(value.suggestions)||isProxy(value.suggestions)||value.suggestions.length<1||value.suggestions.length>16||!common(value))return undefined;
+    const analyzed=new Set((value.contextCoverage as {analyzedEndpointIds:string[]}).analyzedEndpointIds);
     for(const item of value.suggestions){const suggestion=fields(item,["endpointId","intent","summary","evidenceIds"]);
       const allowed=suggestion&&allowedEvidence.get(String(suggestion.endpointId));
-      if(!suggestion||!candidates.has(String(suggestion.endpointId))||!safeText(suggestion.intent,120)||!safeText(suggestion.summary,300)
+      if(!suggestion||!candidates.has(String(suggestion.endpointId))||!analyzed.has(String(suggestion.endpointId))||!safeText(suggestion.intent,120)||!safeText(suggestion.summary,300)
         ||!Array.isArray(suggestion.evidenceIds)||isProxy(suggestion.evidenceIds)||suggestion.evidenceIds.length<1
         ||suggestion.evidenceIds.length>8||new Set(suggestion.evidenceIds).size!==suggestion.evidenceIds.length
         ||suggestion.evidenceIds.some(id=>typeof id!=="string"||!allowed?.has(id)))return undefined;}
@@ -190,7 +195,8 @@ const validDiscoveryResult=(input:unknown,group:Group,allowedEvidence:ReadonlyMa
     if(!value||!Array.isArray(value.candidateEndpointIds)||isProxy(value.candidateEndpointIds)||value.candidateEndpointIds.length<2
       ||value.candidateEndpointIds.length>16||value.candidateEndpointIds.some(id=>typeof id!=="string"||!candidates.has(id))
       ||new Set(value.candidateEndpointIds).size!==value.candidateEndpointIds.length||!safeText(value.reason,300)||!common(value)
-      ||!validCoverage(value.contextCoverage,group))return undefined;
+      ||!validCoverage(value.contextCoverage,group)
+      ||value.candidateEndpointIds.some(id=>!(value.contextCoverage as {analyzedEndpointIds:string[]}).analyzedEndpointIds.includes(id)))return undefined;
     return copyJson(value) as SemanticAnalysisResult;
   }
   if(top==="no_match"){

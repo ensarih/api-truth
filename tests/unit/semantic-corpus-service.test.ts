@@ -186,3 +186,35 @@ test("rejects an incomplete keyword shortlist without a reason before inference"
   await expect(incomplete.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
   expect(incomplete.discover).not.toHaveBeenCalled();
 });
+
+test.each(["suggestions","no_match","no_context"] as const)("rejects %s inconsistent with analyzed context",async status=>{
+  const ports=setup(candidatesResult([candidate("commerce","orders","7")]));
+  const grounded=semanticResult("orders","7");
+  const coverage={status:"partial" as const,requestedEndpointIds:[endpoint.endpoint_id],analyzedEndpointIds:[],omittedEndpointIds:[endpoint.endpoint_id]};
+  ports.discover.mockResolvedValue(status==="suggestions"?{...grounded,contextCoverage:coverage}:
+    status==="no_context"?{status,contextCoverage:grounded.contextCoverage!}:
+    {status,reason:"No candidate",verification:"inferred",review:"unreviewed",normative:false,provenance:grounded.provenance,contextCoverage:coverage});
+  await expect(ports.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
+});
+
+test.each(["suggestions","ambiguous"] as const)("rejects %s naming an omitted operation while another operation was analyzed",async status=>{
+  const first=candidate("commerce","orders","7"),snapshot=makeSnapshot("orders");
+  const other=snapshot.endpoints.find(item=>item.endpoint_id!==endpoint.endpoint_id)!;
+  const evidence=structuredClone(snapshot.evidence.find(item=>item.evidence_id===evidenceId)!);
+  evidence.evidence_id="ev-other-document";evidence.scope.endpoint_id=other.endpoint_id;snapshot.evidence.push(evidence);
+  const second={...first,endpointId:other.endpoint_id,method:other.identity.method,path:other.application_path,evidenceIds:[evidence.evidence_id]};
+  const ports=setup(candidatesResult([first,second]));
+  ports.readContract.mockResolvedValue({...contractResult("orders","7"),snapshot} as QueryContractResult);
+  const grounded=semanticResult("orders","7"),contextCoverage={status:"partial" as const,
+    requestedEndpointIds:[endpoint.endpoint_id,other.endpoint_id],analyzedEndpointIds:[other.endpoint_id],omittedEndpointIds:[endpoint.endpoint_id]};
+  const {suggestions: omitted,...common}=grounded;
+  ports.discover.mockResolvedValue(status==="suggestions"?{...grounded,contextCoverage}:
+    {...common,status,candidateEndpointIds:[endpoint.endpoint_id,other.endpoint_id],reason:"Clarify candidates",contextCoverage});
+  await expect(ports.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
+  if(status==="suggestions"){
+    ports.discover.mockResolvedValue({...grounded,contextCoverage,suggestions:[{endpointId:other.endpoint_id,intent:"Read operation",
+      summary:"Candidate operation",evidenceIds:[evidence.evidence_id]}]});
+    await expect(ports.service.discoverAcrossServices(context,options)).resolves.toMatchObject({status:"groups",
+      groups:[{result:{status:"suggestions",contextCoverage:{status:"partial",omittedEndpointIds:[endpoint.endpoint_id]}}}]});
+  }
+});

@@ -54,3 +54,22 @@ provider, model, credentials, tenant, endpoint IDs or source pins. This bounded
 composition adds no embedding index, durable enriched prose, owner approval or
 whole-operation deadline. OpenAI, Gemini and Claude remain host configuration
 choices; local tests use synthetic provider ports only.
+
+
+## Offline question conformance versus model quality
+
+The synthetic curated question file contains 35 cases exercised against actual
+Express, routing-controllers and Swagger analyzer outputs. Expected lexical route
+ordering and representative scores are authored independently in the fixture.
+Wrong-action decoys, mixed intents, incomplete context, ambiguity and closed-scope
+no-match are explicit cases. A separate analyzer-derived environment mismatch is
+rejected before contract/provider access; PostgreSQL composition checks duplicate
+endpoint IDs across service namespaces.
+
+Scripted provider outcomes exercise citation/status/coverage handling only. They
+do not demonstrate that a real model understands the question, and no LLM grades
+these tests. The kernel validates citations rather than the truth of inferred
+prose. Live provider accuracy, benchmark targets, corpus indexing and owner review
+remain separate acceptance gates. Corpus orchestration requires inferred answers
+to name analyzed operations only; `no_context` requires zero analyzed operations,
+and partial answers must retain their omitted endpoint list.

@@ -1479,3 +1479,26 @@ semantic service. Red/green regressions establish the optional route/tool and
 required coverage gates. The browser rejects malformed group/candidate namespaces,
 checks exact pins, renders HTML-shaped prose as text and suppresses late answers.
 A corpus embedding index, durable review and live model evaluation remain open.
+
+
+### Analyzed-context consistency and curated decoys — P4 (2026-10-10)
+
+Semantics 0.7.2 rejects inferred suggestions or ambiguity naming an operation
+omitted from analyzed context. Inference statuses require nonempty analyzed
+context; `no_context` requires zero analyzed operations. Valid partial suggestions
+remain available with their omitted IDs. Red regressions demonstrate that the
+previous port validator accepted contradictory coverage before this correction.
+
+The 35-question analyzer-backed corpus now explicitly executes every discovery
+outcome. Similar entity names with delete/cancel/refund actions, mixed order/invoice
+intents, representative exact keyword ranks/scores, missing context, ambiguity and
+closed-scope no-match remain distinct. Wrong-environment analyzer candidates are
+withheld before contract/provider access. Scripted model outcomes verify protocol
+and citation handling only; they do not measure live semantic understanding.
+
+Validation: independent review and a locked clean install/typecheck pass all
+1,733 offline tests and seventeen focused PostgreSQL corpus cases. Eighteen direct
+corpus validation cases and forty-two question/manifest boundary checks pass.
+The preceding `57e94ec` main commit passes all five CI jobs, including the full
+459-case database suite, eleven browser cases, pinned Swagger runtime and Java.
+Live model evaluation, semantic indexing and durable owner review remain open.
