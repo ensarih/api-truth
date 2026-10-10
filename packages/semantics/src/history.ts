@@ -163,7 +163,7 @@ const validateStored=(input:unknown,requested:readonly string[]):SemanticHistory
 };
 
 export const readSemanticHistory=async(client:PoolClient,scope:SemanticHistoryScope,
-  limit:number):Promise<SemanticHistoryReadResult>=>{
+  limit:number,historyId?:string):Promise<SemanticHistoryReadResult>=>{
   const selected=selectorParts(scope.selection,scope.pin);
   const rows=(await client.query<HistoryRow>(`SELECT history_id::text,created_at,requested_endpoint_ids,
       safe_result,record_sha256,prompt_version FROM semantic_inference_history
@@ -171,11 +171,12 @@ export const readSemanticHistory=async(client:PoolClient,scope:SemanticHistorySc
       AND selector_kind=$5 AND selector_value=$6 AND selector_version IS NOT DISTINCT FROM $7::text
       AND snapshot_id=$8 AND revision=$9 AND config_fingerprint=$10 AND configuration_hash=$11
       AND provider=$12 AND model=$13 AND requested_endpoint_ids <@ $14::text[]
+      AND ($16::bigint IS NULL OR history_id=$16::bigint)
     ORDER BY history_id DESC LIMIT $15`,
   [scope.tenantId,scope.principalId,scope.selection.repositoryId,scope.selection.serviceId,
     selected.kind,selected.value,selected.version,scope.pin.snapshotId,scope.pin.revision,
     scope.pin.configFingerprint,scope.configurationHash,scope.provider,scope.model,
-    scope.endpointIds,limit+1])).rows;
+    scope.endpointIds,limit+1,historyId??null])).rows;
   const records=rows.slice(0,limit).map(row=>{
     if(!/^[1-9][0-9]{0,18}$/.test(row.history_id)||!idList(row.requested_endpoint_ids)
       ||row.requested_endpoint_ids.length<1||row.requested_endpoint_ids.some(id=>!scope.endpointIds.includes(id))

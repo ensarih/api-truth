@@ -80,3 +80,44 @@ and partial answers must retain their omitted endpoint list.
 Semantics 0.7.3 applies one shared 30-second monotonic deadline to corpus discovery: initial authorized candidate search, contract/evidence checks, all service-group comparisons, and final authorization/pin recheck. The host can set `deadlineMs` to an integer from 1 through 60,000; callers cannot override it. Expiry returns only `SEMANTIC_CORPUS_UNAVAILABLE`, stops further orchestration calls, withholds partial/late answers, and releases its timer. Success and ordinary failures also release the timer.
 
 This bounds how long the caller waits and whether the orchestrator starts another phase. It does not interrupt synchronous JavaScript or cancel a query/provider port already in flight. Such a port can finish its own transport work or append its independently authorized history. Hosts remain responsible for underlying query/transport cancellation and cleanup. No provider fallback, new model calls, persistent index or owner-review status is introduced.
+
+## Private history owner annotations
+
+Semantics 0.7.4 adds optional, durable metadata decisions for an authenticated
+principal's own archived inference history. Enable `archiveHistory: true` and
+supply `historyReviewPolicy(client, binding)`. Without both, the review methods
+reject requests. Apply the checksum-verified history migrations explicitly;
+0002 upgrades an existing 0001 installation without changing its checksum.
+
+The policy must return exactly `true` for the independent
+`semantic.history.review` capability, action, current configuration and source
+pin. Implement it as a promptly settling, read-only database policy using the
+provided transaction client: lock and recheck the relevant owner grant and scope
+rows through commit. Ordinary API read permission is insufficient. This callback
+is trusted host code, not a caller-controlled authorization override or an
+external network request. Review operations make no inference/provider call.
+
+- `recordHistoryReview(context, selection, endpointIds, request)` accepts only
+  `{historyId, decision, expectedVersion}`. Decisions are `acknowledged`,
+  `follow_up`, or `dismissed`; IDs and versions are canonical decimal strings.
+  The first expected version is `"0"`; a successful append returns version `"1"`.
+  Use the latest returned version for the next decision. Repeating the same
+  decision at the same expected version replays the existing receipt; a changed
+  decision or stale version returns `SEMANTIC_REVIEW_CONFLICT`.
+- `readHistoryReviews(context, selection, endpointIds, historyId, limit)` reads
+  the latest 1–20 records, descending by version, with a truncation indicator.
+  The read rechecks both source access and the independent owner capability.
+
+Rows are append-only, serialized per tenant/principal/history, and integrity
+checked against the immutable private history, exact source pin, configuration,
+provider/model/prompt provenance and original endpoint subset. An owner grant
+cannot expose another principal's private history. Revoked access, changed
+configuration, or a moved serving checkpoint withhold the old records; persistence
+does not imply that a decision applies to the new API version.
+
+Every result stays `metadataOnly: true`, `nonNormative: true`, and inferred.
+The original inference history remains `review: "unreviewed"`: these annotations
+cannot approve provider prose that the existing privacy-preserving archive does
+not retain. No intent, provider prose, credential, comment or reviewer-selected
+identity is stored in the annotation. Shared review workflows, retained prose
+approval, portal/MCP review transports and normative promotion are separate work.

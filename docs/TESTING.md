@@ -374,3 +374,17 @@ activation epoch. No model calls or actual deployment are involved.
 ### Corpus discovery response budget
 
 `tests/unit/semantic-corpus-service.test.ts` uses fake timers and monotonic time with synthetic query/inference ports. Deadline cases stall the initial search, contract read, inference or final authorization search; they verify one aggregate budget, fixed timeout failure, no later service group after expiry, withheld late responses and timer release. These are orchestration conformance tests, not live model-quality or network-cancellation tests.
+
+### Semantic history owner annotations
+
+Run the offline `semantic-history-reviews.test.ts` and
+`semantic-history-review-service.test.ts` suites plus the PostgreSQL
+`semantic-history.test.ts` suite. Synthetic provider ports generate the archived
+fixture; review methods never invoke a model and no model judges test results.
+
+Coverage includes inert inputs and hostile error objects, explicit host opt-in,
+checksum migration upgrades/rollback, private principal isolation, independent
+owner grants and revocation, concurrent replay and conflicting decisions,
+revocation serialization with a transaction-held grant lock, bounded newest-first
+reads, changed serving pins, immutable rows, owner foreign keys and digest-tamper
+rejection. Database tests use disposable schemas on the shared test instance.

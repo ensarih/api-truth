@@ -45,7 +45,7 @@ provider or enterprise pilot claim.
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries, optional portal/MCP presentation and bounded retention maintenance are implemented; live adapters, durable distributed scheduling and reviewed samples remain separate gates. Bounded in-process cleanup scheduling is implemented. |
-| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, bounded per-service semantic shortlist comparison with optional portal/MCP access, provider binding and private history metadata are implemented; a semantic corpus index, durable review and live evaluation remain. |
+| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, bounded per-service semantic shortlist comparison with optional portal/MCP access, provider binding, private history metadata and optional same-principal owner annotations are implemented; a semantic corpus index, full retained-prose review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
@@ -1775,3 +1775,22 @@ Corpus discovery shares a host-configured monotonic response budget across autho
 This is an orchestration response bound; already-started port operations cannot be canceled through the existing interface and may finish independent transport/history work. Synchronous validation is not preempted. An embedding index, durable owner review and live-model quality evaluation remain open. Deterministic fake-clock tests cover stalls at each external boundary, aggregate budget, late results, inert host configuration and timer cleanup; no model grades a test.
 
 Validation: red/green regressions reproduce deadline and hostile search-error gaps. Independent review approved the fixed implementation; typecheck, all 1,803 offline tests and 48 relevant PostgreSQL semantic/history/corpus cases pass. Both initial and final search reject hostile error proxies without trap execution or error-text leakage.
+
+### Private semantic history owner annotations — P4 (2026-10-10)
+
+Completed a bounded storage/service foundation: optional independent host owner
+policy, current-authorized transaction, same-principal history lookup, three fixed
+metadata decisions, immutable checksummed migration, version CAS and exact replay.
+Source, serving and active configuration changes withhold retained old decisions.
+Receipts and reads remain metadata-only, inferred and non-normative; the archived
+inference remains unreviewed. This does not complete full owner approval of
+semantic prose, cross-principal collaboration, or embedding retrieval.
+
+Next review work: expose the bounded service through authenticated MCP/portal
+ports, then design retained-prose approval and shared-owner visibility separately.
+The host owner policy must lock independent permission rows in the supplied
+transaction, rather than treating ordinary source-read permission as ownership.
+
+Validation: independent review approved; typecheck, all 1,838 offline tests and
+56 focused PostgreSQL semantic service/history/corpus tests pass. Provider ports
+are synthetic; no live-model quality or full prose approval is claimed.

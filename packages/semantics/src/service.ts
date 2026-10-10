@@ -6,6 +6,8 @@ import {quoteEnvironmentSchema} from "../../environment/src/migrations.js";
 import {parseQuerySelection, readQueryContractWithClient, QueryReadError,
   type QueryPin, type QuerySelection} from "../../query/src/index.js";
 import {runGroundedSemanticAnalysis, runGroundedSemanticDiscovery} from "./kernel.js";
+import {parseSemanticHistoryReview,recordSemanticHistoryReview,readSemanticHistoryReviews,SemanticHistoryReviewError,
+  type SemanticHistoryReviewReceipt,type SemanticHistoryReviewReadResult,type SemanticHistoryReviewRequest} from "./reviews.js";
 import {isSemanticIntentQuerySafe} from "./egress.js";
 import {appendSemanticHistory,readSemanticHistory,type SemanticHistoryReadResult,
   type SemanticHistoryScope} from "./history.js";
@@ -13,12 +15,17 @@ import type {SemanticAnalysisResult, SemanticProviderId, SemanticProviderPort} f
 
 export class SemanticServiceError extends Error {
   readonly code: "SEMANTIC_INVALID_REQUEST" | "SEMANTIC_NOT_FOUND_OR_DENIED"
-    | "SEMANTIC_STALE_CONTEXT" | "SEMANTIC_STORAGE_ERROR";
+    | "SEMANTIC_STALE_CONTEXT" | "SEMANTIC_STORAGE_ERROR" | "SEMANTIC_REVIEW_CONFLICT";
   constructor(code: SemanticServiceError["code"]) {
     super(code); this.name = "SemanticServiceError"; this.code = code;
   }
 }
 
+export type SemanticHistoryReviewBinding=Readonly<{tenantId:string;principalId:string;
+  capability:"semantic.history.review";action:"read"|"write";historyId:string;
+  selection:QuerySelection;pin:QueryPin;configurationHash:string;endpointIds:readonly string[]}>;
+/** Database-local, read-only owner policy: lock and recheck independent authority in this transaction. */
+export type SemanticHistoryReviewPolicy=(client:PoolClient,binding:SemanticHistoryReviewBinding)=>Promise<boolean>;
 type Context = Readonly<{tenantId: string; principalId: string}>;
 export type SemanticSecretRef = Readonly<{scheme: "env" | "vault"; locator: string}>;
 export type SemanticProviderBinding = Readonly<{tenantId: string; provider: SemanticProviderId;
@@ -214,23 +221,26 @@ const historyScope=(context:Context,authorized:Authorized,endpointIds:readonly s
 };
 
 /** Resolves auth and exact source context before and after inference, with no transaction during provider I/O. */
-export const createSemanticService = (pool: Pool, options: {schema: string; archiveHistory?: boolean} &
+export const createSemanticService = (pool: Pool, options: {schema: string; archiveHistory?: boolean;historyReviewPolicy?:SemanticHistoryReviewPolicy} &
   ({providerPort: SemanticProviderPort; providerFactory?: never}
   | {providerFactory: SemanticProviderFactory; providerPort?: never})) => {
   const hasPort=!!options&&typeof options==="object"&&!isProxy(options)&&Object.hasOwn(options,"providerPort");
   const hasFactory=!!options&&typeof options==="object"&&!isProxy(options)&&Object.hasOwn(options,"providerFactory");
   const hasArchive=!!options&&typeof options==="object"&&!isProxy(options)&&Object.hasOwn(options,"archiveHistory");
+  const hasReview=!!options&&typeof options==="object"&&!isProxy(options)&&Object.hasOwn(options,"historyReviewPolicy");
   const configured = hasPort!==hasFactory ? fields(options,["schema",
-    hasPort?"providerPort":"providerFactory",...(hasArchive?["archiveHistory"]:[])]) : undefined;
+    hasPort?"providerPort":"providerFactory",...(hasArchive?["archiveHistory"]:[]),...(hasReview?["historyReviewPolicy"]:[])]) : undefined;
   if (!configured || typeof configured.schema !== "string"
     || hasPort&&typeof configured.providerPort !== "function"
     || hasFactory&&typeof configured.providerFactory !== "function"
-    || configured.archiveHistory!==undefined&&typeof configured.archiveHistory!=="boolean")
+    || configured.archiveHistory!==undefined&&typeof configured.archiveHistory!=="boolean"
+    ||hasReview&&(configured.archiveHistory!==true||typeof configured.historyReviewPolicy!=="function"||isProxy(configured.historyReviewPolicy)))
     throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
   const schemaName = configured.schema;
   const providerPort = configured.providerPort as SemanticProviderPort|undefined;
   const providerFactory = configured.providerFactory as SemanticProviderFactory|undefined;
   const archiveHistory=configured.archiveHistory===true;
+  const historyReviewPolicy=configured.historyReviewPolicy as SemanticHistoryReviewPolicy|undefined;
   let schema: string;
   try {schema = quoteEnvironmentSchema(schemaName);}
   catch {throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");}
@@ -246,13 +256,38 @@ export const createSemanticService = (pool: Pool, options: {schema: string; arch
       return result;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
-      if (error instanceof SemanticServiceError) throw error;
-      if (error instanceof QueryReadError && error.code === "QUERY_NOT_FOUND_OR_DENIED")
-        throw new SemanticServiceError("SEMANTIC_NOT_FOUND_OR_DENIED");
-      if (error instanceof QueryReadError && error.code === "QUERY_STALE_SELECTION")
-        throw new SemanticServiceError("SEMANTIC_STALE_CONTEXT");
-      throw new SemanticServiceError("SEMANTIC_STORAGE_ERROR");
+      let mapped:SemanticServiceError["code"]="SEMANTIC_STORAGE_ERROR";
+      try{
+        if(error!==null&&typeof error==="object"&&!isProxy(error)){
+          const prototype=Object.getPrototypeOf(error),descriptor=Object.getOwnPropertyDescriptor(error,"code");
+          const code=descriptor&&"value" in descriptor?descriptor.value:undefined;
+          if(prototype===SemanticServiceError.prototype&&["SEMANTIC_INVALID_REQUEST","SEMANTIC_NOT_FOUND_OR_DENIED",
+            "SEMANTIC_STALE_CONTEXT","SEMANTIC_STORAGE_ERROR","SEMANTIC_REVIEW_CONFLICT"].includes(code))
+            mapped=code;
+          else if(prototype===SemanticHistoryReviewError.prototype)
+            mapped=code==="SEMANTIC_HISTORY_REVIEW_CONFLICT"?"SEMANTIC_REVIEW_CONFLICT"
+              :code==="SEMANTIC_HISTORY_REVIEW_INVALID"?"SEMANTIC_INVALID_REQUEST":"SEMANTIC_STORAGE_ERROR";
+          else if(prototype===QueryReadError.prototype)
+            mapped=code==="QUERY_NOT_FOUND_OR_DENIED"?"SEMANTIC_NOT_FOUND_OR_DENIED"
+              :code==="QUERY_STALE_SELECTION"?"SEMANTIC_STALE_CONTEXT":"SEMANTIC_STORAGE_ERROR";
+        }
+      }catch{ /* Unexpected objects always become a fixed storage error. */ }
+      throw new SemanticServiceError(mapped);
     } finally {client.release();}
+  };
+  const reviewRequest=(input:unknown):SemanticHistoryReviewRequest=>{
+    try{return parseSemanticHistoryReview(input);}catch{throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");}
+  };
+  const reviewHistory=async(client:PoolClient,context:Context,authorized:Authorized,endpointIds:readonly string[],historyId:string,action:"read"|"write")=>{
+    if(!historyReviewPolicy||!authorized.inference.enabled)throw new SemanticServiceError("SEMANTIC_NOT_FOUND_OR_DENIED");
+    const binding:SemanticHistoryReviewBinding=Object.freeze({tenantId:context.tenantId,principalId:context.principalId,
+      capability:"semantic.history.review",action,historyId,selection:authorized.selection,pin:Object.freeze({...authorized.pin}),
+      configurationHash:authorized.configurationHash,endpointIds:Object.freeze([...endpointIds])});
+    if(await historyReviewPolicy(client,binding)!==true)throw new SemanticServiceError("SEMANTIC_NOT_FOUND_OR_DENIED");
+    const scope=historyScope(context,authorized,endpointIds);
+    const history=(await readSemanticHistory(client,scope,1,historyId)).records[0];
+    if(!history)throw new SemanticServiceError("SEMANTIC_NOT_FOUND_OR_DENIED");
+    return {scope,history};
   };
   const read=(context:Context,selection:QuerySelection,endpointIds:readonly string[])=>
     transaction(context,selection,endpointIds,async(_client,authorized)=>authorized);
@@ -294,6 +329,23 @@ export const createSemanticService = (pool: Pool, options: {schema: string; arch
     discover: (context: unknown, selection: unknown, endpointIds: unknown,
       intentQuery: unknown): Promise<SemanticAnalysisResult> =>
       run(context, selection, endpointIds, true, intentQuery),
+    recordHistoryReview:async(rawContext:unknown,rawSelection:unknown,rawEndpointIds:unknown,rawRequest:unknown):Promise<SemanticHistoryReviewReceipt>=>{
+      if(!archiveHistory||!historyReviewPolicy)throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
+      const request=reviewRequest(rawRequest),{context,selection,endpointIds}=parseRequest(rawContext,rawSelection,rawEndpointIds);
+      return transaction(context,selection,endpointIds,async(client,authorized)=>{
+        const {scope,history}=await reviewHistory(client,context,authorized,endpointIds,request.historyId,"write");
+        return recordSemanticHistoryReview(client,scope,history,request);
+      });
+    },
+    readHistoryReviews:async(rawContext:unknown,rawSelection:unknown,rawEndpointIds:unknown,rawHistoryId:unknown,rawLimit:unknown):Promise<SemanticHistoryReviewReadResult>=>{
+      if(!archiveHistory||!historyReviewPolicy)throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");
+      const limit=historyLimit(rawLimit),request=reviewRequest({historyId:rawHistoryId,decision:"acknowledged",expectedVersion:"0"});
+      const {context,selection,endpointIds}=parseRequest(rawContext,rawSelection,rawEndpointIds);
+      return transaction(context,selection,endpointIds,async(client,authorized)=>{
+        const {scope,history}=await reviewHistory(client,context,authorized,endpointIds,request.historyId,"read");
+        return readSemanticHistoryReviews(client,scope,history,limit);
+      });
+    },
     readHistory:async(rawContext:unknown,rawSelection:unknown,rawEndpointIds:unknown,
       rawLimit:unknown):Promise<SemanticHistoryReadResult>=>{
       if(!archiveHistory)throw new SemanticServiceError("SEMANTIC_INVALID_REQUEST");

@@ -145,7 +145,7 @@ test("archive remains off by default and malformed history limits fail before da
 });
 
 test("default-off inference does not require the optional history table",async()=>{
-  await database.pool.query(`DROP TABLE ${schema()}.semantic_inference_history`);
+  await database.pool.query(`DROP TABLE ${schema()}.semantic_inference_history CASCADE`);
   const semantic=service();
   await expect(semantic.analyze(context(),selection(),["ep-get"]))
     .resolves.toMatchObject({status:"suggestions",verification:"inferred",normative:false});
@@ -184,7 +184,7 @@ test("provider-time revocation and failed archive write persist no result",async
   expect((await stored()).rows).toHaveLength(0);
   await database.pool.query(`UPDATE ${schema()}.principal_scope_grants SET active=true
     WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='docs-read'`,[tenantId,principalId]);
-  await database.pool.query(`DROP TABLE ${schema()}.semantic_inference_history`);
+  await database.pool.query(`DROP TABLE ${schema()}.semantic_inference_history CASCADE`);
   await expect(service(true).analyze(context(),selection(),["ep-get"]))
     .rejects.toMatchObject({code:"SEMANTIC_STORAGE_ERROR"});
 });
@@ -233,4 +233,134 @@ test("prompt provenance is covered by the stored record hash",async()=>{
     ENABLE TRIGGER semantic_inference_history_immutable`);
   await expect(semantic.readHistory(context(),selection(),["ep-get"],20))
     .rejects.toMatchObject({code:"SEMANTIC_STORAGE_ERROR"});
+});
+
+const reviewService=()=>createSemanticService(database.pool,{schema:database.schema,archiveHistory:true,
+ providerPort:vi.fn(async()=>answer()),historyReviewPolicy:async(client,binding)=>{
+  expect(binding.capability).toBe('semantic.history.review');
+  const grants=await client.query<{active:boolean}>(`SELECT grant_row.active FROM principal_scope_grants grant_row
+   JOIN access_scopes scope ON scope.tenant_id=grant_row.tenant_id AND scope.access_scope_id=grant_row.access_scope_id
+   WHERE grant_row.tenant_id=$1 AND grant_row.principal_id=$2 AND grant_row.access_scope_id='owner-review'
+     AND scope.active FOR SHARE OF grant_row,scope`,[binding.tenantId,binding.principalId]);return grants.rows[0]?.active===true;
+ }});
+const grantReview=async()=>{
+ await database.pool.query(`INSERT INTO ${schema()}.access_scopes(tenant_id,access_scope_id,active) VALUES($1,'owner-review',true)`,[tenantId]);
+ await database.pool.query(`INSERT INTO ${schema()}.principal_scope_grants(tenant_id,principal_id,access_scope_id,active) VALUES($1,$2,'owner-review',true)`,[tenantId,principalId]);
+};
+
+test('private history review requires independent owner permission and supports replay and concurrent versions',async()=>{
+ const semantic=reviewService();await semantic.discover(context(),selection(),['ep-get'],'Find an order');
+ const history=(await semantic.readHistory(context(),selection(),['ep-get'],20)).records[0]!;
+ const request={historyId:history.historyId,decision:'acknowledged',expectedVersion:'0'};
+ await expect(semantic.recordHistoryReview(context(),selection(),['ep-get'],request)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ await grantReview();
+ const results=await Promise.all([semantic.recordHistoryReview(context(),selection(),['ep-get'],request),semantic.recordHistoryReview(context(),selection(),['ep-get'],request)]);
+ expect(results.map(result=>result.replayed).sort()).toEqual([false,true]);
+ expect(results[0]).toMatchObject({historyId:history.historyId,reviewVersion:'1',decision:'acknowledged',metadataOnly:true,nonNormative:true,verification:'inferred'});
+ const conflicting=await Promise.allSettled(['follow_up','dismissed'].map(decision=>semantic.recordHistoryReview(context(),selection(),['ep-get'],{...request,decision,expectedVersion:'1'})));
+ expect(conflicting.filter(result=>result.status==='fulfilled')).toHaveLength(1);
+ expect(conflicting.find(result=>result.status==='rejected')).toMatchObject({reason:{code:'SEMANTIC_REVIEW_CONFLICT'}});
+ const reviews=await semantic.readHistoryReviews(context(),selection(),['ep-get'],history.historyId,20);
+ expect(reviews).toMatchObject({historyId:history.historyId,records:[{reviewVersion:'2'},{reviewVersion:'1'}],truncated:false,metadataOnly:true,nonNormative:true});
+ expect((await semantic.readHistory(context(),selection(),['ep-get'],20)).records[0]).toMatchObject({verification:'inferred',review:'unreviewed',normative:false});
+ const storedReviews=await database.pool.query(`SELECT * FROM ${schema()}.semantic_history_reviews`);
+ expect(storedReviews.rows).toHaveLength(2);expect(JSON.stringify(storedReviews.rows)).not.toMatch(/CANARY_PROVIDER|Find an order|CANARY_MODEL_KEY/);
+});
+
+const archivedReview=async()=>{
+ const semantic=reviewService();await grantReview();await semantic.analyze(context(),selection(),['ep-get']);
+ const history=(await semantic.readHistory(context(),selection(),['ep-get'],20)).records[0]!;
+ const request={historyId:history.historyId,decision:'acknowledged',expectedVersion:'0'};
+ await semantic.recordHistoryReview(context(),selection(),['ep-get'],request);
+ return {semantic,history,request};
+};
+
+test('owner permission revocation withholds reviews while retaining private inference history',async()=>{
+ const {semantic,history,request}=await archivedReview();
+ await database.pool.query(`UPDATE ${schema()}.principal_scope_grants SET active=false WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='owner-review'`,[tenantId,principalId]);
+ await expect(semantic.readHistoryReviews(context(),selection(),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ await expect(semantic.recordHistoryReview(context(),selection(),['ep-get'],request)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ expect((await semantic.readHistory(context(),selection(),['ep-get'],20)).records).toHaveLength(1);
+ expect((await database.pool.query(`SELECT * FROM ${schema()}.semantic_history_reviews`)).rows).toHaveLength(1);
+});
+
+test('an owner grant cannot read or annotate another principal private history',async()=>{
+ const {semantic,history,request}=await archivedReview();
+ await database.pool.query(`INSERT INTO ${schema()}.principal_scope_grants(tenant_id,principal_id,access_scope_id,active) VALUES($1,$2,'owner-review',true)`,[tenantId,otherPrincipalId]);
+ await expect(semantic.readHistoryReviews(context(otherPrincipalId),selection(),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ await expect(semantic.recordHistoryReview(context(otherPrincipalId),selection(),['ep-get'],request)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ await expect(semantic.readHistoryReviews(context(),selection(),['ep-get'],'9223372036854775807',20)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+});
+
+test('serving changes and source permission revocation withhold retained annotations',async()=>{
+ const {semantic,history,request}=await archivedReview();
+ await database.pool.query(`UPDATE ${schema()}.principal_scope_grants SET active=false WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='docs-read'`,[tenantId,principalId]);
+ await expect(semantic.readHistoryReviews(context(),selection(),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ await database.pool.query(`UPDATE ${schema()}.principal_scope_grants SET active=true WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='docs-read'`,[tenantId,principalId]);
+ await database.pool.query(`UPDATE ${schema()}.environment_serving_checkpoints SET version=8 WHERE tenant_id=$1`,[tenantId]);
+ await expect(semantic.recordHistoryReview(context(),selection(),['ep-get'],request)).rejects.toMatchObject({code:'SEMANTIC_STALE_CONTEXT'});
+ await expect(semantic.readHistoryReviews(context(),selection('8'),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ expect((await database.pool.query(`SELECT * FROM ${schema()}.semantic_history_reviews`)).rows).toHaveLength(1);
+});
+
+test('review pagination and replay bind the original history subset rather than a broader caller selection',async()=>{
+ const {semantic,history,request}=await archivedReview();
+ expect(await semantic.recordHistoryReview(context(),selection(),['ep-get','ep-create'],request)).toMatchObject({replayed:true,reviewVersion:'1'});
+ await semantic.recordHistoryReview(context(),selection(),['ep-get'],{...request,decision:'follow_up',expectedVersion:'1'});
+ expect(await semantic.readHistoryReviews(context(),selection(),['ep-get','ep-create'],history.historyId,1)).toMatchObject({records:[{reviewVersion:'2',decision:'follow_up'}],truncated:true});
+ await expect(semantic.recordHistoryReview(context(),selection(),['ep-get'],{...request,decision:'dismissed',expectedVersion:'0'})).rejects.toMatchObject({code:'SEMANTIC_REVIEW_CONFLICT'});
+});
+
+test('review immutability and integrity reject database edits and preserve owner foreign keys',async()=>{
+ const {semantic,history,request}=await archivedReview();
+ await expect(database.pool.query(`UPDATE ${schema()}.semantic_history_reviews SET decision='dismissed'`)).rejects.toThrow();
+ await expect(database.pool.query(`DELETE FROM ${schema()}.semantic_history_reviews`)).rejects.toThrow();
+ await expect(database.pool.query(`INSERT INTO ${schema()}.semantic_history_reviews(tenant_id,principal_id,history_id,review_version,expected_version,decision,record_sha256) VALUES($1,$2,$3,1,0,'dismissed',$4)`,[tenantId,otherPrincipalId,history.historyId,`sha256:${'0'.repeat(64)}`])).rejects.toThrow();
+ await database.pool.query(`ALTER TABLE ${schema()}.semantic_history_reviews DISABLE TRIGGER semantic_history_reviews_immutable`);
+ await database.pool.query(`UPDATE ${schema()}.semantic_history_reviews SET decision='dismissed'`);
+ await database.pool.query(`ALTER TABLE ${schema()}.semantic_history_reviews ENABLE TRIGGER semantic_history_reviews_immutable`);
+ await expect(semantic.readHistoryReviews(context(),selection(),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_STORAGE_ERROR'});
+ await expect(semantic.recordHistoryReview(context(),selection(),['ep-get'],request)).rejects.toMatchObject({code:'SEMANTIC_STORAGE_ERROR'});
+});
+
+test('review policy failures are fixed and inert and do not expose thrown provider text',async()=>{
+ const {history}=await archivedReview();const trap=vi.fn(()=>{throw new Error('CANARY_POLICY_SECRET');});
+ const hostile=new Proxy({}, {getPrototypeOf:trap,get:trap});
+ const getterError=Object.create(Error.prototype);Object.defineProperty(getterError,'code',{get:trap});
+ const prototypeError=Object.create(hostile);
+ const revoked=Proxy.revocable({},{});revoked.revoke();
+ for(const thrown of [hostile,revoked.proxy,getterError,prototypeError]){
+  const semantic=createSemanticService(database.pool,{schema:database.schema,archiveHistory:true,providerPort:vi.fn(async()=>answer()),historyReviewPolicy:async()=>{throw thrown;}});
+  await expect(semantic.readHistoryReviews(context(),selection(),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_STORAGE_ERROR',message:'SEMANTIC_STORAGE_ERROR'});
+ }
+ expect(trap).not.toHaveBeenCalled();
+});
+
+test('owner grant lock serializes a concurrent revocation with the review transaction',async()=>{
+ const {history,request}=await archivedReview();
+ let entered!:()=>void,release!:()=>void;
+ const locked=new Promise<void>(resolve=>{entered=resolve;});
+ const proceed=new Promise<void>(resolve=>{release=resolve;});
+ const semantic=createSemanticService(database.pool,{schema:database.schema,archiveHistory:true,
+  providerPort:vi.fn(async()=>answer()),historyReviewPolicy:async(client,binding)=>{
+   const grant=await client.query<{active:boolean}>(`SELECT active FROM principal_scope_grants
+    WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='owner-review' FOR SHARE`,[binding.tenantId,binding.principalId]);
+   entered();await proceed;return grant.rows[0]?.active===true;
+  }});
+ const write=semantic.recordHistoryReview(context(),selection(),['ep-get'],{...request,decision:'follow_up',expectedVersion:'1'});
+ await locked;const revoker=await database.pool.connect();
+ try{
+  const pid=(await revoker.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+  const revoke=revoker.query(`UPDATE ${schema()}.principal_scope_grants SET active=false
+   WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='owner-review'`,[tenantId,principalId]);
+  let blocked=false;
+  for(let attempt=0;attempt<100;attempt++){
+   const result=await database.pool.query<{blocked:boolean}>('SELECT cardinality(pg_blocking_pids($1))>0 AS blocked',[pid]);
+   if(result.rows[0]?.blocked){blocked=true;break;}
+   await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  release();await expect(write).resolves.toMatchObject({reviewVersion:'2',decision:'follow_up'});
+  await revoke;expect(blocked).toBe(true);
+  await expect(reviewService().readHistoryReviews(context(),selection(),['ep-get'],history.historyId,20)).rejects.toMatchObject({code:'SEMANTIC_NOT_FOUND_OR_DENIED'});
+ }finally{release();revoker.release();}
 });

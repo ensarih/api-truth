@@ -3,7 +3,7 @@ import {readFile} from "node:fs/promises";
 import type {Pool} from "pg";
 import {quoteEnvironmentSchema} from "../../environment/src/migrations.js";
 
-const version="0001_inferred_history";
+const versions=["0001_inferred_history","0002_history_reviews"] as const;
 export class SemanticHistoryStorageError extends Error {
   readonly code="SEMANTIC_HISTORY_STORAGE_ERROR";
   constructor(){super("SEMANTIC_HISTORY_STORAGE_ERROR");this.name="SemanticHistoryStorageError";}
@@ -13,9 +13,11 @@ export class SemanticHistoryStorageError extends Error {
 export const applySemanticHistoryMigrations=async(pool:Pool,options:{schema:string}):Promise<void>=>{
   let schema:string,schemaName:string;
   try{schemaName=options.schema;schema=quoteEnvironmentSchema(schemaName);}catch{throw new SemanticHistoryStorageError();}
-  const body=await readFile(new URL(`../migrations/${version}.sql`,import.meta.url),"utf8")
-    .catch(()=>{throw new SemanticHistoryStorageError();});
-  const checksum=`sha256:${createHash("sha256").update(body).digest("hex")}`;
+  const migrations=await Promise.all(versions.map(async version=>{
+    const body=await readFile(new URL(`../migrations/${version}.sql`,import.meta.url),"utf8")
+      .catch(()=>{throw new SemanticHistoryStorageError();});
+    return {version,body,checksum:`sha256:${createHash("sha256").update(body).digest("hex")}`};
+  }));
   const client=await pool.connect().catch(()=>{throw new SemanticHistoryStorageError();});
   try{
     await client.query("BEGIN");
@@ -35,13 +37,15 @@ export const applySemanticHistoryMigrations=async(pool:Pool,options:{schema:stri
       version text PRIMARY KEY,checksum_sha256 text NOT NULL
         CHECK (checksum_sha256 ~ '^sha256:[0-9a-f]{64}$'),
       applied_at timestamptz NOT NULL DEFAULT clock_timestamp())`);
-    const stored=await client.query<{checksum_sha256:string}>(
-      "SELECT checksum_sha256 FROM semantic_history_schema_migrations WHERE version=$1",[version]);
-    if(!stored.rows.length){
-      await client.query(body);
-      await client.query("INSERT INTO semantic_history_schema_migrations(version,checksum_sha256) VALUES($1,$2)",
-        [version,checksum]);
-    }else if(stored.rows[0]?.checksum_sha256!==checksum)throw new SemanticHistoryStorageError();
+    for(const {version,body,checksum} of migrations){
+      const stored=await client.query<{checksum_sha256:string}>(
+        "SELECT checksum_sha256 FROM semantic_history_schema_migrations WHERE version=$1",[version]);
+      if(!stored.rows.length){
+        await client.query(body);
+        await client.query("INSERT INTO semantic_history_schema_migrations(version,checksum_sha256) VALUES($1,$2)",
+          [version,checksum]);
+      }else if(stored.rows[0]?.checksum_sha256!==checksum)throw new SemanticHistoryStorageError();
+    }
     await client.query("COMMIT");
   }catch{await client.query("ROLLBACK").catch(()=>undefined);throw new SemanticHistoryStorageError();}
   finally{client.release();}
