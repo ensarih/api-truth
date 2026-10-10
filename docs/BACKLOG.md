@@ -44,7 +44,7 @@ provider or enterprise pilot claim.
 | NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
-| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary and database retention integrity prerequisites are implemented; live adapters, authenticated persistence/cleanup and durable reviewed samples remain separate gates. |
+| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import and bounded retention maintenance are implemented; authorized presence queries, live adapters, cleanup scheduling and durable reviewed samples remain separate gates. |
 | P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
@@ -1226,3 +1226,51 @@ valid concurrent CAS contenders, replay and revocation. Root review corrected a
 race test whose second contender originally failed schema preflight rather than
 CAS. Body provenance, authenticated derived imports/queries, retention maintenance
 and public owner-management surfaces remain separate gates.
+
+
+### Authenticated value-free presence persistence and maintenance — P3 (2026-10-10)
+
+Observations 0.11.0 adds an independently authenticated import capability with
+immutable host owner/import scope bindings. Pre-read and final transactions check
+current unqualified serving/configuration pins, the policy activation epoch,
+enabled immutable policy, exact confirmed parent and independent grants. The
+trusted source port must establish exact body-to-import/record correspondence;
+supplied identifiers alone are not proof. Bodies are read outside database locks,
+bounded and projected to selected field states; only value-free states reach SQL.
+Safe retries preserve database-clock expiry, quotas and deletion tombstones.
+
+Migration 0004 adds a non-unique scoped record index for ambiguity detection across
+imports. A PostgreSQL query-plan regression failed without it. Internal transaction
+constraints reject qualified pins before callbacks and set local lock/statement
+deadlines before authority locks. Existing metadata importer defaults are retained;
+owner approval opts into both constraints.
+
+The separate maintenance capability authenticates against immutable host bindings
+and independent current owner grants. It deletes at most 100 expired, disabled or
+superseded rows atomically, preserving metadata and permanent replay tombstones.
+It does not need catalog/source reader access or current log configuration. Nine
+focused PostgreSQL tests cover batch bounds, database expiry, live-row preservation,
+revocation, detached bindings, inert identities, authorization deadlines, concurrent
+cleanup, rollback and quota release after generation replacement.
+
+Public authorized presence queries, real provider correspondence, automatic cleanup
+scheduling, reviewed request/response samples and downstream presentation remain
+open. This slice does not infer required fields, promote observations to normative
+contracts or complete P3.
+
+#### Next P3 acceptance: authorized presence reads
+
+- Authenticate an independent `observations.presence.read` capability before any
+  database access. Use detached host scope bindings with independent owner/read
+  access scopes; never accept caller identities or access-scope names.
+- Read under the current unqualified serving/configuration pin and locked
+  catalog/source/owner/read grants. Compare the immutable enabled policy's
+  activation epoch to the locked current configuration, not an earlier cache.
+- Join derived rows to the exact immutable metadata parent/import and current
+  policy generation. Filter expiry using database time and retain complete pin,
+  policy and parent provenance in value-free output. Deny stale or revoked views.
+- Bound the first result page explicitly and report truncation; no hidden history
+  scan, raw SQL result passthrough, raw body access or observations-to-contract
+  promotion. Cover current serving changes, opt-out, generation replacement,
+  expiry, grant revocation, scope isolation and malformed requests with PostgreSQL
+  tests before exposing the read service to portal/MCP.

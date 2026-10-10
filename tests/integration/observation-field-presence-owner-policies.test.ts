@@ -41,7 +41,7 @@ afterEach(async()=>{await database.cleanup();});
 test("applies the owner-policy migration idempotently and rejects checksum drift",async()=>{
   await applyObservationMigrations(database.pool,{schema:database.schema});
   const rows=await database.pool.query(`SELECT version FROM ${schema}.observation_schema_migrations ORDER BY version`);
-  expect(rows.rows.map(row=>row.version)).toEqual(["0001_metadata_imports","0002_field_presence_owner_policies","0003_field_presence_retention"]);
+  expect(rows.rows.map(row=>row.version)).toEqual(["0001_metadata_imports","0002_field_presence_owner_policies","0003_field_presence_retention","0004_scoped_record_lookup"]);
   await database.pool.query(`UPDATE ${schema}.observation_schema_migrations SET checksum_sha256=$1 WHERE version='0002_field_presence_owner_policies'`,
     ["sha256:"+"f".repeat(64)]);
   await expect(applyObservationMigrations(database.pool,{schema:database.schema})).rejects.toMatchObject({code:"OBSERVATION_STORAGE_ERROR"});
@@ -113,4 +113,26 @@ test("rejects wrong-scope references, mismatched heads, and malformed policy lim
   await expect(insertRevision({revision:"19",fingerprint:"sha256:"+"5".repeat(64),budget:0})).rejects.toThrow();
   await expect(insertRevision({revision:"20",fingerprint:"sha256:"+"6".repeat(64),mediaType:"application/"+"x".repeat(120)})).rejects.toThrow();
   await expect(insertRevision({revision:"21",fingerprint:"sha256:"+"7".repeat(64),paths:[["/field-a","/field-b"]] as unknown as string[]})).rejects.toThrow();
+});
+
+
+test("record ambiguity lookup uses a scoped record index across imports",async()=>{
+  const client=await database.pool.connect();
+  try{
+    await client.query("BEGIN");
+    await client.query("SET LOCAL enable_seqscan=off");
+    const result=await client.query(`EXPLAIN (FORMAT JSON) SELECT 1 FROM ${schema}.observation_records
+      WHERE tenant_id=$1 AND repository_id=$2 AND service_id=$3 AND environment=$4
+        AND record_id=$5::uuid AND import_id<>$6::uuid LIMIT 1`,
+      [tenant,repository,service,environment,"550e8400-e29b-4d4a-a716-446655440001","550e8400-e29b-4d4a-a716-446655440000"]);
+    const plan=result.rows[0]["QUERY PLAN"][0].Plan;
+    const flattened:Record<string,unknown>[]=[];
+    const visit=(node:Record<string,unknown>)=>{flattened.push(node);
+      for(const child of (node.Plans??[]) as Record<string,unknown>[])visit(child);};
+    visit(plan);
+    const scan=flattened.find(node=>node["Index Name"]==="observation_records_scoped_record_idx");
+    expect(scan).toBeDefined();
+    expect(scan?.["Index Cond"]).toContain("record_id");
+    await client.query("ROLLBACK");
+  }finally{await client.query("ROLLBACK").catch(()=>undefined);client.release();}
 });

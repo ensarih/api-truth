@@ -3,7 +3,7 @@ import {readFile} from "node:fs/promises";
 import type {Pool} from "pg";
 import {quoteEnvironmentSchema} from "../../environment/src/migrations.js";
 
-const versions = ["0001_metadata_imports", "0002_field_presence_owner_policies", "0003_field_presence_retention"] as const;
+const versions = ["0001_metadata_imports", "0002_field_presence_owner_policies", "0003_field_presence_retention", "0004_scoped_record_lookup"] as const;
 
 export class ObservationStorageError extends Error {
   readonly code: "OBSERVATION_STORAGE_ERROR";

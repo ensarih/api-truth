@@ -222,3 +222,55 @@ This service approves static storage policy only. It does not read bodies,
 establish transport provenance, persist observed presence, authorize public SQL
 reads or run retention cleanup. Those require the separate import, query and
 maintenance services. No owner write API is exposed through portal/MCP here.
+
+## Authenticated derived presence import and maintenance
+
+`createFieldPresenceImportStore(pool, {schema, bindings, authorizeManager,
+readObservation})` imports one selected metadata parent with
+`importObservation(credential, {policyId, ownerPolicyRevision, importId, recordId,
+expectedPin})`. The expected pin includes exact tenant, repository, service,
+environment, snapshot, revision, configuration fingerprint and serving checkpoint.
+Host bindings select independent owner and import access scopes. Authentication
+must return `observations.presence.import`; supplied identities, paths, bodies or
+projections are not accepted from callers.
+
+Before reading a body, a short transaction checks the enabled immutable policy,
+its exact activation epoch, current unqualified serving pin, catalog/source/owner/
+import grants and the exact confirmed metadata parent. Ambiguous record UUIDs
+across imports reject. A scoped record index supports that check without a history
+scan. The supported schema paths and remaining lifetime are checked before source
+access. Source reads run outside database locks and have a ten-second deadline. This
+bounded port accepts only millisecond-aligned source windows; greater database
+precision withholds before body access instead of silently rounding lineage.
+
+The trusted source port must independently establish correspondence to both import
+and record UUIDs, the full source pin and selector, source ID/version and exact
+source window. Returning the expected identifiers without checking the source is
+not proof. The host adapter remains responsible for that correspondence and for
+complete, unredacted payload assertions. This port does not implement a live log
+provider or establish hostile-process isolation.
+
+Only the pure projector's selected `present`/`absent` states can reach storage.
+Independent capability authentication runs again after the read; the final
+transaction repeats authority, parent, policy and pin checks before inserting.
+Database time, the policy-wide budget and permanent tombstones govern lifetime
+and replay. Exact safe retries are idempotent. Bodies, traffic values and their
+hashes do not become SQL parameters or stored results. Errors expose fixed codes.
+
+`createFieldPresenceMaintenanceStore(pool, {schema, bindings, authorizeManager})`
+provides `cleanup(credential, {tenantId, repositoryId, serviceId, environment,
+policyId, limit})`, with an explicit limit of 1–100. The host must authenticate
+`observations.presence.cleanup` and the current independent owner grant. Cleanup
+uses database time and removes expired, disabled or superseded derived rows in one
+transaction, retaining permanent replay tombstones and original metadata. It
+preserves live current rows, keeps immutable host bindings, serializes competing
+cleanups and rolls back the entire batch on failure. It remains available after
+catalog/source access or log configuration has been withdrawn. Tombstones are
+never pruned by this service.
+
+Owner approval and durable import reject selected-revision and pointer-version
+views; those require a separate qualified provenance design. Their authority
+transactions set local ten-second lock and statement deadlines before acquiring
+locks. The historical metadata importer keeps its previous default behavior.
+Public authorized presence queries, provider adapters, automatic cleanup
+scheduling and reviewed request/response examples remain separate work.

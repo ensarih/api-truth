@@ -212,7 +212,8 @@ export const createFieldPresenceOwnerPolicyStore=(pool:Pool,optionsInput:FieldPr
         }
         return Object.freeze({status:"approved",policyId:binding.policyId,ownerPolicyRevision:policy.ownerPolicyRevision,
           policyFingerprint:compiled.fingerprint,enabled:true as const});
-      },{configActivationCheckpoint:policy.configActivationCheckpoint,additionalScopeIds:[binding.ownerAccessScopeId]});}
+      },{configActivationCheckpoint:policy.configActivationCheckpoint,additionalScopeIds:[binding.ownerAccessScopeId],
+        requireUnqualifiedPin:true,boundedTransaction:true});}
       catch(error){return mapTransactionError(error);}
     },
     async disable(credential:unknown,input:unknown):Promise<Readonly<{status:"disabled";policyId:string;ownerPolicyRevision:string;enabled:false}>>{

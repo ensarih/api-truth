@@ -1,5 +1,5 @@
 import {readFile} from "node:fs/promises";
-import {afterEach, beforeEach, expect, test} from "vitest";
+import {afterEach, beforeEach, expect, test, vi} from "vitest";
 import {snapshotContentSha256, snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
 import {createAccessPolicyStore} from "../../packages/catalog/src/index.js";
 import {applyEnvironmentMigrations, createEnvironmentRepository} from "../../packages/environment/src/index.js";
@@ -8,6 +8,7 @@ import {withAuthorizedObservationPin} from "../../packages/observations/src/stor
 import {applyObservationMigrations, createObservationStore} from "../../packages/observations/src/index.js";
 import {applyOpenApiMigrations} from "../../packages/openapi/src/index.js";
 import {applyOrchestrationMigrations, createOrchestrationRepository} from "../../packages/orchestration/src/index.js";
+import * as queryBoundary from "../../packages/query/src/reader.js";
 import {createQueryReader} from "../../packages/query/src/index.js";
 import {createCatalogTestDatabase, quoteCatalogTestSchema, type CatalogTestDatabase} from "./support/database.js";
 
@@ -368,4 +369,36 @@ test("owner grant revocation waits for the pinned transaction and takes effect o
   await expect(withAuthorizedObservationPin(database.pool, schema, database.schema,
     {tenantId, principalId, capabilities: ["observations.policy.manage"]}, pin, async () => "unexpected",
     {additionalScopeIds: ["owner-policy-read"]})).rejects.toMatchObject({code: "OBSERVATION_NOT_AUTHORIZED"});
+});
+
+
+test("durable transactions reject qualifier-bearing pins before their callback", async () => {
+  const reader=createQueryReader(database.pool,{schema:database.schema});
+  const selected=await reader.readContract({tenantId,principalId},{version:"1",tenantId,repositoryId,serviceId,
+    selector:{kind:"environment",environment,expectedCheckpointVersion:pin.checkpointVersion}});
+  if(selected.status!=="resolved")throw new Error("Expected current fixture pin");
+  const operation=vi.fn(async()=>"must-not-write");
+  const constraints={requireUnqualifiedPin:true,additionalScopeIds:[]};
+  for(const qualifier of [{selectedRevision:"f".repeat(40)},{pointerVersion:"1"}]){
+    const intercepted=vi.spyOn(queryBoundary,"readQueryContractWithClient").mockResolvedValue({
+      ...selected,pin:{...selected.pin,...qualifier}});
+    try{
+      await expect(withAuthorizedObservationPin(database.pool,quoteCatalogTestSchema(database.schema),database.schema,
+        {tenantId,principalId,capabilities:["observations.presence.import"]},pin,operation,constraints))
+        .rejects.toMatchObject({code:"OBSERVATION_STALE_PIN"});
+      expect(operation).not.toHaveBeenCalled();
+    }finally{intercepted.mockRestore();}
+  }
+});
+
+
+test("bounded policy transactions apply local lock deadlines before authority work",async()=>{
+  const result=await withAuthorizedObservationPin(database.pool,quoteCatalogTestSchema(database.schema),database.schema,
+    {tenantId,principalId,capabilities:["observations.presence.import"]},pin,async(client)=>{
+      const settings=await client.query("SELECT current_setting('lock_timeout') AS lock_timeout, current_setting('statement_timeout') AS statement_timeout");
+      return settings.rows[0];
+    },{boundedTransaction:true,requireUnqualifiedPin:true});
+  expect(result.lock_timeout).toBe("10s");
+  // The query reader may tighten the remaining statement budget, but cannot remove it.
+  expect(result.statement_timeout).not.toBe("0");
 });

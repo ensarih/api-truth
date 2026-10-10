@@ -8,6 +8,7 @@ import {applyObservationMigrations} from "../../packages/observations/src/migrat
 import {createFieldPresenceOwnerPolicyStore,type FieldPresenceOwnerManager} from "../../packages/observations/src/field-presence-owner-store.js";
 import {applyOrchestrationMigrations,createOrchestrationRepository} from "../../packages/orchestration/src/index.js";
 import {applyOpenApiMigrations} from "../../packages/openapi/src/migrations.js";
+import * as queryBoundary from "../../packages/query/src/reader.js";
 import {createQueryReader} from "../../packages/query/src/index.js";
 import {createCatalogTestDatabase,quoteCatalogTestSchema,type CatalogTestDatabase} from "./support/database.js";
 
@@ -221,4 +222,18 @@ test("host owner bindings are detached from later configuration mutations",async
   expect(Object.isFrozen(authorizedBinding)).toBe(true);
   expect((await database.pool.query(`SELECT owner_access_scope_id FROM ${schema()}.observation_field_presence_policy_revisions`)).rows)
     .toEqual([{owner_access_scope_id:ownerAccessScopeId}]);
+});
+
+
+test("owner approval withholds qualified serving evidence before creating a policy",async()=>{
+  const selected=await createQueryReader(database.pool,{schema:database.schema}).readContract(context,
+    {version:"1",tenantId,repositoryId,serviceId,selector:{kind:"environment",environment,expectedCheckpointVersion:pin.checkpointVersion}});
+  if(selected.status!=="resolved")throw new Error("Expected fixture serving pin");
+  const intercepted=vi.spyOn(queryBoundary,"readQueryContractWithClient").mockResolvedValue({
+    ...selected,pin:{...selected.pin,selectedRevision:"f".repeat(40)}});
+  try{
+    await expect(store().approve(ownerCredential,{policy:policy(),expectedOwnerRevision:"0",expectedPin:expectedPin()}))
+      .rejects.toMatchObject({code:"FIELD_PRESENCE_POLICY_STALE"});
+  }finally{intercepted.mockRestore();}
+  expect((await database.pool.query(`SELECT count(*)::int AS count FROM ${schema()}.observation_field_presence_policy_revisions`)).rows[0].count).toBe(0);
 });

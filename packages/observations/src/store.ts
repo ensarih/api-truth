@@ -210,14 +210,17 @@ const authorizePinned = async (client: PoolClient, schema: string, identity: Aut
     {version: "1", tenantId: pin.tenantId, repositoryId: pin.repositoryId,
       serviceId: pin.serviceId, selector: {kind: "environment", environment: pin.environment,
         expectedCheckpointVersion: pin.checkpointVersion}});
-  if (selected.status !== "resolved" || selected.pin.snapshotId !== pin.snapshotId
+  if (selected.status !== "resolved"
+    || constraints.requireUnqualifiedPin === true && (Object.hasOwn(selected.pin,"selectedRevision")
+      || Object.hasOwn(selected.pin,"pointerVersion"))
+    || selected.pin.snapshotId !== pin.snapshotId
     || selected.pin.revision !== pin.revision || selected.pin.configFingerprint !== pin.configFingerprint
     || selected.pin.checkpointVersion !== pin.checkpointVersion)
     throw new ObservationImportError("OBSERVATION_STALE_PIN");
   return Object.freeze({snapshot: selected.snapshot, logAdapterId: configured.logAdapterId});
 };
 
-export type ObservationPinConstraints = Readonly<{configActivationCheckpoint?: string; additionalScopeIds?: readonly string[]}>;
+export type ObservationPinConstraints = Readonly<{boundedTransaction?: true; requireUnqualifiedPin?: boolean; configActivationCheckpoint?: string; additionalScopeIds?: readonly string[]}>;
 
 /** Internal transaction boundary; callers must independently authenticate their capability first. */
 export const withAuthorizedObservationPin = async <T>(pool: Pool, schemaSql: string, schemaName: string,
@@ -227,6 +230,10 @@ export const withAuthorizedObservationPin = async <T>(pool: Pool, schemaSql: str
   const client = await pool.connect().catch(() => {throw new ObservationImportError("OBSERVATION_STORAGE_ERROR");});
   try {
     await client.query("BEGIN");
+    if (constraints.boundedTransaction === true) {
+      await client.query("SET LOCAL statement_timeout='10000ms'");
+      await client.query("SET LOCAL lock_timeout='10000ms'");
+    }
     await client.query(`SET LOCAL search_path TO ${schemaSql}, pg_catalog`);
     const authorized = await authorizePinned(client, schemaName, identity, pin, constraints);
     const result = await operation(client, authorized);

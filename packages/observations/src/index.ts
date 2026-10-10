@@ -21,3 +21,9 @@ export type {FieldPresenceStoragePolicy, CompiledFieldPresenceStoragePolicy,
 export {createFieldPresenceOwnerPolicyStore, FieldPresenceOwnerStoreError} from "./field-presence-owner-store.js";
 export type {FieldPresenceOwnerBinding, FieldPresenceOwnerManager, FieldPresenceOwnerStoreOptions,
   FieldPresenceOwnerStoreErrorCode} from "./field-presence-owner-store.js";
+
+export {createFieldPresenceImportStore,FieldPresenceImportStoreError} from "./field-presence-import-store.js";
+export type {FieldPresenceImportBinding,FieldPresenceImportManager,FieldPresenceImportReadRequest,FieldPresenceImportReadPort,
+  FieldPresenceImportStoreOptions,FieldPresenceImportErrorCode} from "./field-presence-import-store.js";
+export {createFieldPresenceMaintenanceStore,FieldPresenceMaintenanceError} from "./field-presence-maintenance-store.js";
+export type {FieldPresenceMaintenanceManager,FieldPresenceMaintenanceOptions,FieldPresenceMaintenanceErrorCode} from "./field-presence-maintenance-store.js";
