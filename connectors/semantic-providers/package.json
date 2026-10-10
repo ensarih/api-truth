@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@api-truth/ir": "0.0.0",
-    "@api-truth/semantics": "0.7.2"
+    "@api-truth/semantics": "0.7.4"
   }
 }

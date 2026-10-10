@@ -399,3 +399,12 @@ annotations and canonical bigint/version inputs. The cross-surface case in
 `tests/integration/semantic-history.test.ts` uses the actual transactional service
 and PostgreSQL schema to prove shared receipts, exact replay, revocation and stale
 checkpoint withholding. No live provider or model-based test judge is used.
+
+### Private workspace version consistency
+
+`tests/contract/workspace-dependencies.test.ts` verifies every internal dependency
+uses the checked-in workspace version and that manifests, lock entries and local
+links agree. A stale exact version can send a fresh `npm ci` to the public registry
+for an unpublished private package even while tests pass with existing local links.
+Validate dependency changes with a clean archived checkout and `npm ci` followed
+by `npm run check`; do not rely solely on an existing `node_modules` tree.
