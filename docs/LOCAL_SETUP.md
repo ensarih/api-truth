@@ -256,3 +256,37 @@ explicit user action and a configured provider, and remain inferred,
 unreviewed, and non-normative. Current-pin metadata observations expose only
 sanitized records from an explicit import, not raw logs or payload examples.
 The local demos above do not satisfy the D13-S1 gate or authorize a release.
+
+
+### Optional bounded cross-service inference
+
+The host can compose its authorized query reader and configured semantic service:
+
+```ts
+import {createSemanticCorpusService} from "@api-truth/semantics";
+const corpusSemantic = createSemanticCorpusService({corpusReader: query, semanticService});
+const portal = createPortalServer({authenticate, query, corpusSemantic});
+// The MCP host accepts the same corpusSemantic capability.
+```
+
+`query`, `semanticService` and `authenticate` are existing trusted host bindings;
+this fragment supplies no credentials or default principal. Enable configured
+inference only after applying host egress policy. The portal's explicit comparison
+form and MCP's `api_truth_discover_api_corpus` accept environment, task and bounded
+limit, without manual endpoint selection. They compare a keyword shortlist, keep
+service/checkpoint namespaces and remain inferred and non-normative. This is not
+an embedding index and cannot establish that the enterprise lacks a suitable API.
+
+For local validation without model credentials, run:
+
+```sh
+npx vitest run tests/unit/semantic-corpus-service.test.ts tests/unit/portal-corpus-discovery.test.ts tests/contract/mcp-corpus-discovery.test.ts
+npx vitest run --config vitest.integration.config.ts tests/integration/corpus-operation-search.test.ts --maxWorkers=1
+npm run test:browser
+```
+
+The integration command requires the already-running disposable PostgreSQL test
+environment. Provider ports are synthetic; tests never send source context to live
+models. The database-backed composition covers OpenAI/Gemini/Claude bindings and
+real portal HTTP/MCP protocol calls. Browser checks cover safe text rendering,
+pinned contract loading, incomplete coverage and suppression of stale answers.

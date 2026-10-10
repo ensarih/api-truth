@@ -45,7 +45,7 @@ provider or enterprise pilot claim.
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries, optional portal/MCP presentation and bounded retention maintenance are implemented; live adapters, durable distributed scheduling and reviewed samples remain separate gates. Bounded in-process cleanup scheduling is implemented. |
-| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, bounded per-service semantic shortlist comparison, provider binding and private history metadata are implemented; a semantic corpus index, durable review and live evaluation remain. |
+| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, bounded per-service semantic shortlist comparison with optional portal/MCP access, provider binding and private history metadata are implemented; a semantic corpus index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
@@ -1454,3 +1454,28 @@ Validation: independent implementation review, locked clean install/typecheck,
 fifteen corpus database cases cover all three synthetic configured providers,
 cross-service endpoint-ID collisions, mid-call grant revocation, no-context
 shortlists, disabled inference, inert inputs and grounded output validation.
+
+
+### Portal/MCP semantic corpus comparison — P4 (2026-10-10)
+
+Portal 0.4.0 and MCP 0.3.0 expose optional host-bound cross-service comparison.
+The HTTP route and MCP tool accept only environment, task and a required bounded
+limit. Host authentication supplies identity; strict parsing and fixed errors
+withhold raw provider failures. Capability absence hides the form/tool and leaves
+the route unavailable. External inference is explicitly non-idempotent/open-world.
+
+The browser action is explicit, renders provider text safely, separates service
+namespaces and pins, labels incomplete/truncated shortlists and partial semantic
+context, and discards late replies after input changes. Suggested contract loads
+reauthorize the exact checkpoint and withhold mismatched source pins. Empty keyword
+shortlists never imply enterprise-wide API absence. Semantics 0.7.1 additionally
+requires actual discovery context coverage and an incomplete-shortlist reason;
+malformed ports cannot silently omit those disclosures.
+
+Validation: independent review, locked clean install/typecheck, 1,726 offline
+tests, 459 PostgreSQL tests and eleven real-browser checks pass. Real database
+composition exercises both portal HTTP and MCP protocol calls using the configured
+semantic service. Red/green regressions establish the optional route/tool and
+required coverage gates. The browser rejects malformed group/candidate namespaces,
+checks exact pins, renders HTML-shaped prose as text and suppresses late answers.
+A corpus embedding index, durable review and live model evaluation remain open.

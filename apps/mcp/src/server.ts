@@ -4,6 +4,7 @@ import type { QueryReader, QueryObservationReader, QueryOperationReader, QueryCo
   QuerySelection, QuerySelector } from "@api-truth/query";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
+import type { createSemanticCorpusService } from "../../../packages/semantics/src/corpus-service.js";
 import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
 import type {createFieldPresenceQueryStore} from "../../../packages/observations/src/field-presence-query-store.js";
 import * as z from "zod/v4";
@@ -16,6 +17,7 @@ export type ApiTruthMcpOptions = Readonly<{
   authenticate(context: ServerContext): Promise<ApiTruthMcpPrincipal | undefined>;
   maxOutputBytes?: number;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
+  corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
 }>;
@@ -93,6 +95,9 @@ const corpusCandidateSchema = z.object({environment: boundedIdentifier,
   intentQuery: z.string().min(1).max(512).regex(/^[^\u0000-\u001f\u007f]+$/)
     .refine(isSemanticIntentQuerySafe),
   maxResults: z.number().int().min(1).max(20).default(20)}).strict();
+const corpusDiscoverySchema=z.object({environment:boundedIdentifier,
+  intentQuery:z.string().min(1).max(512).regex(/^[^\u0000-\u001f\u007f]+$/)
+    .refine(isSemanticIntentQuerySafe),limit:z.number().int().min(1).max(16)}).strict();
 const syntheticExampleSchema = z.object({repositoryId: boundedIdentifier,serviceId: boundedIdentifier,
   environment: boundedIdentifier,expectedCheckpointVersion: databaseVersion,
   policyId: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)}).strict();
@@ -148,6 +153,9 @@ const mapQueryError = (error: unknown): PublicError => {
     case "SEMANTIC_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
     case "SEMANTIC_STALE_CONTEXT": return "STALE_SELECTION";
     case "SEMANTIC_INVALID_REQUEST": return "INVALID_REQUEST";
+    case "SEMANTIC_CORPUS_INVALID_REQUEST": return "INVALID_REQUEST";
+    case "SEMANTIC_CORPUS_STALE_CONTEXT": return "STALE_SELECTION";
+    case "SEMANTIC_CORPUS_UNAVAILABLE": return "QUERY_UNAVAILABLE";
     case "EXAMPLE_NOT_FOUND_OR_DENIED": return "NOT_FOUND_OR_DENIED";
     case "EXAMPLE_STALE_CONTEXT": return "STALE_SELECTION";
     case "EXAMPLE_INVALID_REQUEST": return "INVALID_REQUEST";
@@ -309,6 +317,17 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
     }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
       searchCorpus(principal, {tenantId: principal.tenantId, environment: args.environment,
         intentQuery: args.intentQuery, limit: args.maxResults})));
+  }
+
+  if(typeof options.corpusSemantic?.discoverAcrossServices==="function"){
+    const discoverCorpus=options.corpusSemantic.discoverAcrossServices.bind(options.corpusSemantic);
+    server.registerTool("api_truth_discover_api_corpus",{
+      title:"Find APIs across services for an intent",
+      description:"Searches bounded keyword candidates in authorized services for one environment, then sends eligible selected context and the task text to the host-configured inference provider. Results are per-service inferred, unreviewed and non-normative; they do not establish API-wide absence.",
+      inputSchema:corpusDiscoverySchema,outputSchema,
+      annotations:{...readOnlyAnnotations,idempotentHint:false,openWorldHint:true},
+    },async(args,context)=>execute(options,maxOutputBytes,context,async principal=>
+      discoverCorpus(principal,{environment:args.environment,intentQuery:args.intentQuery,limit:args.limit})));
   }
 
   if (typeof options.query.readMetadataObservations === "function") {

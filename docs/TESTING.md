@@ -34,7 +34,7 @@ No database, application server, API key, integration environment, or Java analy
 |---|---|---|
 | Unit | Function outputs, failure behavior, state transitions, pure schema/identity logic | Native runtime; no network or Docker |
 | Contract | IR/event schemas, plugin output, and linked MCP client/server tool behavior | Synthetic fixtures and local protocol transport; no API keys |
-| Integration | PostgreSQL connectivity/isolation; D06 snapshots/access; D08 events/jobs/reconciliation and selected local Git source materialization; D09 serving lifecycle; D10 publication/revocation/round trip; D11 portal/MCP/export pins; D12 metadata imports and current-pin reads; P4 semantic authorization and explicit-environment corpus search | Isolated local PostgreSQL plus real implemented components |
+| Integration | PostgreSQL connectivity/isolation; D06 snapshots/access; D08 events/jobs/reconciliation and selected local Git source materialization; D09 serving lifecycle; D10 publication/revocation/round trip; D11 portal/MCP/export pins; D12 metadata imports and current-pin reads; P4 semantic authorization, explicit-environment corpus search and portal/MCP corpus inference composition | Isolated local PostgreSQL plus real implemented components |
 | End-to-end | Explicit local source/document profile → D08 analyzer host → catalog/serving state → OpenAPI/portal/MCP reads; combined Phase 1 scenario | Local application and synthetic fixtures; live provider, protected pilot, and complete Phase 1 scenario remain open |
 | Java | Java extractor behavior and common plugin conformance | Pinned JDK/build wrapper when the Java adapter is added |
 

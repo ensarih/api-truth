@@ -1,4 +1,8 @@
 import {readFile} from "node:fs/promises";
+import {once} from "node:events";
+import {Client,InMemoryTransport} from "@modelcontextprotocol/client";
+import {createPortalServer} from "../../apps/portal/src/server.js";
+import {createApiTruthMcpServer} from "../../apps/mcp/src/server.js";
 import {afterEach, beforeEach, expect, test,vi} from "vitest";
 import {parseContractSnapshot,type ContractSnapshot,type InstallationConfig} from "../../packages/ir/src/index.js";
 import {deriveEndpointIdentity} from "../../packages/ir/src/identity.js";
@@ -368,4 +372,37 @@ test("semantic corpus preserves disabled inference for each service without prov
   const result=await discovery.discoverAcrossServices(context(),{environment,intentQuery:"stored",limit:16});
   expect(result).toMatchObject({status:"groups",groups:[{result:{status:"disabled"}},{result:{status:"disabled"}}]});
   expect(factory).not.toHaveBeenCalled();
+});
+
+
+test.each(["portal","mcp"] as const)("%s: authenticated corpus inference composes real query and semantic services",async surface=>{
+  await database.cleanup();await setup(0,undefined,false,{provider:"claude",sharedEndpointId:"endpoint-shared"});
+  const factory=vi.fn(async()=>async(request:SemanticProviderRequest)=>corpusProviderAnswer(request));
+  const query=createQueryReader(database.pool,{schema:database.schema});
+  const corpusSemantic=createSemanticCorpusService({corpusReader:query,
+    semanticService:createSemanticService(database.pool,{schema:database.schema,providerFactory:factory})});
+  const input={environment,intentQuery:"stored",limit:16};let result:unknown;
+  if(surface==="portal"){
+    const server=createPortalServer({query,corpusSemantic,authenticate:async request=>
+      request.headers.authorization==="Bearer synthetic-corpus"?context():undefined});
+    server.listen(0,"127.0.0.1");await once(server,"listening");
+    try{const address=server.address();if(!address||typeof address==="string")throw Error("missing port");
+      const response=await fetch(`http://127.0.0.1:${address.port}/api/corpus-discover`,{method:"POST",
+        headers:{authorization:"Bearer synthetic-corpus","content-type":"application/json"},body:JSON.stringify(input)});
+      expect(response.status).toBe(200);result=await response.json();
+    }finally{server.closeAllConnections();server.close();await once(server,"close");}
+  }else{
+    const server=createApiTruthMcpServer({query,corpusSemantic,authenticate:async()=>context()});
+    const client=new Client({name:"synthetic-corpus",version:"1"});const [ct,st]=InMemoryTransport.createLinkedPair();
+    try{await server.connect(st);await client.connect(ct);
+      const response=await client.callTool({name:"api_truth_discover_api_corpus",arguments:input});
+      expect(response.isError).not.toBe(true);result=(response.structuredContent as {data:unknown}).data;
+    }finally{await Promise.allSettled([client.close(),server.close()]);}
+  }
+  expect(result).toMatchObject({status:"groups",environment,scope:"keyword_candidates",normative:false,
+    groups:[{repositoryId:"commerce",serviceId:"orders",pin:{checkpointVersion:"7"},result:{status:"suggestions",
+      contextCoverage:{status:"complete"},provenance:{provider:"claude"}}},
+      {repositoryId:"finance",serviceId:"invoices",pin:{checkpointVersion:"8"},result:{status:"suggestions",
+        contextCoverage:{status:"complete"},provenance:{provider:"claude"}}}]});
+  expect(factory).toHaveBeenCalledTimes(2);expect(JSON.stringify(result)).not.toContain("secrets");
 });

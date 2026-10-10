@@ -73,3 +73,21 @@ explicit. Absence in a sample does not establish that a field is optional.
 Without a configured presence reader, the panel is hidden and its route returns
 404. This surface does not expose owner writes, read bodies or implement a live
 log provider. Browser coverage is in `tests/browser/field-presence.spec.ts`.
+
+## Cross-service semantic comparison
+
+Configure `corpusSemantic: {discoverAcrossServices}` from the public semantic
+corpus factory to enable **Compare API candidates for a task** and
+`POST /api/corpus-discover`. The exact JSON body contains `environment`,
+`intentQuery` and a required `limit` of 1–16. The existing JSON body/response
+bounds, strict parsing and host authentication apply. The route is unavailable
+when the capability is absent; it cannot accept identity, provider or credentials.
+
+This explicit action first builds an authorized keyword shortlist and compares
+eligible context within at most four services. The browser shows each namespace
+and checkpoint, inference labels, incomplete/truncated shortlist coverage and
+partial analyzed context. It discards late answers after inputs change and uses
+text rendering for provider prose. **Load suggested pinned contract** reauthorizes
+that exact checkpoint and checks the returned source pin before displaying it.
+A changed pin is withheld. Empty shortlist text does not assert enterprise-wide
+API absence. This adds no embedding index or automatic provider call on page load.

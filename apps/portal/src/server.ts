@@ -5,9 +5,11 @@ import {validateOperationSearchOptions, type QueryReader, type QueryObservationR
 import { parseStrictJson } from "../../../packages/ir/src/strict-json.js";
 import {isSemanticIntentQuerySafe} from "../../../packages/semantics/src/egress.js";
 import type { createSemanticService } from "../../../packages/semantics/src/service.js";
+import type { createSemanticCorpusService } from "../../../packages/semantics/src/corpus-service.js";
 import type { createSyntheticExampleService } from "../../../packages/observations/src/example-service.js";
 import type {createFieldPresenceQueryStore} from "../../../packages/observations/src/field-presence-query-store.js";
 import {fieldPresenceScript} from "./field-presence-browser.js";
+import {corpusDiscoveryMarkup,corpusDiscoveryScript} from "./corpus-discovery-browser.js";
 
 export type PortalPrincipal = Readonly<{ tenantId: string; principalId: string }>;
 export type PortalOptions = Readonly<{
@@ -15,6 +17,7 @@ export type PortalOptions = Readonly<{
   query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">
     & Partial<QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader>;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
+  corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
 }>;
@@ -26,7 +29,7 @@ const page = `<!doctype html>
 <section><h2>Find a service</h2><form id="search"><label>Service <input name="query" maxlength="128" autocomplete="off"></label>
 <label>Environment <input name="environment" maxlength="512" placeholder="e.g. uat"></label>
 <button type="submit">Search</button></form><p id="search-status" role="status"></p><ul id="results"></ul></section>
-<section id="corpus-section" hidden><h2>Find API candidates across services</h2><p>Search existing authorized APIs by keyword in one current environment. Results are lexical candidates, not a guarantee that an API fulfills your task.</p><form id="corpus"><label>Environment <input name="environment" maxlength="512" required placeholder="e.g. uat"></label><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Search across services</button></form><p id="corpus-status" role="status"></p><ul id="corpus-results"></ul></section>
+${corpusDiscoveryMarkup}<section id="corpus-section" hidden><h2>Find API candidates across services</h2><p>Search existing authorized APIs by keyword in one current environment. Results are lexical candidates, not a guarantee that an API fulfills your task.</p><form id="corpus"><label>Environment <input name="environment" maxlength="512" required placeholder="e.g. uat"></label><label>Task or intent<textarea name="intentQuery" maxlength="512" required></textarea></label><button type="submit">Search across services</button></form><p id="corpus-status" role="status"></p><ul id="corpus-results"></ul></section>
 <section><h2>View a contract</h2><form id="contract"><label>Repository <input name="repositoryId" maxlength="512" required></label>
 <label>Service <input name="serviceId" maxlength="512" required></label><label>Selection
 <select name="kind"><option value="environment">Environment</option><option value="branch">Branch</option>
@@ -118,7 +121,7 @@ compare.addEventListener('submit',async event=>{event.preventDefault();compareSt
   try{const body=await fetchJson('/api/compare?'+params);compareStatus.textContent=body.status==='compared'?'Comparison ready.':
       'Comparison unavailable: '+body.beforeStatus+' / '+body.afterStatus+'.';
     if(body.status==='compared')changes.textContent=JSON.stringify(body.differences,null,2);}
-  catch{compareStatus.textContent='The comparison is unavailable.';}});`+fieldPresenceScript;
+  catch{compareStatus.textContent='The comparison is unavailable.';}});`+fieldPresenceScript+corpusDiscoveryScript;
 const style = `:root{font-family:system-ui,sans-serif;color:#17212b;background:#f7f9fb}main{max-width:54rem;margin:3rem auto;padding:1.5rem;background:white;border:1px solid #dce3e9;border-radius:.75rem}section{margin-top:2rem;border-top:1px solid #dce3e9;padding-top:1rem}form{display:flex;flex-wrap:wrap;gap:1rem;align-items:end}form[hidden]{display:none}label{display:grid;gap:.35rem}input,select,button,textarea{font:inherit;padding:.55rem .7rem}button{cursor:pointer}li{padding:.45rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}#download{display:inline-block;margin:1rem 0}#download[hidden]{display:none}`;
 
 const MAX_JSON_BYTES = 1_000_000;
@@ -153,6 +156,9 @@ const error = (response: ServerResponse, failure: unknown): void => {
   else if (code === "SEMANTIC_NOT_FOUND_OR_DENIED") json(response, 404, { error: "NOT_FOUND" });
   else if (code === "SEMANTIC_INVALID_REQUEST") json(response, 400, { error: "INVALID_REQUEST" });
   else if (code === "SEMANTIC_STORAGE_ERROR") json(response, 503, { error: "SEMANTIC_UNAVAILABLE" });
+  else if (code === "SEMANTIC_CORPUS_INVALID_REQUEST") json(response, 400, {error:"INVALID_REQUEST"});
+  else if (code === "SEMANTIC_CORPUS_STALE_CONTEXT") json(response, 409, {error:"STALE_SELECTION"});
+  else if (code === "SEMANTIC_CORPUS_UNAVAILABLE") json(response, 503, {error:"SEMANTIC_UNAVAILABLE"});
   else if (code === "EXAMPLE_NOT_FOUND_OR_DENIED") json(response, 404, { error: "NOT_FOUND" });
   else if (code === "EXAMPLE_STALE_CONTEXT") json(response, 409, { error: "STALE_SELECTION" });
   else if (code === "EXAMPLE_INVALID_REQUEST") json(response, 400, { error: "INVALID_REQUEST" });
@@ -340,6 +346,12 @@ const parseCorpusBody=(input:unknown):{environment:string;intentQuery:string;lim
     ...(Object.hasOwn(body,"limit")?{limit:body.limit}:{})});
   return options?{environment:body.environment,intentQuery:options.intentQuery,limit:options.limit??20}:undefined;
 };
+const parseCorpusDiscoveryBody=(input:unknown):{environment:string;intentQuery:string;limit:number}|undefined=>{
+  if(!input||typeof input!=="object"||Array.isArray(input)||Object.getPrototypeOf(input)!==Object.prototype
+    ||Object.keys(input).sort().join(",")!=="environment,intentQuery,limit")return undefined;
+  const result=parseCorpusBody(input);
+  return result&&result.limit>=1&&result.limit<=16?result:undefined;
+};
 const parseExampleBody=(input:unknown,principal:PortalPrincipal):
   {selection:QuerySelection;policyId:string}|undefined=>{
   if(!input||typeof input!=="object"||Array.isArray(input)
@@ -367,6 +379,8 @@ export const createPortalServer = (options: PortalOptions): Server => {
     ? options.examples.generate.bind(options.examples):undefined;
   const readPresence=typeof options.presence?.readForPrincipal==="function"
     ? options.presence.readForPrincipal.bind(options.presence):undefined;
+  const discoverCorpus=typeof options.corpusSemantic?.discoverAcrossServices==="function"
+    ? options.corpusSemantic.discoverAcrossServices.bind(options.corpusSemantic):undefined;
   return createServer(async (request, response) => {
     let principal: PortalPrincipal | undefined;
     try { principal = await options.authenticate(request); } catch { /* Fail closed. */ }
@@ -374,7 +388,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
       (request.method === "POST" ? jsonClose : json)(response, 401, { error: "NOT_AUTHORIZED" }); return;
     }
     if (!request.url || request.url.length > 2048 || (request.method !== "GET"
-      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/examples"]
+      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples"]
         .includes(request.url.split("?", 1)[0]!)))) {
       (request.method === "POST" ? jsonClose : json)(response, 400, { error: "INVALID_REQUEST" }); return;
     }
@@ -386,6 +400,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
     if (url.pathname === "/app.js") { send(response, 200,
       script.replace("__OBSERVATION_READER_ENABLED__", String(typeof options.query.readMetadataObservations === "function"))
         .replace("__SEMANTIC_ENABLED__", String(semanticDiscover !== undefined))
+        .replace("__CORPUS_DISCOVERY_ENABLED__",String(discoverCorpus !== undefined))
         .replace("__CANDIDATE_ENABLED__", String(typeof options.query.readOperationCandidates === "function"))
         .replace("__CORPUS_ENABLED__", String(typeof options.query.searchOperationCandidatesAcrossServices === "function"))
         .replace("__EXAMPLES_ENABLED__", String(generateExample !== undefined))
@@ -393,12 +408,13 @@ export const createPortalServer = (options: PortalOptions): Server => {
       "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {
-      if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/examples"].includes(url.pathname)) {
+      if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples"].includes(url.pathname)) {
         if (url.search.length > 0) { jsonClose(response, 400, {error: "INVALID_REQUEST"}); return; }
         const candidate = url.pathname === "/api/candidates";
         const corpus = url.pathname === "/api/corpus-candidates";
+        const corpusDiscovery = url.pathname === "/api/corpus-discover";
         const example=url.pathname === "/api/examples";
-        if (request.method !== "POST" || (example?generateExample===undefined:candidate
+        if (request.method !== "POST" || (corpusDiscovery?discoverCorpus===undefined:example?generateExample===undefined:candidate
           ? typeof options.query.readOperationCandidates !== "function"
           : corpus?typeof options.query.searchOperationCandidatesAcrossServices !== "function"
             : semanticDiscover === undefined)) {
@@ -433,6 +449,11 @@ export const createPortalServer = (options: PortalOptions): Server => {
             json(response,409,{error:"STALE_SELECTION"});return;
           }
           json(response,200,found);return;
+        }
+        if(corpusDiscovery){
+          const requestData=parseCorpusDiscoveryBody(body);
+          if(!requestData){json(response,400,{error:"INVALID_REQUEST"});return;}
+          json(response,200,await discoverCorpus!(principal,requestData));return;
         }
         if (candidate) {
           const requestData = parseCandidateBody(body, principal);

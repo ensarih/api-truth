@@ -43,6 +43,7 @@ const semanticResult=(serviceId:string,checkpoint:string):Extract<SemanticAnalys
   const selectedSnapshot=makeSnapshot(serviceId),selected=selection(selectedSnapshot.source.repository_id,serviceId,checkpoint);
   return {status:"suggestions",suggestions:[{endpointId:endpoint.endpoint_id,intent:"Read order",summary:"Candidate API",evidenceIds:[evidenceId]}],
     verification:"inferred",review:"unreviewed",normative:false,
+    contextCoverage:{status:"complete",requestedEndpointIds:[endpoint.endpoint_id],analyzedEndpointIds:[endpoint.endpoint_id],omittedEndpointIds:[]},
     provenance:{provider:"openai",model:"model-test",promptVersion:"semantic-discovery-1",selector:selected.selector,
       pin:pinFor(selectedSnapshot,checkpoint)}};
 };
@@ -137,6 +138,7 @@ test("maps malformed provider values and provider exceptions to a fixed error",a
   await expect(ports.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
   const malformed=setup(candidatesResult([candidate("commerce","orders","7")]));
   malformed.discover.mockResolvedValue({status:"suggestions",suggestions:[],verification:"inferred",review:"unreviewed",normative:false,
+    contextCoverage:{status:"complete",requestedEndpointIds:[endpoint.endpoint_id],analyzedEndpointIds:[endpoint.endpoint_id],omittedEndpointIds:[]},
     provenance:{provider:"openai",model:"model-test",promptVersion:"semantic-discovery-1",
       selector:{kind:"environment",environment:"uat"},pin:pinFor(makeSnapshot("orders"),"7")}} as SemanticAnalysisResult);
   await expect(malformed.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
@@ -169,4 +171,18 @@ test("rejects cross-endpoint citations and incomplete coverage before returning 
     ports.discover.mockResolvedValue({...semanticResult("orders","7"),...change} as SemanticAnalysisResult);
     await expect(ports.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
   }
+});
+
+
+test("withholds results that omit semantic context coverage or incomplete shortlist reason",async()=>{
+  const ports=setup(candidatesResult([candidate("commerce","orders","7")]));
+  const {contextCoverage: omitted,...result}=semanticResult("orders","7");
+  ports.discover.mockResolvedValue(result);
+  await expect(ports.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
+});
+
+test("rejects an incomplete keyword shortlist without a reason before inference",async()=>{
+  const incomplete=setup(candidatesResult([candidate("commerce","orders","7")],{complete:false}));
+  await expect(incomplete.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:"SEMANTIC_CORPUS_UNAVAILABLE"});
+  expect(incomplete.discover).not.toHaveBeenCalled();
 });

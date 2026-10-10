@@ -60,3 +60,20 @@ Output contains only owner-selected present/absent states, current full pin,
 policy/source provenance and truncation. Observations are explicitly non-normative
 and do not establish requiredness or validation. Existing output limits and fixed
 errors apply. Owner policy, import and cleanup writes remain unavailable.
+
+## Cross-service semantic comparison
+
+Configure `corpusSemantic: {discoverAcrossServices}` to register the optional
+`api_truth_discover_api_corpus` tool. Its strict input contains only `environment`,
+`intentQuery` and required `limit` of 1–16. Host authentication supplies identity;
+the tool cannot select tenant, provider, model, credentials or source pins.
+
+The semantic corpus factory first retrieves authorized keyword candidates, then
+compares eligible context within at most four service groups. Each group preserves
+its namespace, checkpoint pin, cited evidence, analyzed context and inferred,
+unreviewed, non-normative result. Shortlist coverage is separate from semantic
+context coverage. A complete empty keyword shortlist does not prove API absence.
+Changed authority or shortlist discards the complete response. The tool has
+`readOnlyHint: true`, `idempotentHint: false`, and `openWorldHint: true` because
+it may call the host-configured inference provider. Fixed error mapping and the
+existing output bound apply; the tool is absent without host configuration.

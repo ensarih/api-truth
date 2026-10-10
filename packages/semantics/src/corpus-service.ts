@@ -129,7 +129,8 @@ const parseSearch=(input:unknown,context:Context,options:Options):CorpusOperatio
     ||result.environment!==options.environment||typeof result.complete!=="boolean"||typeof result.truncated!=="boolean"
     ||!Array.isArray(result.candidates)||isProxy(result.candidates)||result.candidates.length<1||result.candidates.length>options.limit
     ||Object.hasOwn(result,"incompleteReason")&&!(["incomplete_scan","scan_limit"] as unknown[]).includes(result.incompleteReason)
-    ||result.complete===true&&Object.hasOwn(result,"incompleteReason"))return undefined;
+    ||result.complete===true&&Object.hasOwn(result,"incompleteReason")
+    ||result.complete===false&&!Object.hasOwn(result,"incompleteReason"))return undefined;
   const candidates:CorpusOperationCandidate[]=[];
   for(const item of result.candidates){const candidate=validCandidate(item,context,options.environment);if(!candidate)return undefined;candidates.push(candidate);}
   return Object.freeze({...result,candidates:Object.freeze(candidates)}) as CorpusOperationSearchResult;
@@ -145,7 +146,7 @@ const groupCandidates=(candidates:readonly CorpusOperationCandidate[]):Group[]=>
     selector:items[0]!.selector,pin:items[0]!.pin,candidates:Object.freeze(items)}));
 };
 const validCoverage=(input:unknown,group:Group):boolean=>{
-  if(input===undefined)return true;
+  if(input===undefined)return false;
   const value=fields(input,["status","requestedEndpointIds","analyzedEndpointIds","omittedEndpointIds"]);
   if(!value||!(value.status==="complete"||value.status==="partial"))return false;
   const requested=value.requestedEndpointIds,analyzed=value.analyzedEndpointIds,omitted=value.omittedEndpointIds;
