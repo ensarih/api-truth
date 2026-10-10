@@ -37,14 +37,14 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A separate bounded Swagger document-value correspondence port is implemented; runtime document-loading attestation, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
+| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected document-load signing, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
 | NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
-| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import and bounded retention maintenance are implemented; authorized presence queries, live adapters, cleanup scheduling and durable reviewed samples remain separate gates. |
+| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries and bounded retention maintenance are implemented; portal/MCP presentation, live adapters, cleanup scheduling and durable reviewed samples remain separate gates. |
 | P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
@@ -1258,7 +1258,7 @@ scheduling, reviewed request/response samples and downstream presentation remain
 open. This slice does not infer required fields, promote observations to normative
 contracts or complete P3.
 
-#### Next P3 acceptance: authorized presence reads
+#### Authorized presence read acceptance
 
 - Authenticate an independent `observations.presence.read` capability before any
   database access. Use detached host scope bindings with independent owner/read
@@ -1274,3 +1274,43 @@ contracts or complete P3.
   promotion. Cover current serving changes, opt-out, generation replacement,
   expiry, grant revocation, scope isolation and malformed requests with PostgreSQL
   tests before exposing the read service to portal/MCP.
+
+### Authorized value-free presence queries — P3 (2026-10-10)
+
+Observations 0.12.0 adds an independently authenticated read capability with
+detached host bindings and current locked owner/read grants. The transaction
+rechecks the unqualified serving pin, configuration, enabled immutable policy,
+schema paths, source adapter and exact confirmed metadata/import lineage. Only
+the current policy generation and serving checkpoint can appear in bounded output;
+expiry uses the database clock and reads do not renew TTL or write records.
+
+Independent review found an incorrect equality between configuration activation
+epoch and environment serving checkpoint. These counters now remain independent:
+policy activation matches the configuration epoch, while observation imports match
+the current serving checkpoint. Additional checks withhold ambiguous UUIDs,
+unsupported source-window precision and malformed stored lineage. Results retain
+full scope/pin, source digest, policy fingerprint and exact parent provenance, and
+explicitly mark field presence as non-normative. No raw body or value is returned.
+
+A locked clean install passes 1,650 offline tests and 444 PostgreSQL tests. The
+18 focused query cases include real database expiry, independent serving/config
+epochs and a grant-lock/revocation race; four offline boundary cases cover
+authorization deadlines, inert identities, detached bindings and fixed errors.
+Restoring the erroneous counter equality in an isolated test copy reproduces the
+stale-pin failure; the reviewed implementation passes the same regression.
+
+#### Next P3 acceptance: portal/MCP presence presentation
+
+- Bind independently authenticated presence-reader credentials to the same
+  tenant/principal authenticated by the transport before accessing storage;
+  supplied identities alone cannot authorize a read.
+- Derive tenant from the host principal. Require the exact current environment
+  pin, policy generation and explicit result limit; reject qualified views and
+  caller-supplied credentials, access scopes or capabilities.
+- Expose only value-free observed states with full provenance and explicit
+  non-normative/truncation labels. Recheck displayed selection and suppress stale
+  responses when users change the selected service, environment or policy.
+- Cover denied/mismatched principals, stale pins, output limits, malformed input,
+  transport error sanitization and stale browser responses before closing this
+  gate. Owner writes, live source adapters, scheduled cleanup and reviewed samples
+  remain separate work.

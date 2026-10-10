@@ -272,5 +272,41 @@ Owner approval and durable import reject selected-revision and pointer-version
 views; those require a separate qualified provenance design. Their authority
 transactions set local ten-second lock and statement deadlines before acquiring
 locks. The historical metadata importer keeps its previous default behavior.
-Public authorized presence queries, provider adapters, automatic cleanup
-scheduling and reviewed request/response examples remain separate work.
+Provider adapters, automatic cleanup scheduling and reviewed request/response
+examples remain separate work.
+
+## Authorized value-free presence queries
+
+`createFieldPresenceQueryStore(pool, {schema, bindings, authorizeManager})` exposes
+`read(credential, {policyId, ownerPolicyRevision, expectedPin, limit})`.
+`expectedPin` contains the full tenant/repository/service/environment tuple,
+snapshot, revision, configuration fingerprint and serving checkpoint. Each
+immutable host binding selects independent owner and read access scopes.
+Authentication must establish the matching tenant/principal and
+`observations.presence.read` capability before connecting to storage. Caller
+identities and access-scope names are not accepted. Authorization has a ten-second
+deadline; late callback results are ignored.
+
+The read transaction locks the current configuration, environment serving
+checkpoint and catalog/source/owner/read grants before the enabled policy head.
+Configuration activation epochs and serving checkpoint versions are independent:
+the policy must match the current activation epoch, while imported observations
+must match the exact requested serving checkpoint. Selected-revision and
+pointer-version views are withheld. Supported schema paths are checked again
+against the current authorized snapshot without accessing raw bodies.
+
+Only the current enabled policy generation and exact confirmed metadata parents
+are returned. The stored source ID must match the configured log adapter;
+immutable import lineage and source digest are checked. This read does not call
+a live provider or independently prove body-to-parent correspondence. Ambiguous
+record UUIDs across imports are withheld.
+Source windows must remain finite and millisecond aligned; the import timestamp
+retains PostgreSQL's microsecond precision in its UTC text representation. Expiry
+is filtered with the database clock. Reads do not write data or renew retention.
+
+The frozen result explicitly marks observed field presence as non-normative and
+includes the full pin, policy fingerprint/generation, source provenance, exact
+parent UUIDs and selected `present`/`absent` states. The explicit limit is 1–100;
+one extra row detects truncation without returning an unbounded history. Values,
+bodies and inferred requiredness are absent. Errors contain fixed codes only.
+Portal/MCP presentation and live provider adapters remain separate gates.
