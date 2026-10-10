@@ -35,6 +35,11 @@ export { createObservedLoadedDocumentVerificationStore, ObservedLoadedDocumentVe
   from "./observed-loaded-document-verifications.js";
 export type { ObservedLoadedDocumentVerificationBinding, ObservedLoadedDocumentVerificationOptions,
   ObservedLoadedDocumentVerificationReceipt } from "./observed-loaded-document-verifications.js";
+export { createLoadedDocumentVerificationAdmissionStore, LoadedDocumentVerificationAdmissionError }
+  from "./loaded-document-verification-admission.js";
+export type { LoadedDocumentVerificationAdmissionBinding, LoadedDocumentVerificationAdmissionOptions,
+  LoadedDocumentAdmissionAuthorization, LoadedDocumentVerificationAdmissionReceipt }
+  from "./loaded-document-verification-admission.js";
 export { createCaptureVerificationAdmissionStore, CaptureVerificationAdmissionError } from "./capture-verification-admission.js";
 export type { CaptureVerificationAdmissionOptions, CaptureVerificationAdmissionReceipt } from "./capture-verification-admission.js";
 export { createCaptureVerificationLeaseStore, CaptureVerificationLeaseError } from "./capture-verification-leases.js";

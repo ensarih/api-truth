@@ -247,3 +247,30 @@ body values and key bytes are excluded. Foreign keys require existing capture an
 handler verification, and a trigger prevents updates/deletes. This records
 historical capture-qualified verification metadata. Queue admission, current
 qualified readers and catalog/environment promotion are separate gates.
+
+
+## Loaded-document verification admission
+
+`createLoadedDocumentVerificationAdmissionStore` admits a separate immutable
+`swagger-loaded-document-1` intent. The trusted host fixes tenant/principal and
+bounded capture-to-load bindings, including the exact scope/root, artifact/key
+references and envelope/signer digests. The caller supplies only a capture
+identity. Capability `swagger.document.verify.admit` is checked before database
+access; unknown bindings fail closed.
+
+Admission locks the active configuration, captured association, handler-byte
+summary and configured access grants. Its database-local host policy must also
+lock independent source/environment/artifact permissions and explicit opt-in for
+the exact configuration fingerprint, document hash and activation checkpoint.
+Configured environment permission does not establish a deployed revision.
+Host callbacks/pool operations require bounded deadlines; SQL lock/statement
+timeouts are two/ten seconds.
+
+The load identity matches the durable loaded-summary identity; job identity also
+includes the active configuration epoch and service root. A tenant transaction
+lock serializes replay and queue quota. Exact replay is free; a new activation
+checkpoint requires new opt-in and creates a distinct intent. Migration `0014`
+retains only scope/references/hashes/configuration pins and immutable queued
+state. This admission does not execute verification. Separate leases, execution,
+atomic loaded-summary completion, supersession cleanup and qualified readers
+remain open.

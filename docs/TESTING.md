@@ -286,3 +286,15 @@ composition exercises the positive path. No catalog or environment pointer is
 promoted, and summaries contain no source document, route, handler or body data.
 The orchestration migration test also checks idempotent application of migration
 `0013_loaded_document_verifications` and rejection of checksum drift.
+
+
+### Loaded-document admission
+
+`tests/integration/loaded-document-verification-admission.test.ts` exercises the
+separate admission intent in disposable PostgreSQL schemas. Capture and
+handler-byte parents, configured access grants and explicit database-local
+source/environment/artifact policy must agree with the fixed host binding and
+active configuration epoch. Replay, epoch switchback and tenant quotas are
+checked without invoking a verifier or producing loaded summaries/catalog
+pointers. Migration application and the reviewed package-root API remain part
+of the existing orchestration regression tests.

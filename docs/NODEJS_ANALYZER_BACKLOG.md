@@ -825,3 +825,22 @@ offline tests; the complete PostgreSQL suite passed all 461 tests. Real-Git and
 signed-load composition, concurrent replay, conflicting/distinct load identities,
 missing/forged parents, scoped denial, atomic finalization, immutable rows and
 configured-schema lookups are covered.
+
+
+### Loaded-document admission intent (2026-10-10)
+
+A separate orchestration admission store fixes trusted capture/load/source
+bindings and locks existing capture/handler verification, active configuration
+and grants. Database-local host policy must explicitly authorize the same load
+artifact and configuration activation epoch. Replay and quotas are serialized
+per tenant; config switchback creates a new intent after fresh opt-in. The
+queued intent shares the durable summary load identity but carries no verifier
+output or API facts. Separate leases, execution/atomic completion, stale-job
+cleanup and qualified readers remain open.
+
+Validation: the initial TDD run rejected the absent admission module. Independent
+review fixed a concurrency-test ordering assumption. A clean locked installation
+and typecheck passed all 1,763 offline tests; all 466 PostgreSQL tests passed from
+the staged archive. Five focused PostgreSQL cases exercise concurrent replay and
+quota, exact load identity, epoch switchback, missing parents, malformed/hostile
+inputs, mismatched artifact opt-in, revoked grants and immutable intents.
