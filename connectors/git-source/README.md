@@ -1,6 +1,6 @@
 # Local Git source connector
 
-`@api-truth/connector-git-source@0.13.0` reads one explicit local repository,
+`@api-truth/connector-git-source@0.14.0` reads one explicit local repository,
 one immutable 40-character commit ID, and one normalized service-tree path. It
 reads the committed tree and blobs directly; working-tree edits, staged changes,
 untracked files, ignored files, branch names, and remote refs do not select
@@ -179,3 +179,28 @@ deployment statement or normative API contract. D08 runtime inputs remain
 rejected. The isolated framework fixture signs an actual controlled load outside
 the checkout and verifies it in a separate process against committed Git bytes;
 verification does not execute the handler again.
+
+
+## Composed protected loaded-document correspondence
+
+`./protected-swagger-loaded-document` exports
+`createProtectedSwaggerLoadedDocumentPort({documentLoad, correspondence})`.
+Both options configure the concrete ports described above, with the same exact
+scope and **the same host authorization callback**. The final load recheck thus
+also checks their shared authority. The port verifies signed loading, performs
+immutable Git/document/handler correspondence, then verifies the external load
+again before delivery. Changes to signed evidence, keys or permission withhold
+the result.
+
+A result requires the same capture session, raw document bytes, canonical parsed
+value, full ordered handler bindings, and one unambiguous document match for
+every observed binding. Unsupported or ambiguous correspondence fails. Unobserved
+document operations may remain explicitly listed; these do not establish API
+absence or complete coverage. The document-value port now also returns its pinned
+session, complete ordered handler metadata and canonical parsed-value hash.
+
+The composed result remains separate metadata and creates no durable admission,
+IR claim, catalog snapshot or deployment/normative statement. Each underlying
+port retains its own bounds; their timeouts are not a new shared end-to-end
+wall-clock deadline. Git materialization/cleanup is awaited under its own bound.
+The trusted host still establishes capture and signer trust.

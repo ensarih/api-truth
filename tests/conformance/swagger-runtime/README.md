@@ -257,3 +257,11 @@ the independently constructed fixture, and framework hashes from locked files.
 The test checks exact metadata, two authorization calls, external artifact
 separation and an unchanged execution marker. This is a trusted synthetic capture;
 it establishes neither deployment nor normative contract authority.
+
+
+The protected document-load case also signs a handler receipt from the same
+controlled capture and runs `swagger-loaded-document-1` against committed Git
+source. It asserts exact observed-binding/document matches, stable raw/canonical
+hashes, authorization rechecks, owned Git-tree cleanup and no second dispatch.
+All rejected/mutated document-load cases withhold a binding receipt. This remains
+separate metadata with no IR claims or snapshot promotion.

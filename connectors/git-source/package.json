@@ -1,6 +1,6 @@
 {
   "name": "@api-truth/connector-git-source",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,7 +9,8 @@
     "./runtime-capture-pin": "./src/runtime-capture-pin.ts",
     "./protected-capture-verification": "./src/protected-capture-verification.ts",
     "./protected-swagger-document-correspondence": "./src/protected-swagger-document-correspondence.ts",
-    "./protected-document-load": "./src/protected-document-load.ts"
+    "./protected-document-load": "./src/protected-document-load.ts",
+    "./protected-swagger-loaded-document": "./src/protected-swagger-loaded-document.ts"
   },
   "dependencies": {
     "@api-truth/analyzer-host": "0.10.0",

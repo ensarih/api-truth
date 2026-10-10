@@ -794,3 +794,15 @@ authorization, bounds reads and configuration, and returns separate frozen
 metadata. The isolated fixture verifies an actual controlled load against
 committed Git bytes without a second handler execution. Durable composition,
 qualified catalog reads, deployment and normative contract promotion remain open.
+
+
+### Same-session protected loaded-document comparison (2026-10-10)
+
+Git connector `swagger-loaded-document-1` composes signed loading and protected
+Git/document correspondence. Scope, authorization, session, raw/canonical hashes,
+ordered handler bindings and complete observed-binding matches must agree.
+Protected load evidence and permission are rechecked after source comparison.
+Only explicit unobserved declaration diagnostics may survive; they do not imply
+API absence. The controlled collector withholds its unsigned binding receipt if
+the document gate fails. Durable admission, catalog promotion and deployment
+remain separate gates.

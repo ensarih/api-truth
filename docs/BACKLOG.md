@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification is implemented separately; its durable composition, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
+| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification is implemented separately; its durable admission/composition, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
@@ -1526,3 +1526,28 @@ Validation: TDD first reproduced missing protected runtime delivery. The reviewe
 implementation passed a clean locked install/typecheck with 1,750 offline tests,
 17 focused verifier tests including the exact signed-wrapper byte boundary, and
 all 68 pinned framework cases. Existing D08 runtime rejection remains intact.
+
+
+### Same-session loaded-document and handler composition — NB1 (2026-10-10)
+
+Git connector 0.14.0 composes the concrete signed-load and immutable Git/document
+correspondence ports. It requires one exact scope and shared host authorization,
+stable protected load evidence before/after comparison, the same capture session,
+raw and parsed document hashes, ordered handler bindings and complete unambiguous
+matches for those bindings. Unsupported or ambiguous comparison withholds the
+result. Unobserved declarations remain explicit and do not establish API absence.
+
+The internal controlled collector exposes an unsigned handler receipt only after
+its document-load gate succeeds. The pinned fixture signs both observations from
+one actual request outside the checkout, compares them against committed source
+in a separate process, and checks that source trees are cleaned and the handler
+is not run again. The result is separate metadata. Durable admission/association,
+qualified downstream catalog reads, production capture isolation and normative
+contract promotion remain open.
+
+Validation: TDD reproduced the missing gated receipt and missing session/value
+metadata. Independent review and a clean locked install/typecheck passed 1,763
+offline tests; all 68 pinned framework cases passed. Thirteen new real-Git tests
+cover two ordered handlers, stable external evidence, canonical/raw/session/router
+mismatches, unsupported/ambiguous declarations, hostile configuration and shared
+authority revocation. Preceding `78150b7` main CI passed all five gates.

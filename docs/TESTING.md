@@ -264,3 +264,12 @@ results. These are deterministic offline checks. The separate
 controlled load in the pinned framework with a separate verifier process and
 Git-derived source bytes. It requires the existing explicit fixture prerequisites
 and makes no deployment or normative-contract claim.
+
+
+`tests/unit/protected-swagger-loaded-document.test.ts` checks the concrete
+composition against committed synthetic Git services and separately signed
+captures. Exact scope/session/document/handler mismatches, revocation, unstable
+external evidence and incomplete/ambiguous matches must withhold a result.
+`protected-document-correspondence.test.ts` additionally distinguishes raw BOM/CRLF
+bytes from the canonical parsed value and preserves the pinned session/handlers.
+The pinned runtime case exercises both signatures from one actual request.

@@ -209,6 +209,9 @@ try {
       TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP}};
   let capture;
   let documentLoadCapture;
+  const documentReceiptRejected = () => {
+    try {documentLoadCapture.receipt();return false;} catch {return true;}
+  };
   let baseline;
   if (captureScenario || documentLoadScenario) {
     baseline = JSON.parse((await run(analyzerNode, cliArgs, cliOptions)).stdout);
@@ -226,9 +229,10 @@ try {
     let rejected = false;
     try {require(fake);} catch {rejected = true;}
     const documentLoadObservation = documentLoadCapture.observation();
+    const receiptRejected = documentReceiptRejected();
     documentLoadCapture.stop();
     process.stdout.write(JSON.stringify({startupRejected:rejected,
-      moduleExecuted:global.__captureModuleExecuted === true, documentLoadObservation}));
+      moduleExecuted:global.__captureModuleExecuted === true, documentLoadObservation, receiptRejected}));
   } else {
   const express = require("express");
   const wrapper = require("swagger-express-mw");
@@ -240,8 +244,9 @@ try {
     });
   if (!middleware) {
     const documentLoadObservation = documentLoadCapture.observation();
+    const receiptRejected = documentReceiptRejected();
     documentLoadCapture.stop();
-    process.stdout.write(JSON.stringify({documentLoadObservation, startupRejected:true}));
+    process.stdout.write(JSON.stringify({documentLoadObservation, startupRejected:true, receiptRejected}));
   } else {
   middleware.register(app);
   if (scenario === "document-load-mutated") middleware.runner.api.definition.info.title = "mutated-after-registration";
@@ -254,6 +259,8 @@ try {
   const withoutPrefix = await fetch(`${base}/orders/42`, {signal: AbortSignal.timeout(5000)});
   await withoutPrefix.arrayBuffer();
   const documentLoadObservation = documentLoadCapture?.observation();
+  const documentBindingReceipt = protectedDocumentLoadScenario ? documentLoadCapture.receipt() : undefined;
+  const receiptRejected = documentLoadScenario && documentLoadObservation.kind === "unresolved" ? documentReceiptRejected() : undefined;
   documentLoadCapture?.stop();
   const {stdout: analyzerVersion} = await run(analyzerNode, ["--version"]);
   let keyDirectory;
@@ -309,13 +316,23 @@ try {
       const binding = {scope,artifactRef:"capture:document-load-fixture",configuredKeyRef:"key:document-load-fixture",
         expectedEnvelopeDigest:sha256(envelope),expectedSignerSpkiDigest:sha256(keys.publicKey.export({format:"der",type:"spki"})),
         expectedObservation};
+      const receiptPath = join(keyDirectory,"signed-binding.json");
+      const receiptPayload = Buffer.from(JSON.stringify(documentBindingReceipt));
+      const receipt = JSON.stringify({payload:receiptPayload.toString("base64"),
+        signature:sign(null,receiptPayload,keys.privateKey).toString("base64")});
+      await writeFile(receiptPath,receipt);
+      const expectedReceiptDigest = sha256(receipt);
+      const expectedCaptureIdentityDigest = sha256(canonical({policyVersion:"runtime-capture-pin-1",scope,
+        artifactRef:"capture:document-binding-fixture",configuredKeyRef:"key:document-load-fixture",
+        receiptDigest:expectedReceiptDigest,signerSpkiDigest:binding.expectedSignerSpkiDigest}));
       const configPath = join(keyDirectory,"verify-load-config.json");
-      await writeFile(configPath,JSON.stringify({binding,artifactPath,keyPath}));
+      await writeFile(configPath,JSON.stringify({binding,artifactPath,keyPath,receiptPath,repoPath:root,
+        expectedReceiptDigest,expectedCaptureIdentityDigest}));
       const executionMarkerBefore = await readFile(executionMarker,"utf8");
       const verified = JSON.parse((await run(analyzerNode,
         [fileURLToPath(new URL("./protected-load-verify.mjs",import.meta.url)),configPath],cliOptions)).stdout);
       const committed = (await run("git",["ls-tree","-r","--name-only",revision],{cwd:root})).stdout;
-      protectedDocumentLoad = {...verified,externalArtifactNotCommitted:!committed.includes("signed-load.json") && !committed.includes("public.pem"),
+      protectedDocumentLoad = {...verified,externalArtifactNotCommitted:!committed.includes("signed-load.json") && !committed.includes("signed-binding.json") && !committed.includes("public.pem"),
         executionMarkerBefore,executionMarkerAfter:await readFile(executionMarker,"utf8")};
     }
     if (protectedScenario) {
@@ -345,7 +362,7 @@ try {
   finally { if (keyDirectory) await rm(keyDirectory, {recursive: true, force: true}); }
   const analysis = JSON.parse(stdout);
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
-    ...(documentLoadScenario ? {documentLoadObservation, documentRawSha256: sha256(documentBytes)} : {}),
+    ...(documentLoadScenario ? {documentLoadObservation, documentRawSha256: sha256(documentBytes), ...(receiptRejected !== undefined ? {receiptRejected} : {})} : {}),
     ...(protectedCapture ? {protectedCapture} : {}),
     ...(protectedDocumentLoad ? {protectedDocumentLoad} : {}),
     analysis: {status: analysis.status,

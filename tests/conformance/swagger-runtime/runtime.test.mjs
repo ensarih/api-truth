@@ -87,6 +87,7 @@ for (const scenario of ["document-load-protected", "document-load-observed", "do
     const result = JSON.parse(stdout);
     if (["document-load-object", "document-load-alternate", "document-load-reference", "document-load-module-mismatch"].includes(scenario)) {
       assert.equal(result.startupRejected, true);
+      assert.equal(result.receiptRejected,true);
       if (scenario === "document-load-module-mismatch") assert.equal(result.moduleExecuted, false);
       assert.deepEqual(result.documentLoadObservation,
         {kind:"unresolved", diagnostic:"runtime_document_load_unverified"});
@@ -95,6 +96,7 @@ for (const scenario of ["document-load-protected", "document-load-observed", "do
     assert.equal(result.status, 200);
     assert.equal(result.body.controller, "orders");
     if (scenario === "document-load-mutated") {
+      assert.equal(result.receiptRejected,true);
       assert.deepEqual(result.documentLoadObservation,
         {kind:"unresolved", diagnostic:"runtime_document_load_unverified"});
       return;
@@ -113,13 +115,21 @@ for (const scenario of ["document-load-protected", "document-load-observed", "do
     if(scenario==="document-load-protected"){
       const protectedLoad=result.protectedDocumentLoad;
       assert.equal(protectedLoad.result.kind,"verified_signed_document_load_observation");
-      assert.equal(protectedLoad.authorizations,2);
+      assert.ok(protectedLoad.authorizations>=6);
       assert.equal(protectedLoad.result.scope.immutableRevision,observed.source.immutableRevision);
       assert.notEqual(observed.source.immutableRevision,"a".repeat(40));
       assert.deepEqual(protectedLoad.result.observation,observed);
       assert.equal(protectedLoad.externalArtifactNotCommitted,true);
       assert.equal(protectedLoad.executionMarkerBefore,"x");assert.equal(protectedLoad.executionMarkerAfter,"x");
       assert.equal("claims" in protectedLoad.result,false);assert.equal("snapshot_id" in protectedLoad.result,false);
+      assert.equal(protectedLoad.loadedCorrespondence.kind,"protected_swagger_loaded_document_correspondence");
+      assert.equal(protectedLoad.loadedCorrespondence.profileVersion,"swagger-loaded-document-1");
+      assert.equal(protectedLoad.loadedCorrespondence.loadEnvelopeDigest,protectedLoad.result.envelopeDigest);
+      assert.equal(protectedLoad.loadedCorrespondence.document.canonicalValueSha256,observed.document.canonicalValueSha256);
+      assert.deepEqual(protectedLoad.loadedCorrespondence.matches,[{bindingIndex:0,documentPointer:"/paths/~1orders~1{id}/get",handlerPath:"api/controllers/orders.js"}]);
+      assert.equal(protectedLoad.ownedTempCleaned,true);
+      assert.equal("claims" in protectedLoad.loadedCorrespondence,false);
+      assert.equal("snapshot_id" in protectedLoad.loadedCorrespondence,false);
     }
   });
 }

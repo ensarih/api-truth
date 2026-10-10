@@ -44,7 +44,8 @@ export type ProtectedSwaggerDocumentCorrespondence = {
   profileVersion: typeof SWAGGER_DOCUMENT_CORRESPONDENCE_PROFILE;
   scope: ProtectedCaptureVerification["scope"]; serviceRoot: string;
   captureIdentityDigest: string; receiptDigest: string; signerSpkiDigest: string; sourceDigest: string;
-  document: {path: string; rawSha256: string; digest: string};
+  sessionId: string; handlers: ProtectedCaptureVerification["handlers"];
+  document: {path: string; rawSha256: string; digest: string; canonicalValueSha256: string};
   matches: ReadonlyArray<{bindingIndex: number; documentPointer: string; handlerPath: string}>;
   diagnostics: ReadonlyArray<CorrespondenceDiagnostic>;
   limitations: readonly [typeof LIMITATION, typeof LIMITATION_CONTRACT];
@@ -208,7 +209,7 @@ export function createProtectedSwaggerDocumentCorrespondencePort(options: Protec
       if (parsed.status === "failed" || parsed.operations.length > 1024)
         throw new ProtectedSwaggerDocumentCorrespondenceError("PROTECTED_DOCUMENT_UNVERIFIED");
       const result = compare(capture, source.files, source.opaqueConfiguration, source.root,
-        parsedValue, parsed.operations, documentPath, selected.digest, expectedRawDocumentSha256, budget);
+        parsedValue, parsed.operations, documentPath, selected.digest, expectedRawDocumentSha256, beforePin.sessionId, budget);
       await tree.dispose(); tree = undefined;
       await requireAuthorization(capture.scope);
       const afterPin = await checkedPin(capture);
@@ -233,7 +234,7 @@ export function createProtectedSwaggerDocumentCorrespondencePort(options: Protec
 type Operation = ReturnType<typeof parseSwagger2Document>["operations"][number];
 function compare(capture: ProtectedCaptureVerification, files: Map<string, string>, opaque: Map<string, string>,
   root: string, document: Record<string, unknown>, operations: Operation[], documentPath: string,
-  documentDigest: string, rawSha256: string, budget: () => void): ProtectedSwaggerDocumentCorrespondence {
+  documentDigest: string, rawSha256: string, sessionId: string, budget: () => void): ProtectedSwaggerDocumentCorrespondence {
   const diagnostics: CorrespondenceDiagnostic[] = [];
   const matches: Array<{bindingIndex: number; documentPointer: string; handlerPath: string}> = [];
   const binding = findSwaggerMiddlewareBinding(files, root);
@@ -310,7 +311,9 @@ function compare(capture: ProtectedCaptureVerification, files: Map<string, strin
     profileVersion: SWAGGER_DOCUMENT_CORRESPONDENCE_PROFILE, scope: capture.scope, serviceRoot: capture.serviceRoot,
     captureIdentityDigest: capture.captureIdentityDigest, receiptDigest: capture.receiptDigest,
     signerSpkiDigest: capture.signerSpkiDigest, sourceDigest: capture.sourceDigest,
-    document: Object.freeze({path: documentPath, rawSha256, digest: documentDigest}),
+    sessionId, handlers: Object.freeze(capture.handlers.map(item => Object.freeze({...item}))),
+    document: Object.freeze({path: documentPath, rawSha256, digest: documentDigest,
+      canonicalValueSha256: sha(canonicalJsonStringify(document))}),
     matches: Object.freeze(matches.map(item => Object.freeze(item))),
     diagnostics: Object.freeze(diagnostics.map(item => Object.freeze(item))),
     limitations: Object.freeze([LIMITATION, LIMITATION_CONTRACT] as const)});

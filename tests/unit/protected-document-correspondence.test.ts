@@ -8,6 +8,8 @@ import {afterEach, expect, test, vi} from "vitest";
 import {materializeGitSource} from "../../connectors/git-source/src/index.js";
 import {createRuntimeCapturePinResolver} from "../../connectors/git-source/src/runtime-capture-pin.js";
 import {createProtectedSwaggerDocumentCorrespondencePort} from "../../connectors/git-source/src/protected-swagger-document-correspondence.js";
+import {canonicalJsonStringify} from "../../packages/ir/src/index.js";
+import {parseStrictYaml} from "../../analyzers/nodejs/src/strict-yaml.js";
 import {digestServiceTree, readServiceTree} from "../../analyzers/nodejs/src/source.js";
 
 const execFile = promisify(execFileCallback);
@@ -99,7 +101,10 @@ test("signed capture corresponds to one selected Swagger operation in the same i
   const repo = await repository({[`${serviceRoot}/do-not-run.js`]: "require('node:fs').writeFileSync('executed', 'bad');"});
   const result = await (await port(repo)).verify();
   expect(result).toMatchObject({kind: "protected_swagger_document_value_correspondence", profileVersion: "swagger-document-value-1",
-    scope: repo.scope, document: {path: documentPath, rawSha256: repo.rawDocumentSha256},
+    scope: repo.scope, sessionId: "session-1", document: {path: documentPath, rawSha256: repo.rawDocumentSha256,
+      canonicalValueSha256: hash(canonicalJsonStringify(parseStrictYaml(document)))},
+    handlers: [{method:"GET",applicationPath:"/api/v1/orders/{id}",controller:"orders",operationId:"readOrder",
+      exportName:"readOrder",handlerPath:"api/controllers/orders.js",handlerDigest:hash(handler)}],
     matches: [{bindingIndex: 0, documentPointer: "/paths/~1orders~1{id}/get", handlerPath: "api/controllers/orders.js"}],
     diagnostics: []});
   expect(result.limitations).toContain("Actual runtime document loading and deployment are unverified");
@@ -146,6 +151,7 @@ test.each(["\uFEFF" + document, document.replaceAll("\n", "\r\n")])(
     const result = await (await port(repo)).verify();
     expect(result.matches).toHaveLength(1);
     expect(result.document.rawSha256).toBe(hash(Buffer.from(rawDocument)));
+    expect(result.document.canonicalValueSha256).toBe(hash(canonicalJsonStringify(parseStrictYaml(document))));
     expect(result.document.digest).toBe(hash(Buffer.concat([
       Buffer.from(`${documentPath}\0`), Buffer.from(rawDocument)])));
   });

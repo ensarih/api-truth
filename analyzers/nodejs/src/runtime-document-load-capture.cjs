@@ -210,8 +210,7 @@ exports.installSwaggerRuntimeDocumentLoadCapture = function(options) {
     }
     return loaded;
   };
-  return Object.freeze({
-    observation() {
+  const observation = () => {
       try {
         const prior = base.receipt();
         if (invalid || !sawRunner || !sawSway || !sawRefs || !sawPathLoader || !sawRouter
@@ -228,6 +227,13 @@ exports.installSwaggerRuntimeDocumentLoadCapture = function(options) {
           document: Object.freeze({path: DOCUMENT, rawSha256, canonicalValueSha256}),
           bindings: Object.freeze(prior.bindings)});
       } catch {return Object.freeze({kind: 'unresolved', diagnostic: DIAGNOSTIC});}
+    };
+  return Object.freeze({
+    observation,
+    receipt() {
+      if (observation().kind !== 'unsigned_runtime_document_load')
+        throw Error('Runtime document load unverified');
+      return base.receipt();
     },
     stop() {Module._load = originalLoad; base.stop();},
   });
