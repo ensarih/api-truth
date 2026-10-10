@@ -245,3 +245,15 @@ capture authorization and deployment remain separate gates.
 
 This remains an opt-in isolated framework suite; it adds no service dependencies
 or network requests to the default offline tests.
+
+
+### External protected document-load verification
+
+`document-load-protected` captures the default document's actual load and handler
+dispatch under the pinned Node/Swagger runtime, signs the scope and observation
+outside the checkout, and verifies in a separate Node 24.6.0 process. Expected
+raw document/handler hashes come from committed Git blobs, the parsed value from
+the independently constructed fixture, and framework hashes from locked files.
+The test checks exact metadata, two authorization calls, external artifact
+separation and an unchanged execution marker. This is a trusted synthetic capture;
+it establishes neither deployment nor normative contract authority.

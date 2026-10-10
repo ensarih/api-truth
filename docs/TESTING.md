@@ -252,3 +252,15 @@ entity names with different actions, mixed intent, ambiguity, incomplete context
 closed-scope no-match and wrong-environment candidates are covered. Every curated
 case executes a discovery outcome. These checks are not a live model accuracy
 benchmark or evidence that an inference understands business behavior.
+
+
+### Protected document-load boundary
+
+`tests/unit/protected-document-load.test.ts` exercises scope, signature/purpose,
+key and independent expected-observation matching, authorization revocation,
+configuration/artifact limits, inert hostile objects, cancellation and late
+results. These are deterministic offline checks. The separate
+`document-load-protected` case in `npm run test:swagger:runtime` verifies a real
+controlled load in the pinned framework with a separate verifier process and
+Git-derived source bytes. It requires the existing explicit fixture prerequisites
+and makes no deployment or normative-contract claim.

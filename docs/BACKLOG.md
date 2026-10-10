@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected document-load signing, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
+| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification is implemented separately; its durable composition, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
@@ -1502,3 +1502,27 @@ corpus validation cases and forty-two question/manifest boundary checks pass.
 The preceding `57e94ec` main commit passes all five CI jobs, including the full
 459-case database suite, eleven browser cases, pinned Swagger runtime and Java.
 Live model evaluation, semantic indexing and durable owner review remain open.
+
+
+### Protected signed document-load verification — NB1 boundary (2026-10-10)
+
+Git connector 0.13.0 adds a separate purpose-bound Ed25519 verifier over canonical
+`{scope, observation}` data, including tenant identity. A trusted host pins the
+external envelope/key hashes and independently establishes the complete expected
+source/session/framework/document/handler observation. Authorization precedes
+reads and is checked again before delivery; one abortable deadline, strict
+structure/size bounds and fixed errors constrain the port. No source code runs.
+
+The actual pinned Node/Swagger fixture captures document loading during request
+dispatch, signs outside the checkout, then verifies in a separate Node process.
+Expected document and handler bytes come independently from the committed Git
+revision; framework hashes come from the locked fixture. An unchanged execution
+marker proves verification does not dispatch the handler again. The output is
+separate metadata, with no IR claims or catalog promotion. Durable composition
+with capture provenance and document correspondence, qualified downstream reads,
+production capture isolation and normative authority remain open.
+
+Validation: TDD first reproduced missing protected runtime delivery. The reviewed
+implementation passed a clean locked install/typecheck with 1,750 offline tests,
+17 focused verifier tests including the exact signed-wrapper byte boundary, and
+all 68 pinned framework cases. Existing D08 runtime rejection remains intact.

@@ -1,4 +1,4 @@
-import {createHash, generateKeyPairSync} from "node:crypto";
+import {createHash, generateKeyPairSync, sign} from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,11 +10,13 @@ import { fileURLToPath } from "node:url";
 const scenario = process.argv[2];
 const supported = new Set(["default", "protected-capture", "operation-override", "configured-directory", "directory-precedence", "initialization-fallback",
   "single-initialization-failure", "local-import", "local-import-failure", "missing-controller", "missing-export", "mock-mode", "environment-override", "source-environment-override", "create-mock-mode", "create-mock-override", "npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled", "runtime-binding", "runtime-binding-missing", "runtime-binding-mock", "runtime-binding-stale", "runtime-binding-precedence", "runtime-binding-response-mismatch", "runtime-binding-response-match", "runtime-binding-response-default", "runtime-binding-body-match", "runtime-binding-body-mismatch", "runtime-binding-body-ref", "runtime-binding-body-required-missing", "runtime-binding-body-required-present", "runtime-binding-body-required-null", "runtime-binding-body-ref-type", "runtime-binding-body-ref-required", "runtime-binding-body-ref-cycle", "runtime-binding-body-object-match", "runtime-binding-body-object-type", "runtime-binding-body-object-default-required", "runtime-binding-body-allof-match", "runtime-binding-body-allof-type", "runtime-binding-body-allof-required", "runtime-binding-body-local-match", "runtime-binding-body-local-type", "runtime-binding-body-local-required", "runtime-binding-body-linear-match", "runtime-binding-body-additional-match", "runtime-binding-body-additional-extra", "runtime-binding-body-additional-reference", "runtime-binding-body-shorthand-match", "runtime-binding-body-shorthand-type", "runtime-binding-body-shorthand-required", "runtime-binding-body-schema-missing", "runtime-binding-body-schema-missing-default", "runtime-binding-body-schema-missing-precedence", "runtime-binding-body-schema-missing-example", "document-load-observed", "document-load-bom-crlf", "document-load-object", "document-load-alternate", "document-load-mutated"]);
+supported.add("document-load-protected");
 supported.add("document-load-reference");
 supported.add("document-load-module-mismatch");
 if (!supported.has(scenario)) throw new Error("Unknown synthetic scenario");
 const root = await mkdtemp(join(tmpdir(), "api-truth-swagger-conformance-"));
 const protectedScenario = scenario === "protected-capture";
+const protectedDocumentLoadScenario = scenario === "document-load-protected";
 const documentLoadScenario = scenario.startsWith("document-load-");
 const executionMarker = join(tmpdir(), "protected-capture-execution-marker");
 const sha256 = value => `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -101,7 +103,7 @@ try {
   await put("api/swagger/swagger.yaml", documentBytes);
   if (scenario === "document-load-alternate") await put("api/swagger/other.yaml", documentBytes);
   await put("api/controllers/orders.js", handler("orders"));
-  if (protectedScenario) await put("api/controllers/orders.js", `exports.getOrder = function(req, res) {
+  if (protectedScenario || protectedDocumentLoadScenario) await put("api/controllers/orders.js", `exports.getOrder = function(req, res) {
       require("node:fs").appendFileSync(${JSON.stringify(executionMarker)}, "x");
       res.json({controller:"orders", id:req.swagger.params.id.value});
     };`);
@@ -136,7 +138,7 @@ try {
     });`);
   const npmEnvironment = ["npm-environment-routing", "npm-environment-mock", "npm-environment-directories", "npm-router-mock", "npm-router-mock-disabled"].includes(scenario);
   await put("package.json", JSON.stringify({type: "commonjs",
-    ...(npmEnvironment || protectedScenario ? {scripts: {start: `NODE_ENV=${protectedScenario ? "test" : "production"} node app.js`},
+    ...(npmEnvironment || protectedScenario || protectedDocumentLoadScenario ? {scripts: {start: `NODE_ENV=${protectedScenario || protectedDocumentLoadScenario ? "test" : "production"} node app.js`},
       engines: {node: "22.19.0"}} : {}), dependencies: {"swagger-express-mw": "0.7.0"}}));
   await put("package-lock.json", await readFile(new URL("./package-lock.json", import.meta.url), "utf8"));
   if (["configured-directory", "directory-precedence", "initialization-fallback", "mock-mode", "runtime-binding-precedence"].includes(scenario)) {
@@ -193,7 +195,7 @@ try {
   const analyzerNode = process.env.API_TRUTH_ANALYZER_NODE;
   if (!analyzerNode) throw new Error("Analyzer runtime missing");
   let revision = "a".repeat(40);
-  if (protectedScenario) {
+  if (protectedScenario || protectedDocumentLoadScenario) {
     await run("git", ["init", "-q", "-b", "main"], {cwd: root});
     await run("git", ["add", "-A"], {cwd: root});
     await run("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "pinned fixture"], {cwd: root});
@@ -256,6 +258,7 @@ try {
   const {stdout: analyzerVersion} = await run(analyzerNode, ["--version"]);
   let keyDirectory;
   let protectedCapture;
+  let protectedDocumentLoad;
   let keys;
   if (capture) {
     const payload = capture.receipt(); capture.stop();
@@ -275,6 +278,46 @@ try {
   let stdout;
   try {
     ({stdout} = await run(analyzerNode, cliArgs, cliOptions));
+    if (protectedDocumentLoadScenario) {
+      if (documentLoadObservation?.kind !== "unsigned_runtime_document_load") throw Error("Missing controlled load observation");
+      keys = generateKeyPairSync("ed25519");
+      keyDirectory = await mkdtemp(join(tmpdir(), "api-truth-runtime-load-key-"));
+      const keyPath = join(keyDirectory, "public.pem"), artifactPath = join(keyDirectory, "signed-load.json");
+      await writeFile(keyPath, keys.publicKey.export({format:"pem",type:"spki"}));
+      const scope = {tenantId:"tenant",repositoryId:"local",serviceId:"synthetic",immutableRevision:revision,
+        sourceDigest:baseline.source.source_digest,environment:"test"};
+      const purpose = "api-truth:swagger-document-load-observation-1";
+      const payload = Buffer.from(canonical({scope,observation:documentLoadObservation}));
+      const signature = sign(null,Buffer.concat([Buffer.from(`${purpose}\n`),payload]),keys.privateKey);
+      const envelope = JSON.stringify({purpose,payload:payload.toString("base64"),signature:signature.toString("base64")});
+      await writeFile(artifactPath,envelope);
+      const rawDocument = (await run("git",["show",`${revision}:api/swagger/swagger.yaml`],{cwd:root,encoding:"buffer"})).stdout;
+      const rawHandler = (await run("git",["show",`${revision}:api/controllers/orders.js`],{cwd:root,encoding:"buffer"})).stdout;
+      const swayPath = runnerRequire.resolve("sway");
+      const jsonRefsPath = createRequire(swayPath).resolve("json-refs");
+      const expectedObservation = {kind:"unsigned_runtime_document_load",profileVersion:"swagger-document-load-capture-1",
+        source:{repositoryId:"local",serviceId:"synthetic",immutableRevision:revision,
+          sourceDigest:baseline.source.source_digest,environment:"test",sessionId:"runtime-fixture"},
+        framework:{nodeVersion:"22.19.0",
+          routerDigest:sha256(await readFile(runnerRequire.resolve("./fittings/swagger_router.js"))),
+          runnerDigest:sha256(await readFile(wrapperRequire.resolve("swagger-node-runner"))),
+          swayDigest:sha256(await readFile(swayPath)),jsonRefsDigest:sha256(await readFile(jsonRefsPath)),
+          pathLoaderDigest:sha256(await readFile(createRequire(jsonRefsPath).resolve("path-loader")))},
+        document:{path:"api/swagger/swagger.yaml",rawSha256:sha256(rawDocument),canonicalValueSha256:sha256(canonical(doc))},
+        bindings:[{method:"GET",application_path:"/api/v1/orders/{id}",controller:"orders",operation_id:"getOrder",
+          export_name:"getOrder",handler_path:"api/controllers/orders.js",handler_digest:sha256(rawHandler),mock_mode:false}]};
+      const binding = {scope,artifactRef:"capture:document-load-fixture",configuredKeyRef:"key:document-load-fixture",
+        expectedEnvelopeDigest:sha256(envelope),expectedSignerSpkiDigest:sha256(keys.publicKey.export({format:"der",type:"spki"})),
+        expectedObservation};
+      const configPath = join(keyDirectory,"verify-load-config.json");
+      await writeFile(configPath,JSON.stringify({binding,artifactPath,keyPath}));
+      const executionMarkerBefore = await readFile(executionMarker,"utf8");
+      const verified = JSON.parse((await run(analyzerNode,
+        [fileURLToPath(new URL("./protected-load-verify.mjs",import.meta.url)),configPath],cliOptions)).stdout);
+      const committed = (await run("git",["ls-tree","-r","--name-only",revision],{cwd:root})).stdout;
+      protectedDocumentLoad = {...verified,externalArtifactNotCommitted:!committed.includes("signed-load.json") && !committed.includes("public.pem"),
+        executionMarkerBefore,executionMarkerAfter:await readFile(executionMarker,"utf8")};
+    }
     if (protectedScenario) {
       const signedPath = join(keyDirectory, "signed-receipt.json"), keyPath = join(keyDirectory, "public.pem");
       const scope = {tenantId:"tenant", repositoryId:"local", serviceId:"synthetic", immutableRevision:revision,
@@ -304,6 +347,7 @@ try {
   process.stdout.write(JSON.stringify({versions, transitiveVersions, runtimeNode: process.version, analyzerNode: analyzerVersion.trim(), status: response.status, body, withoutPrefixStatus: withoutPrefix.status,
     ...(documentLoadScenario ? {documentLoadObservation, documentRawSha256: sha256(documentBytes)} : {}),
     ...(protectedCapture ? {protectedCapture} : {}),
+    ...(protectedDocumentLoad ? {protectedDocumentLoad} : {}),
     analysis: {status: analysis.status,
       securityState: analysis.endpoints[0]?.security.state,
       securityDeclaration: analysis.claims.find(item => item.predicate === "security.declaration"),

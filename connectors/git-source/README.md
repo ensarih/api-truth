@@ -1,6 +1,6 @@
 # Local Git source connector
 
-`@api-truth/connector-git-source@0.12.0` reads one explicit local repository,
+`@api-truth/connector-git-source@0.13.0` reads one explicit local repository,
 one immutable 40-character commit ID, and one normalized service-tree path. It
 reads the committed tree and blobs directly; working-tree edits, staged changes,
 untracked files, ignored files, branch names, and remote refs do not select
@@ -151,3 +151,31 @@ honor AbortSignal and enforce their own underlying I/O deadlines. The configured
 `timeoutMs` is checked across verification phases, but Git materialization is
 awaited under its own 120-second bound so a late disposable tree cannot leak;
 it is not an exact end-to-end wall-clock bound.
+
+
+## Protected signed document-load observations
+
+The `./protected-document-load` subpath exports
+`createProtectedDocumentLoadVerifier`. The trusted host supplies an exact scope,
+opaque external artifact/key references, independent envelope/SPKI hashes, and
+an independently established expected load observation. The purpose-bound
+Ed25519 signature covers canonical `{scope, observation}` bytes, including the
+tenant. It must match the source revision/digest/environment/session, pinned
+Node/framework digests, default document raw and canonical-value hashes, and
+all observed method/path/controller/export/handler bindings exactly.
+
+The verifier authorizes before external reads and again before delivery. One
+abortable deadline covers all phases (10 seconds by default, at most 30 seconds).
+Host ports must honor cancellation and bound their underlying I/O. Configuration
+and artifacts have strict structure/byte limits; hostile object accessors and
+proxies are rejected without invoking them. No artifact-selected key, algorithm,
+path or source execution is permitted. Returned observations are detached and
+frozen; failures expose fixed messages.
+
+This proves the configured signature and correspondence to host expectations.
+The host remains responsible for capture isolation, signer trust and independently
+establishing those expectations. It creates no IR, durable jobs, snapshots,
+deployment statement or normative API contract. D08 runtime inputs remain
+rejected. The isolated framework fixture signs an actual controlled load outside
+the checkout and verifies it in a separate process against committed Git bytes;
+verification does not execute the handler again.

@@ -81,7 +81,7 @@ const cases = [
   ["runtime-binding-body-schema-missing-precedence", 201, "orders"],
   ["runtime-binding-body-schema-missing-example", 201, "orders"],
 ];
-for (const scenario of ["document-load-observed", "document-load-bom-crlf", "document-load-mutated", "document-load-object", "document-load-alternate", "document-load-reference", "document-load-module-mismatch"]) {
+for (const scenario of ["document-load-protected", "document-load-observed", "document-load-bom-crlf", "document-load-mutated", "document-load-object", "document-load-alternate", "document-load-reference", "document-load-module-mismatch"]) {
   test(`controlled document load: ${scenario}`, {timeout: 20000}, async () => {
     const {stdout} = await isolated(runtimeNode, scenario);
     const result = JSON.parse(stdout);
@@ -110,6 +110,17 @@ for (const scenario of ["document-load-observed", "document-load-bom-crlf", "doc
     assert.equal(observed.framework.nodeVersion, "22.19.0");
     assert.equal("signature" in observed, false);
     assert.equal("claims" in observed, false);
+    if(scenario==="document-load-protected"){
+      const protectedLoad=result.protectedDocumentLoad;
+      assert.equal(protectedLoad.result.kind,"verified_signed_document_load_observation");
+      assert.equal(protectedLoad.authorizations,2);
+      assert.equal(protectedLoad.result.scope.immutableRevision,observed.source.immutableRevision);
+      assert.notEqual(observed.source.immutableRevision,"a".repeat(40));
+      assert.deepEqual(protectedLoad.result.observation,observed);
+      assert.equal(protectedLoad.externalArtifactNotCommitted,true);
+      assert.equal(protectedLoad.executionMarkerBefore,"x");assert.equal(protectedLoad.executionMarkerAfter,"x");
+      assert.equal("claims" in protectedLoad.result,false);assert.equal("snapshot_id" in protectedLoad.result,false);
+    }
   });
 }
 for (const [scenario, status, marker] of cases) {

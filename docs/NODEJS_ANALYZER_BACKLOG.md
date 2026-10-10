@@ -782,3 +782,15 @@ Standalone Swagger document `0.15.0` and OpenAPI 3.0 document `0.2.0` retain bou
 The separate Git connector `swagger-document-value-1` profile compares one host-selected default `api/swagger/swagger.yaml` document with a protected signed handler capture from the same immutable source. It requires literal raw document SHA-256, existing supported middleware/startup/routing/lock declarations and an unambiguous method/path/controller/operationId/export/handler-path match. Unsupported references, duplicate route shapes and ambiguous operations receive diagnostics; unmatched declarations never imply runtime absence. The underlying byte verifier additionally checks raw handler bytes, rejecting a decoded-text digest for a BOM-bearing file. The existing parsing/signature kernel still withholds BOM-bearing handler receipts; this slice does not broaden that accepted set.
 
 This is a separate value-correspondence result, not an assertion that the runtime loaded the selected document. No normative contract, deployed state, catalog snapshot or portal/MCP read is promoted by this port. Runtime document-load attestation, qualified persistence/reads and arbitrary document selectors remain open.
+
+
+### Signed controlled document-load verification (2026-10-10)
+
+The optional Git connector `./protected-document-load` port verifies a
+purpose-bound Ed25519 signature over exact canonical scope/observation bytes,
+including tenant, against host-selected external hashes and independent full
+source/session/framework/document/handler expectations. It rechecks host
+authorization, bounds reads and configuration, and returns separate frozen
+metadata. The isolated fixture verifies an actual controlled load against
+committed Git bytes without a second handler execution. Durable composition,
+qualified catalog reads, deployment and normative contract promotion remain open.
