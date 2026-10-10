@@ -218,3 +218,53 @@ test.each(["suggestions","ambiguous"] as const)("rejects %s naming an omitted op
       groups:[{result:{status:"suggestions",contextCoverage:{status:"partial",omittedEndpointIds:[endpoint.endpoint_id]}}}]});
   }
 });
+
+for(const stuckAt of ['initial search','contract','provider','final search'] as const)test(`whole-operation deadline withholds a stalled ${stuckAt} and releases its timer`,async()=>{
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout','performance']});
+ try{
+  const initial=candidatesResult([candidate('commerce','orders','7')]);let searches=0;
+  const hanging=new Promise<never>(()=>{}),discover=vi.fn(async()=>stuckAt==='provider'?hanging:semanticResult('orders','7'));
+  const search=vi.fn(async()=>{searches++;return stuckAt==='initial search'||stuckAt==='final search'&&searches===2?hanging:initial;});
+  const readContract=vi.fn(async()=>stuckAt==='contract'?hanging:contractResult('orders','7'));
+  const service=createSemanticCorpusService({corpusReader:{searchOperationCandidatesAcrossServices:search,readContract},semanticService:{discover},deadlineMs:1000});
+  const result=service.discoverAcrossServices(context,options);const rejected=expect(result).rejects.toMatchObject({code:'SEMANTIC_CORPUS_UNAVAILABLE'});
+  await vi.advanceTimersByTimeAsync(1000);await rejected;expect(vi.getTimerCount()).toBe(0);
+  if(stuckAt==='initial search'||stuckAt==='contract')expect(discover).not.toHaveBeenCalled();
+ }finally{vi.useRealTimers();}
+});
+
+test('late inference cannot start another group and the budget is shared across all phases',async()=>{
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout','performance']});
+ try{
+  const initial=candidatesResult([candidate('commerce','orders','7'),candidate('commerce','billing','8')]);
+  let release:((value:SemanticAnalysisResult)=>void)|undefined;
+  const discover=vi.fn(async()=>new Promise<SemanticAnalysisResult>(resolve=>{release=resolve;}));
+  const search=vi.fn(async()=>{await new Promise(resolve=>setTimeout(resolve,700));return initial;});
+  const readContract=vi.fn(async()=>contractResult('orders','7'));
+  const service=createSemanticCorpusService({corpusReader:{searchOperationCandidatesAcrossServices:search,readContract},semanticService:{discover},deadlineMs:1000});
+  const result=service.discoverAcrossServices(context,options);const rejected=expect(result).rejects.toMatchObject({code:'SEMANTIC_CORPUS_UNAVAILABLE'});
+  await vi.advanceTimersByTimeAsync(700);expect(discover).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(300);await rejected;release?.(semanticResult('orders','7'));await vi.advanceTimersByTimeAsync(0);
+  expect(discover).toHaveBeenCalledOnce();expect(readContract).toHaveBeenCalledOnce();expect(search).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
+ }finally{vi.useRealTimers();}
+});
+
+test('deadline configuration is host-only, validated without getter execution, and successful calls release timers',async()=>{
+ const ports=setup(candidatesResult([candidate('commerce','orders','7')]));
+ for(const deadlineMs of [0,-1,60001,1.5,NaN,Infinity,'1000'])expect(()=>createSemanticCorpusService({corpusReader:{searchOperationCandidatesAcrossServices:ports.search,readContract:ports.readContract},semanticService:{discover:ports.discover},deadlineMs} as never)).toThrow('SEMANTIC_CORPUS_INVALID_REQUEST');
+ const getter=vi.fn(()=>1000),input=Object.defineProperty({corpusReader:{searchOperationCandidatesAcrossServices:ports.search,readContract:ports.readContract},semanticService:{discover:ports.discover}},'deadlineMs',{get:getter,enumerable:true});
+ expect(()=>createSemanticCorpusService(input as never)).toThrow('SEMANTIC_CORPUS_INVALID_REQUEST');expect(getter).not.toHaveBeenCalled();
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout','performance']});try{
+  await expect(ports.service.discoverAcrossServices(context,options)).resolves.toMatchObject({status:'groups'});expect(vi.getTimerCount()).toBe(0);
+ }finally{vi.useRealTimers();}
+});
+
+for(const finalSearch of [false,true])test(`maps hostile ${finalSearch?'final':'initial'} search rejections without proxy trap execution`,async()=>{
+ const initial=candidatesResult([candidate('commerce','orders','7')]),ports=setup(initial);
+ const trap=vi.fn(()=>{throw Error('private-error-trap');}),revoked=Proxy.revocable({},{});revoked.revoke();
+ for(const rejected of [revoked.proxy,new Proxy({},{getPrototypeOf:trap})]){
+  ports.search.mockReset();if(finalSearch)ports.search.mockResolvedValueOnce(initial);ports.search.mockRejectedValueOnce(rejected);
+  await expect(ports.service.discoverAcrossServices(context,options)).rejects.toMatchObject({code:'SEMANTIC_CORPUS_UNAVAILABLE',message:'SEMANTIC_CORPUS_UNAVAILABLE'});
+ }
+ expect(trap).not.toHaveBeenCalled();
+});

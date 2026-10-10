@@ -66,7 +66,7 @@ export type SemanticCorpusDiscoveryResult=
   | Readonly<{status:"unknown";environment:string;reason:"no_visible_services"|"incomplete_scan"|"scan_limit"|"group_limit"|"unsupported_pin"}>;
 type DiscoveryPort={discover(context:unknown,selection:unknown,endpointIds:unknown,intentQuery:unknown):Promise<SemanticAnalysisResult>};
 type ContractReadPort={readContract(context:unknown,selection:unknown):Promise<QueryContractResult>};
-type Ports=Readonly<{corpusReader:QueryCorpusOperationReader&ContractReadPort;semanticService:DiscoveryPort}>;
+type Ports=Readonly<{corpusReader:QueryCorpusOperationReader&ContractReadPort;semanticService:DiscoveryPort;deadlineMs?:number}>;
 const parseContext=(input:unknown):Context=>{
   const value=fields(input,["tenantId","principalId"]);
   if(!value||!safeText(value.tenantId,512)||!safeText(value.principalId,512))return fail("SEMANTIC_CORPUS_INVALID_REQUEST");
@@ -239,65 +239,84 @@ const parsedContract=(input:unknown,group:Group,context:Context):Readonly<{snaps
 
 /** Orchestrates bounded per-service discovery over an already authorized corpus search port. */
 export const createSemanticCorpusService=(input:Ports)=>{
-  const options=fields(input,["corpusReader","semanticService"]);
+  const options=fields(input,["corpusReader","semanticService",...(plain(input)&&Object.hasOwn(input,"deadlineMs")?["deadlineMs"]:[])]);
   if(!options||!plain(options.corpusReader)||!plain(options.semanticService))
+    return fail("SEMANTIC_CORPUS_INVALID_REQUEST");
+  const deadlineMs=Object.hasOwn(options,"deadlineMs")?options.deadlineMs:30_000;
+  if(typeof deadlineMs!=="number"||!Number.isSafeInteger(deadlineMs)||deadlineMs<1||deadlineMs>60_000)
     return fail("SEMANTIC_CORPUS_INVALID_REQUEST");
   const query=options.corpusReader as unknown as Ports["corpusReader"],semantic=options.semanticService as unknown as DiscoveryPort;
   const searchMethod=dataMethod(query,"searchOperationCandidatesAcrossServices"),readMethod=dataMethod(query,"readContract"),discoverMethod=dataMethod(semantic,"discover");
   if(!searchMethod||!readMethod||!discoverMethod)return fail("SEMANTIC_CORPUS_INVALID_REQUEST");
   const search=(...args:unknown[])=>searchMethod.apply(query,args),readContract=(...args:unknown[])=>readMethod.apply(query,args),
     discover=(...args:unknown[])=>discoverMethod.apply(semantic,args);
-  const searchAgain=async(context:Context,options:Options):Promise<CorpusOperationSearchResult>=>{
-    try{const raw=await search(context,{tenantId:context.tenantId,environment:options.environment,intentQuery:options.intentQuery,limit:options.limit});
+  const searchAgain=async(context:Context,options:Options,wait:(start:()=>unknown)=>Promise<unknown>):Promise<CorpusOperationSearchResult>=>{
+    try{const raw=await wait(()=>search(context,{tenantId:context.tenantId,environment:options.environment,intentQuery:options.intentQuery,limit:options.limit}));
       const parsed=parseSearch(copyJson(raw),context,options);if(!parsed)return fail("SEMANTIC_CORPUS_UNAVAILABLE");return parsed;
-    }catch(error){if(error instanceof SemanticCorpusError)throw error;return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
+    }catch(error){
+      let code:SemanticCorpusError["code"]|undefined;
+      try{if(!isProxy(error)&&error instanceof SemanticCorpusError){
+        const candidate=Object.getOwnPropertyDescriptor(error,"code")?.value;
+        if(["SEMANTIC_CORPUS_INVALID_REQUEST","SEMANTIC_CORPUS_STALE_CONTEXT","SEMANTIC_CORPUS_UNAVAILABLE"].includes(candidate))code=candidate;
+      }}catch{}
+      return fail(code??"SEMANTIC_CORPUS_UNAVAILABLE");
+    }
   };
   return Object.freeze({discoverAcrossServices:async(contextInput:unknown,requestInput:unknown):Promise<SemanticCorpusDiscoveryResult>=>{
-    const context=parseContext(contextInput),request=parseOptions(requestInput),initial=await searchAgain(context,request);
-    if(initial.status==="unknown")return Object.freeze({status:"unknown",environment:request.environment,reason:initial.reason});
-    if(initial.status==="no_match")return Object.freeze({status:"shortlist_no_match",environment:request.environment,
-      matchMode:"keyword",scope:"keyword_candidates",complete:true,verification:"inferred",review:"unreviewed",normative:false});
-    const groups=groupCandidates(initial.candidates);
-    if(groups.length>4)return Object.freeze({status:"unknown",environment:request.environment,reason:"group_limit"});
-    if(groups.some(group=>Object.hasOwn(group.pin,"selectedRevision")||Object.hasOwn(group.pin,"pointerVersion")
-      ||!group.pin.checkpointVersion))return Object.freeze({status:"unknown",environment:request.environment,reason:"unsupported_pin"});
-    const results:SemanticCorpusGroupResult[]=[];
-    for(const group of groups){
-      let rawContract:unknown;
-      try{rawContract=await readContract(context,group.selector);}catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
-      let detachedContract:unknown;try{detachedContract=copyJson(rawContract);}catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
-      const contract=parsedContract(detachedContract,group,context);if(!contract)return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
-      const snapshot=contract.snapshot;
-      const endpointSet=new Set(group.candidates.map(item=>item.endpointId));
-      if(group.candidates.some(candidate=>!snapshot.endpoints.some(endpoint=>endpoint.endpoint_id===candidate.endpointId
-        &&endpoint.identity.method===candidate.method&&endpoint.application_path===candidate.path)))return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
-      const allowedEvidence=new Map<string,ReadonlySet<string>>();
-      for(const endpointId of endpointSet){const scoped=snapshot.evidence.filter(evidence=>evidence.source.source_id===snapshot.source.repository_id
-        &&evidence.source_version===snapshot.source.immutable_revision&&evidence.scope.service_id===group.serviceId
-        &&evidence.scope.snapshot_id===snapshot.snapshot_id&&evidence.scope.revision===snapshot.source.immutable_revision
-        &&(evidence.scope.endpoint_id===undefined||evidence.scope.endpoint_id===endpointId));
-        const allCandidateEvidence=new Set(scoped.map(evidence=>evidence.evidence_id));
-        const candidate=group.candidates.find(item=>item.endpointId===endpointId)!;
-        if(candidate.evidenceIds.some(evidenceId=>!allCandidateEvidence.has(evidenceId)))return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
-        const ids=scoped.filter(evidence=>(evidence.source.kind==="api_document"&&evidence.method==="type_declaration"
-          &&(evidence.scope.endpoint_id===undefined||evidence.scope.endpoint_id===endpointId)
-          ||evidence.source.kind==="source_code"&&evidence.scope.endpoint_id===endpointId
-            &&(evidence.method==="type_declaration"||evidence.method==="deterministic_analysis")))
-          .map(evidence=>evidence.evidence_id);allowedEvidence.set(endpointId,new Set(ids));}
-      let raw:unknown;
-      try{raw=await discover(context,group.selector,group.candidates.map(item=>item.endpointId),request.intentQuery);}
-      catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
-      let result:SemanticAnalysisResult|undefined;
-      try{result=validDiscoveryResult(copyJson(raw),group,allowedEvidence);}catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
-      if(!result)return fail("SEMANTIC_CORPUS_UNAVAILABLE");
-      results.push(Object.freeze({...group,result}));
-    }
-    const final=await searchAgain(context,request);
-    if(!equal(initial,final))return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
-    return Object.freeze({status:"groups",environment:request.environment,scope:"keyword_candidates",
-      verification:"inferred",review:"unreviewed",normative:false,
-      shortlistCoverage:Object.freeze({complete:initial.complete,truncated:initial.truncated,
-        ...("incompleteReason" in initial&&initial.incompleteReason?{incompleteReason:initial.incompleteReason}:{})}),
-      groups:Object.freeze(results)});
+    const context=parseContext(contextInput),request=parseOptions(requestInput);
+    const started=performance.now();let expired=false;
+    let timer:ReturnType<typeof setTimeout>;
+    const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{expired=true;reject(new SemanticCorpusError("SEMANTIC_CORPUS_UNAVAILABLE"));},deadlineMs);});
+    const ensureActive=()=>{if(expired||performance.now()-started>=deadlineMs)return fail("SEMANTIC_CORPUS_UNAVAILABLE");};
+    const wait=async(start:()=>unknown):Promise<unknown>=>{ensureActive();const result=await Promise.race([Promise.resolve().then(()=>{ensureActive();return start();}),timeout]);ensureActive();return result;};
+    const finish=<const T>(result:T):Readonly<T>=>{ensureActive();return Object.freeze(result);};
+    try{
+      const initial=await searchAgain(context,request,wait);
+      if(initial.status==="unknown")return finish({status:"unknown",environment:request.environment,reason:initial.reason});
+      if(initial.status==="no_match")return finish({status:"shortlist_no_match",environment:request.environment,
+        matchMode:"keyword",scope:"keyword_candidates",complete:true,verification:"inferred",review:"unreviewed",normative:false});
+      const groups=groupCandidates(initial.candidates);
+      if(groups.length>4)return finish({status:"unknown",environment:request.environment,reason:"group_limit"});
+      if(groups.some(group=>Object.hasOwn(group.pin,"selectedRevision")||Object.hasOwn(group.pin,"pointerVersion")
+        ||!group.pin.checkpointVersion))return finish({status:"unknown",environment:request.environment,reason:"unsupported_pin"});
+      const results:SemanticCorpusGroupResult[]=[];
+      for(const group of groups){
+        let rawContract:unknown;
+        try{rawContract=await wait(()=>readContract(context,group.selector));}catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
+        let detachedContract:unknown;try{detachedContract=copyJson(rawContract);}catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
+        const contract=parsedContract(detachedContract,group,context);if(!contract)return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
+        const snapshot=contract.snapshot;
+        const endpointSet=new Set(group.candidates.map(item=>item.endpointId));
+        if(group.candidates.some(candidate=>!snapshot.endpoints.some(endpoint=>endpoint.endpoint_id===candidate.endpointId
+          &&endpoint.identity.method===candidate.method&&endpoint.application_path===candidate.path)))return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
+        const allowedEvidence=new Map<string,ReadonlySet<string>>();
+        for(const endpointId of endpointSet){const scoped=snapshot.evidence.filter(evidence=>evidence.source.source_id===snapshot.source.repository_id
+          &&evidence.source_version===snapshot.source.immutable_revision&&evidence.scope.service_id===group.serviceId
+          &&evidence.scope.snapshot_id===snapshot.snapshot_id&&evidence.scope.revision===snapshot.source.immutable_revision
+          &&(evidence.scope.endpoint_id===undefined||evidence.scope.endpoint_id===endpointId));
+          const allCandidateEvidence=new Set(scoped.map(evidence=>evidence.evidence_id));
+          const candidate=group.candidates.find(item=>item.endpointId===endpointId)!;
+          if(candidate.evidenceIds.some(evidenceId=>!allCandidateEvidence.has(evidenceId)))return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
+          const ids=scoped.filter(evidence=>(evidence.source.kind==="api_document"&&evidence.method==="type_declaration"
+            &&(evidence.scope.endpoint_id===undefined||evidence.scope.endpoint_id===endpointId)
+            ||evidence.source.kind==="source_code"&&evidence.scope.endpoint_id===endpointId
+              &&(evidence.method==="type_declaration"||evidence.method==="deterministic_analysis")))
+            .map(evidence=>evidence.evidence_id);allowedEvidence.set(endpointId,new Set(ids));}
+        let raw:unknown;
+        try{raw=await wait(()=>discover(context,group.selector,group.candidates.map(item=>item.endpointId),request.intentQuery));}
+        catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
+        let result:SemanticAnalysisResult|undefined;
+        try{result=validDiscoveryResult(copyJson(raw),group,allowedEvidence);}catch{return fail("SEMANTIC_CORPUS_UNAVAILABLE");}
+        if(!result)return fail("SEMANTIC_CORPUS_UNAVAILABLE");
+        results.push(Object.freeze({...group,result}));
+      }
+      const final=await searchAgain(context,request,wait);
+      if(!equal(initial,final))return fail("SEMANTIC_CORPUS_STALE_CONTEXT");
+      return finish({status:"groups",environment:request.environment,scope:"keyword_candidates",
+        verification:"inferred",review:"unreviewed",normative:false,
+        shortlistCoverage:Object.freeze({complete:initial.complete,truncated:initial.truncated,
+          ...("incompleteReason" in initial&&initial.incompleteReason?{incompleteReason:initial.incompleteReason}:{})}),
+        groups:Object.freeze(results)});
+    }finally{clearTimeout(timer!);}
   }});
 };

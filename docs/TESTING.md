@@ -369,3 +369,8 @@ activation epoch. No model calls or actual deployment are involved.
 ### Multi-input reuse rejection gate
 
 `tests/integration/query-multi-input-reuse-gate.test.ts` uses actual Git commits, the routing-controllers 0.9.0 analyzer and disposable PostgreSQL schemas. It proves that a genuinely incomplete base is not reused despite identical source/manifest inputs and an explicitly trusted empty delta, checks fresh evidence revisions across chained updates, and changes the manifest to verify `/v2/orders`. Run together with `tests/integration/query-reused-revision.test.ts` to retain the separate complete source-only reuse gate. No model or live framework is involved.
+
+
+### Corpus discovery response budget
+
+`tests/unit/semantic-corpus-service.test.ts` uses fake timers and monotonic time with synthetic query/inference ports. Deadline cases stall the initial search, contract read, inference or final authorization search; they verify one aggregate budget, fixed timeout failure, no later service group after expiry, withheld late responses and timer release. These are orchestration conformance tests, not live model-quality or network-cancellation tests.

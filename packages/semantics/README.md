@@ -52,7 +52,7 @@ also rechecks its own grants and configuration around each provider call. All
 outputs remain inferred, unreviewed and non-normative. Inputs cannot select a
 provider, model, credentials, tenant, endpoint IDs or source pins. This bounded
 composition adds no embedding index, durable enriched prose, owner approval or
-whole-operation deadline. OpenAI, Gemini and Claude remain host configuration
+transport cancellation. OpenAI, Gemini and Claude remain host configuration
 choices; local tests use synthetic provider ports only.
 
 
@@ -73,3 +73,10 @@ prose. Live provider accuracy, benchmark targets, corpus indexing and owner revi
 remain separate acceptance gates. Corpus orchestration requires inferred answers
 to name analyzed operations only; `no_context` requires zero analyzed operations,
 and partial answers must retain their omitted endpoint list.
+
+
+## Cross-service response deadline
+
+Semantics 0.7.3 applies one shared 30-second monotonic deadline to corpus discovery: initial authorized candidate search, contract/evidence checks, all service-group comparisons, and final authorization/pin recheck. The host can set `deadlineMs` to an integer from 1 through 60,000; callers cannot override it. Expiry returns only `SEMANTIC_CORPUS_UNAVAILABLE`, stops further orchestration calls, withholds partial/late answers, and releases its timer. Success and ordinary failures also release the timer.
+
+This bounds how long the caller waits and whether the orchestrator starts another phase. It does not interrupt synchronous JavaScript or cancel a query/provider port already in flight. Such a port can finish its own transport work or append its independently authorized history. Hosts remain responsible for underlying query/transport cancellation and cleanup. No provider fallback, new model calls, persistent index or owner-review status is introduced.

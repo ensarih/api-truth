@@ -1766,3 +1766,12 @@ tests and all 500 PostgreSQL tests for this transport slice.
 A real temporary Git repository and the pinned routing-controllers 0.9.0 profile establish a partial/incomplete baseline with `startup_entrypoint_unverified`. Identical source and manifest bytes plus a trusted, complete empty analysis delta still run fresh analysis for each revision, including chained updates. Changing the JSON profile to `/v2` changes its manifest digest and produces `/v2/orders` from a fresh analysis. That profile also belongs to the selected source tree, so the test makes no unchanged-source-digest claim for that mutation.
 
 This is a fail-closed conformance gate, not implementation of multi-input reuse. Enabling reuse requires an actual eligible complete profile, or a separately designed qualified partial-revision contract. Current production completion/startup gates remain unchanged. Independent review approved the fixture; the new PostgreSQL case and existing qualified source-reuse case pass together.
+
+
+### Shared cross-service discovery deadline — P4 (2026-10-10)
+
+Corpus discovery shares a host-configured monotonic response budget across authorized shortlist retrieval, current contract reads, service-group inference and final shortlist reauthorization. Default is 30 seconds, bounded to 60 seconds. Timeout withholds partial and late answers with a fixed unavailable error; later groups are not started. Timers are cleared on every settled path. Caller identity, provider selection, access/evidence gates and final pin/configuration rechecks remain unchanged.
+
+This is an orchestration response bound; already-started port operations cannot be canceled through the existing interface and may finish independent transport/history work. Synchronous validation is not preempted. An embedding index, durable owner review and live-model quality evaluation remain open. Deterministic fake-clock tests cover stalls at each external boundary, aggregate budget, late results, inert host configuration and timer cleanup; no model grades a test.
+
+Validation: red/green regressions reproduce deadline and hostile search-error gaps. Independent review approved the fixed implementation; typecheck, all 1,803 offline tests and 48 relevant PostgreSQL semantic/history/corpus cases pass. Both initial and final search reject hostile error proxies without trap execution or error-text leakage.
