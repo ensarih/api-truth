@@ -41,7 +41,7 @@ afterEach(async()=>{await database.cleanup();});
 test("applies the owner-policy migration idempotently and rejects checksum drift",async()=>{
   await applyObservationMigrations(database.pool,{schema:database.schema});
   const rows=await database.pool.query(`SELECT version FROM ${schema}.observation_schema_migrations ORDER BY version`);
-  expect(rows.rows.map(row=>row.version)).toEqual(["0001_metadata_imports","0002_field_presence_owner_policies"]);
+  expect(rows.rows.map(row=>row.version)).toEqual(["0001_metadata_imports","0002_field_presence_owner_policies","0003_field_presence_retention"]);
   await database.pool.query(`UPDATE ${schema}.observation_schema_migrations SET checksum_sha256=$1 WHERE version='0002_field_presence_owner_policies'`,
     ["sha256:"+"f".repeat(64)]);
   await expect(applyObservationMigrations(database.pool,{schema:database.schema})).rejects.toMatchObject({code:"OBSERVATION_STORAGE_ERROR"});

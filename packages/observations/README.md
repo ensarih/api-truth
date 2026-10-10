@@ -157,3 +157,33 @@ These tables store static policy only. They do not yet approve policies through 
 host service, persist presence results, enforce TTL/budgets or delete derived
 rows. Those lifecycle operations remain separate implementation gates; adding a
 schema does not establish traffic provenance or owner authorization.
+
+## Derived presence retention integrity (database prerequisite)
+
+Migration `0003_field_presence_retention` adds separate value-free presence rows
+and immutable replay tombstones. Inserts bind the exact confirmed metadata parent,
+source snapshot digest, static policy generation, endpoint and response status.
+Only the policy's complete canonical path list with `present`/`absent` states is
+accepted. Rows cannot be updated. No bodies or payload-value hashes are stored.
+
+The database computes expiry as the immutable import's source window end plus the
+policy's TTL. Future, unverified-after-import, nonfinite and already expired windows
+reject; callers cannot supply expiry or restart retention with exact retries.
+The policy-head lock serializes inserts against a policy-wide unexpired-row budget,
+including hidden older generations. Changing revisions cannot multiply that budget.
+
+The internal invoker-rights SQL function `observation_field_presence_delete` locks
+the policy head first, creates a permanent generation/parent tombstone, then deletes
+the derived row in the same transaction. A tombstone requires an existing result at insertion and completed deletion at
+transaction commit, preventing standalone markers from poisoning unwritten keys.
+Raw deletion without a tombstone rejects.
+A replay under that deleted generation rejects. Original metadata stays immutable.
+The live view filters expired rows and disabled or replaced generations using
+database time; it is not an authorized query API.
+
+These are storage integrity primitives, not an authenticated persistence service.
+The host must still approve policies, establish body-to-parent correspondence,
+recheck current configuration/serving pins and grants atomically, bound source
+reads, and authorize retention maintenance independently. Expiry hides rows;
+physical cleanup requires the separate maintenance runner, which is not implemented
+here. Tombstones are not pruned; any future pruning needs a proven replay horizon.

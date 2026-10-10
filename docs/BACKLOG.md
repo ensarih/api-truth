@@ -44,7 +44,7 @@ provider or enterprise pilot claim.
 | NB6 | In progress | Separate bounded OpenAPI 3.0 and 3.1 JSON/YAML profiles and CLIs implemented; broader 2020-12 dialect, resource and reference semantics remain open. |
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
-| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary is implemented; live adapters, durable reviewed samples and retention remain separate gates. |
+| P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary and database retention integrity prerequisites are implemented; live adapters, authenticated persistence/cleanup and durable reviewed samples remain separate gates. |
 | P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
@@ -1192,3 +1192,21 @@ transaction; importer behavior keeps its original default scope requirements.
 Host-authenticated policy approval/CAS, derived presence storage, database-clock
 retention, quotas and replay-safe deletion remain open. Schema constraints alone
 are not an owner approval service.
+
+### Derived presence retention integrity — P3 database prerequisite (2026-10-10)
+
+Observations 0.9.0 adds migration 0003 with value-free derived rows and immutable
+replay tombstones. Exact metadata/policy/source lineage and complete static
+presence paths are checked. Database-clock lifetime starts at source window end;
+exact retries cannot restart TTL. Policy-head locking enforces a policy-wide
+unexpired-row budget across generations. Disabled/replaced/expired rows are hidden
+from the live SQL view. Head-first deletion atomically tombstones and deletes only
+derived rows; metadata remains append-only.
+
+The first six integration tests failed before storage existed. Fourteen focused
+PostgreSQL cases now cover TTL/replay, concurrent budgets, opt-out/replacement,
+privacy/lineage, atomic rollback and real database-time expiry. Review exposed standalone tombstone poisoning; two additional failing tests
+now require an existing result at tombstone insertion and completed deletion at
+transaction commit. Public persistence
+and authorized query/maintenance services are still required; a SQL view or delete
+primitive does not grant authority. Physical cleanup scheduling remains open.
