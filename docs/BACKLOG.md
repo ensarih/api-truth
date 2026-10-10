@@ -45,7 +45,7 @@ provider or enterprise pilot claim.
 | NB7 / NB8-COMPOSE | Open | Independent wrapper/framework profiles; explicit composite identity/provenance/deletion design and tests. |
 | D13-S1 | Open | One analyzer-backed lifecycle through publication and consistent portal/MCP/export; preserve strict evidence gates. |
 | P3-LOGS | In progress | Metadata sanitization and environment URL correlation, synthetic examples and value-free field-presence projection are implemented. A bounded host-authorized body-read boundary, owner approval, authenticated derived presence import, authorized value-free queries, optional portal/MCP presentation and bounded retention maintenance are implemented; live adapters, durable distributed scheduling and reviewed samples remain separate gates. Bounded in-process cleanup scheduling is implemented. |
-| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, provider binding and private history metadata are implemented; semantic corpus retrieval/index, durable review and live evaluation remain. |
+| P4-SEMANTICS | In progress | Grounded selected-operation discovery, source identifiers, authorized cross-service keyword candidates, bounded per-service semantic shortlist comparison, provider binding and private history metadata are implemented; a semantic corpus index, durable review and live evaluation remain. |
 | D12-S0/S2 | In progress | Exact configured GitHub branch and repository-restricted App token ports are implemented offline; authenticated live host, artifacts, provider ordering and environment wiring remain. |
 | P2-JAVA | In progress | Bounded Spring AST profile and actual Git-to-D08 update implemented; broader Spring contracts, two-ecosystem conformance and downstream lifecycle remain. |
 | P5-DOCS | Open | Permission-scoped Confluence context and discrepancy review. |
@@ -1431,3 +1431,26 @@ four composed lifecycle cases cover valid request/response selectors, purpose/ke
 mismatch, tampering, full lineage checks, active-source digest mismatch, bounds,
 abort and inert inputs. Restoring duplicate-capability acceptance in an isolated
 copy makes the identity regression fail; the reviewed reader passes it.
+
+
+### Bounded cross-service semantic shortlist — P4 (2026-10-10)
+
+Semantics 0.7.0 composes authorized current-environment keyword retrieval with
+configured per-service discovery. At most sixteen candidates and four service
+groups are compared; unsupported qualified pins and excess groups are withheld
+before provider work. Results keep each repository/service namespace and pin,
+including identical endpoint IDs in different services. Current contract/evidence
+checks precede inference, and the same authorized corpus query runs again after
+all calls. A changed shortlist or authority discards the whole response.
+
+Keyword shortlist coverage and analyzed semantic context remain separate. Empty
+keyword results do not establish enterprise-wide API absence. Suggestions remain
+inferred, unreviewed and non-normative; an embedding index, durable review, live
+provider evaluation and an overall operation deadline remain open. The public
+factory cannot accept caller-selected provider credentials or identity.
+
+Validation: independent implementation review, locked clean install/typecheck,
+1,719 offline tests and 457 PostgreSQL tests pass. Eleven focused unit cases and
+fifteen corpus database cases cover all three synthetic configured providers,
+cross-service endpoint-ID collisions, mid-call grant revocation, no-context
+shortlists, disabled inference, inert inputs and grounded output validation.

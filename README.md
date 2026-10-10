@@ -62,7 +62,7 @@ Start with:
 
 Functional development follows test-driven development. `npm run check` uses deterministic fixtures and contract assertions without Docker, databases, network access, or provider credentials. The separate PostgreSQL suite uses a pinned, loopback-only, disposable Compose service. OpenAI, Gemini, and Claude are application providers for semantic API understanding; they are not test runners or test judges.
 
-The current local workflow can extract the synthetic baseline and round-trip it through an ephemeral schema in the fixed Docker-backed test database. A synthetic CI fixture formats validated events; the local bridge can deliver host-attested facts to the durable ledger. Production provider authentication and the full CI/deployment lifecycle remain open Phase 1 work. Later phases add runtime evidence, semantic understanding, and related-document connectors.
+The current local workflow can extract the synthetic baseline and round-trip it through an ephemeral schema in the fixed Docker-backed test database. A synthetic CI fixture formats validated events; the local bridge can deliver host-attested facts to the durable ledger. Production provider authentication and the full CI/deployment lifecycle remain open Phase 1 work. Bounded runtime observations and configured semantic discovery are implemented; live collectors, a semantic corpus index, reviewed enrichment and related-document connectors remain open. See the [semantic package](packages/semantics/README.md) for the bounded cross-service discovery profile.
 
 ## Open-source principles
 

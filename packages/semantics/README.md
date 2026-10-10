@@ -25,3 +25,32 @@ Archived data contains only status, cited endpoint/evidence IDs, optional contex
 This is an initial Phase 4 slice. Durable enriched prose, cache invalidation, owner review workflow, and curated question evaluation are separate work.
 
 Free-form document text uses conservative exclusion patterns for credential-looking content, including inline Bearer values. Pattern matching cannot guarantee that arbitrary prose contains no sensitive information. Apply the organization’s document egress policy before enabling an external provider; permission to read a document alone is not a content-safety certification.
+
+## Bounded cross-service discovery
+
+`createSemanticCorpusService({corpusReader, semanticService})` composes the
+public authorized query reader with the existing configured semantic service.
+`discoverAcrossServices(context, {environment, intentQuery, limit})` uses the
+host-authenticated tenant/principal and a required limit of 1–16. It first finds
+keyword candidates among visible authorized services in that environment, then
+compares the intent separately within at most four service groups. More groups
+produce `unknown: group_limit` before any model call. Qualified multi-input pins
+are currently withheld as `unsupported_pin`.
+
+Each group keeps its repository/service namespace, exact environment checkpoint,
+candidates, cited evidence and semantic result. Identical endpoint IDs in different
+services remain distinct. No ranking across provider answers is claimed.
+`shortlistCoverage` describes the bounded keyword search; each result's
+`contextCoverage` describes the selected context actually analyzed. A complete
+empty keyword shortlist yields `shortlist_no_match` without calling a model;
+it does not establish that no suitable API exists in the enterprise.
+
+The service checks each current contract and evidence before inference and repeats
+the same authorized corpus query after all group calls. A changed shortlist, pin
+or authority discards the whole response. The existing selected semantic service
+also rechecks its own grants and configuration around each provider call. All
+outputs remain inferred, unreviewed and non-normative. Inputs cannot select a
+provider, model, credentials, tenant, endpoint IDs or source pins. This bounded
+composition adds no embedding index, durable enriched prose, owner approval or
+whole-operation deadline. OpenAI, Gemini and Claude remain host configuration
+choices; local tests use synthetic provider ports only.

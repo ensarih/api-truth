@@ -6,3 +6,5 @@ export {applySemanticHistoryMigrations,SemanticHistoryStorageError} from "./migr
 export type {SemanticHistorySafeResult,SemanticHistoryRecord,SemanticHistoryReadResult} from "./history.js";
 export type {SemanticAnalysisInput, SemanticDiscoveryInput, SemanticAnalysisResult, SemanticProviderId, SemanticProviderPort,
   SemanticProviderRequest, SemanticSuggestion, SemanticProvenance} from "./types.js";
+export {createSemanticCorpusService, SemanticCorpusError} from "./corpus-service.js";
+export type {SemanticCorpusDiscoveryResult, SemanticCorpusGroupResult} from "./corpus-service.js";

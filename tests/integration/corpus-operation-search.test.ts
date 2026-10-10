@@ -1,12 +1,15 @@
 import {readFile} from "node:fs/promises";
-import {afterEach, beforeEach, expect, test} from "vitest";
+import {afterEach, beforeEach, expect, test,vi} from "vitest";
 import {parseContractSnapshot,type ContractSnapshot,type InstallationConfig} from "../../packages/ir/src/index.js";
 import {deriveEndpointIdentity} from "../../packages/ir/src/identity.js";
 import {snapshotContentSha256, snapshotIdentitySha256} from "../../packages/catalog/src/canonical.js";
+import {applyOpenApiMigrations} from "../../packages/openapi/src/index.js";
 import {applyEnvironmentMigrations} from "../../packages/environment/src/migrations.js";
 import {applyOrchestrationMigrations} from "../../packages/orchestration/src/migrations.js";
 import {canonicalOrchestrationHash} from "../../packages/orchestration/src/canonical.js";
 import {createQueryReader} from "../../packages/query/src/index.js";
+import {createSemanticService,type SemanticProviderBinding,type SemanticProviderId,type SemanticProviderRequest} from "../../packages/semantics/src/index.js";
+import {createSemanticCorpusService} from "../../packages/semantics/src/corpus-service.js";
 import {createCatalogTestDatabase, quoteCatalogTestSchema, type CatalogTestDatabase} from "./support/database.js";
 
 const tenantId="tenant-corpus", principalId="corpus-reader", environment="uat";
@@ -21,7 +24,7 @@ const context=()=>({tenantId,principalId});
 const request=(intentQuery:string,limit=20)=>({tenantId,environment,intentQuery,limit});
 const schema=()=>quoteCatalogTestSchema(database.schema);
 
-const documentSnapshot=async(spec:(typeof serviceSpecs)[number]):Promise<ContractSnapshot>=>{
+const documentSnapshot=async(spec:(typeof serviceSpecs)[number],sharedEndpointId?:string):Promise<ContractSnapshot>=>{
   const base=JSON.parse(await readFile(new URL("../fixtures/ir/express-snapshot.json",import.meta.url),"utf8")) as ContractSnapshot;
   const snapshot=structuredClone(base);
   snapshot.snapshot_id=`snapshot-${spec.serviceId}`;
@@ -32,7 +35,7 @@ const documentSnapshot=async(spec:(typeof serviceSpecs)[number]):Promise<Contrac
   snapshot.coverage={status:"complete",analyzed_roots:["src"],diagnostic_ids:[]};
   snapshot.endpoints=[structuredClone(base.endpoints[0]!)];
   const endpoint=snapshot.endpoints[0]!;
-  endpoint.endpoint_id=`endpoint-${spec.serviceId}`;
+  endpoint.endpoint_id=sharedEndpointId??`endpoint-${spec.serviceId}`;
   endpoint.identity=deriveEndpointIdentity({identity_version:endpoint.identity.identity_version,
     service_id:spec.serviceId,method:endpoint.identity.method,application_path:endpoint.application_path,
     selectors:endpoint.identity.selectors});
@@ -69,8 +72,8 @@ const seedScope=async(scopeId:string,granted=true)=>{
   if(granted)await database.pool.query(`INSERT INTO ${schema()}.principal_scope_grants(tenant_id,principal_id,access_scope_id,active)
     VALUES($1,$2,$3,true)`,[tenantId,principalId,scopeId]);
 };
-const seedService=async(spec:(typeof serviceSpecs)[number],index:number,oversized=false)=>{
-  const snapshot=await documentSnapshot(spec);
+const seedService=async(spec:(typeof serviceSpecs)[number],index:number,oversized=false,sharedEndpointId?:string)=>{
+  const snapshot=await documentSnapshot(spec,sharedEndpointId);
   const parsed=parseContractSnapshot(snapshot);
   if(!parsed.ok)throw new Error(JSON.stringify(parsed.error));
   await database.pool.query(`INSERT INTO ${schema()}.catalog_snapshots
@@ -110,10 +113,11 @@ const seedService=async(spec:(typeof serviceSpecs)[number],index:number,oversize
   [tenantId,spec.repositoryId,spec.serviceId,artifact,snapshot.source.immutable_revision,attempt]);
 };
 
-const setup=async(extraServices=0,oversizedServiceId?:string,oversizedConfiguration=false)=>{
+const setup=async(extraServices=0,oversizedServiceId?:string,oversizedConfiguration=false,semantic?:{provider:SemanticProviderId;sharedEndpointId?:string})=>{
   database=await createCatalogTestDatabase();
   await applyOrchestrationMigrations(database.pool,{schema:database.schema});
   await applyEnvironmentMigrations(database.pool,{schema:database.schema});
+  if(semantic)await applyOpenApiMigrations(database.pool,{schema:database.schema});
   for(const scope of ["deployment-read","source-read","contract-read","invoice-evidence",
     ...serviceSpecs.map(spec=>spec.scope)])
     await seedScope(scope,scope!=="secrets-repo");
@@ -124,7 +128,8 @@ const setup=async(extraServices=0,oversizedServiceId?:string,oversizedConfigurat
         root:`services/${spec.serviceId}`,analyzer:{adapter_id:"typescript",adapter_version:"1"},
         intended_branches:["main"],environments:[{name:environment,intended_branch:"main",
           deployment_authority:{adapter_id:"deploy",access_scope_id:"deployment-read"}}]}]})),
-    inference:{enabled:false},logs:{enabled:false}};
+    inference:semantic?{enabled:true,provider:semantic.provider,model:"synthetic-model",
+      credential:{secret_ref:{scheme:"env",locator:"SYNTHETIC_CORPUS_KEY"}}}:{enabled:false},logs:{enabled:false}};
   const template=document.repositories[0]!.services[0]!;
   for(let index=0;index<extraServices;index++)document.repositories[0]!.services.push({
     ...structuredClone(template),service_id:`synthetic-${String(index).padStart(3,"0")}`,
@@ -137,7 +142,7 @@ const setup=async(extraServices=0,oversizedServiceId?:string,oversizedConfigurat
   await database.pool.query(`INSERT INTO ${schema()}.orchestration_active_configurations
     (tenant_id,config_fingerprint,checkpoint_version) VALUES($1,$2,1)`,[tenantId,fingerprint]);
   for(let index=0;index<serviceSpecs.length;index++)await seedService(serviceSpecs[index]!,index,
-    serviceSpecs[index]!.serviceId===oversizedServiceId);
+    serviceSpecs[index]!.serviceId===oversizedServiceId,semantic?.sharedEndpointId);
 };
 beforeEach(async()=>{await setup();});
 afterEach(async()=>{await database.cleanup();});
@@ -299,4 +304,68 @@ test("invalid and hostile requests fail before acquiring a database connection",
     await expect(reader.searchOperationCandidatesAcrossServices(context(),input))
       .rejects.toMatchObject({code:"INVALID_QUERY_SEARCH"});
   }
+});
+
+
+const corpusProviderAnswer=(request:SemanticProviderRequest)=>({status:"suggestions",suggestions:request.endpoints.map(endpoint=>({
+  endpointId:endpoint.endpointId,intent:"Read stored records",summary:"Read stored records by identifier.",
+  evidenceIds:endpoint.documents[0]!.evidenceIds}))});
+
+test.each(["openai","gemini","claude"] as const)("%s: semantic corpus keeps identical endpoint IDs separated by service and checkpoint",async provider=>{
+  await database.cleanup();await setup(0,undefined,false,{provider,sharedEndpointId:"endpoint-shared"});
+  const factory=vi.fn(async(binding:SemanticProviderBinding)=>{
+    expect(binding).toEqual({tenantId,provider,model:"synthetic-model",secretRef:{scheme:"env",locator:"SYNTHETIC_CORPUS_KEY"}});
+    return async(request:SemanticProviderRequest)=>{
+      expect(request.source.selector).toMatchObject({kind:"environment",environment});
+      expect(request.endpoints).toHaveLength(1);expect(request.endpoints[0]!.endpointId).toBe("endpoint-shared");
+      expect(JSON.stringify(request)).not.toContain("secrets");return corpusProviderAnswer(request);
+    };
+  });
+  const discovery=createSemanticCorpusService({corpusReader:createQueryReader(database.pool,{schema:database.schema}),
+    semanticService:createSemanticService(database.pool,{schema:database.schema,providerFactory:factory})});
+  const result=await discovery.discoverAcrossServices(context(),{environment,intentQuery:"stored",limit:16});
+  expect(result).toMatchObject({status:"groups",scope:"keyword_candidates",verification:"inferred",review:"unreviewed",normative:false});
+  if(result.status!=="groups")throw Error("missing semantic groups");
+  expect(result.groups.map(group=>[group.repositoryId,group.serviceId,group.pin.checkpointVersion])).toEqual([
+    ["commerce","orders","7"],["finance","invoices","8"]]);
+  for(const group of result.groups)expect(group.result).toMatchObject({status:"suggestions",normative:false,
+    suggestions:[{endpointId:"endpoint-shared"}],provenance:{provider,pin:group.pin}});
+  expect(factory).toHaveBeenCalledTimes(2);expect(JSON.stringify(result)).not.toContain("secrets");
+});
+
+test("semantic corpus discards all results when an earlier service loses authority during a later model call",async()=>{
+  await database.cleanup();await setup(0,undefined,false,{provider:"openai"});
+  const factory=vi.fn(async()=>async(request:SemanticProviderRequest)=>{
+    if(request.source.serviceId==="invoices")await database.pool.query(`UPDATE ${schema()}.principal_scope_grants SET active=false
+      WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='orders-repo'`,[tenantId,principalId]);
+    return corpusProviderAnswer(request);
+  });
+  const discovery=createSemanticCorpusService({corpusReader:createQueryReader(database.pool,{schema:database.schema}),
+    semanticService:createSemanticService(database.pool,{schema:database.schema,providerFactory:factory})});
+  await expect(discovery.discoverAcrossServices(context(),{environment,intentQuery:"stored",limit:16}))
+    .rejects.toMatchObject({code:"SEMANTIC_CORPUS_STALE_CONTEXT"});
+  expect(factory).toHaveBeenCalledTimes(2);
+});
+
+
+test("semantic corpus empty and unavailable environment shortlists do not resolve provider credentials",async()=>{
+  await database.cleanup();await setup(0,undefined,false,{provider:"gemini"});
+  const factory=vi.fn(async()=>async(request:SemanticProviderRequest)=>corpusProviderAnswer(request));
+  const discovery=createSemanticCorpusService({corpusReader:createQueryReader(database.pool,{schema:database.schema}),
+    semanticService:createSemanticService(database.pool,{schema:database.schema,providerFactory:factory})});
+  await expect(discovery.discoverAcrossServices(context(),{environment,intentQuery:"nebula",limit:16}))
+    .resolves.toMatchObject({status:"shortlist_no_match",scope:"keyword_candidates",matchMode:"keyword",normative:false});
+  await expect(discovery.discoverAcrossServices(context(),{environment:"unavailable",intentQuery:"stored",limit:16}))
+    .resolves.toMatchObject({status:"unknown",reason:"no_visible_services"});
+  expect(factory).not.toHaveBeenCalled();
+});
+
+test("semantic corpus preserves disabled inference for each service without provider egress",async()=>{
+  await applyOpenApiMigrations(database.pool,{schema:database.schema});
+  const factory=vi.fn(async()=>async(request:SemanticProviderRequest)=>corpusProviderAnswer(request));
+  const discovery=createSemanticCorpusService({corpusReader:createQueryReader(database.pool,{schema:database.schema}),
+    semanticService:createSemanticService(database.pool,{schema:database.schema,providerFactory:factory})});
+  const result=await discovery.discoverAcrossServices(context(),{environment,intentQuery:"stored",limit:16});
+  expect(result).toMatchObject({status:"groups",groups:[{result:{status:"disabled"}},{result:{status:"disabled"}}]});
+  expect(factory).not.toHaveBeenCalled();
 });
