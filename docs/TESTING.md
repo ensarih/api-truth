@@ -326,3 +326,14 @@ grants, independent execution policy and the current live lease. Migration
 `0016` ties the summary, immutable completion result and successful lifecycle
 state together, including digest, counts, attempt and database timestamp.
 Only fixed error codes persist. No catalog or deployment pointer is changed.
+
+
+### Superseded loaded-document jobs
+
+`tests/integration/loaded-document-verification-maintenance.test.ts` uses
+disposable PostgreSQL schemas and the signed proof/Git fixture. It checks manager
+permission, removed services, current versus older configuration epochs, quota
+release, token invalidation, switchback and late worker completion. Cleanup
+returns partial, count-only coverage and never reads protected artifact/key
+references. Migration `0017` keeps the fixed cancellation reason separate from
+verification failure and immutable historical results.

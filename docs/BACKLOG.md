@@ -37,7 +37,7 @@ provider or enterprise pilot claim.
 | ID | Status | Next acceptance work |
 |---|---|---|
 | NB1-WIRE | Complete | Configured IR pins D08 identities and job columns; real Swagger IR 1.1 baseline reaches durable catalog, resolver wire substitution is rejected. 1,007 offline and 218 PostgreSQL tests pass; independent review found no blocker. |
-| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Separate loaded-document claims/renewals validate the current epoch and bound worker capacity. Loaded-document bounded execution commits its safe summary and successful lease state atomically. Supersession cleanup, downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
+| NB1-PROFILES | In progress | Configured profile/source-manifest dispatch, immutable Git document orchestration and full multi-input reanalysis are implemented. Protected receipt pinning, Git handler-byte verification, immutable capture provenance/results and scoped admission/lease/execution/cancellation are implemented separately. A bounded Swagger document-value correspondence port and unsigned controlled runtime document-loading capture are implemented. Protected signed document-load verification and same-session Git/document composition are implemented. Separate immutable loaded-document summaries bind that composition to existing capture/handler verification. Separate loaded-document admission fixes host load bindings to the active configuration epoch and existing capture/handler summaries. Separate loaded-document claims/renewals validate the current epoch and bound worker capacity. Loaded-document bounded execution commits its safe summary and successful lease state atomically. Supersession maintenance cancels active jobs from older configuration epochs under separate manager permission. Downstream qualified reads and safe incremental multi-input reuse remain open. D08 still rejects runtime observations. |
 | NB2 / NB8-DETECT | Complete bounded slice | Offline onboarding inventory resolves production-connected literal imports and controller identities, classifies mixed/unsupported services, and exposes a contained local CLI. Composite extraction and reconciliation remain NB8-COMPOSE. |
 | NB3 / NB4 | In progress | Cross-adapter hostile-input tests are implemented; incremental invalidation/pruning and the complete bounded Swagger profile gate remain. |
 | NB5 | In progress | Bounded decorator declarations, inline DTO presence and controlled capture tests are implemented; broader DTO/framework conformance and authoritative source-to-downstream update remain. |
@@ -1659,3 +1659,31 @@ deadline/abort cleanup, deadline during factory creation, retry backoff and the
 three-claim limit, revoked execution policy, injected result-write rollback,
 missing-result constraints and immutable successful records. Two offline tests
 check denied execution and hostile configuration without storage/protected reads.
+
+
+### Superseded loaded-document job maintenance — NB1 (2026-10-10)
+
+A separate `swagger.document.verify.manage` capability permits bounded cleanup
+of queued, leased or retry-wait jobs from older configuration epochs. The host
+fixes manager identity and repository/service allowlists. Independent manager
+permission must be locked in the cancellation transaction, including for a
+service removed from the current configuration. Current execution grants do not
+implicitly confer management permission.
+
+Maintenance shares the admission/lease tenant lock, validates the active
+configuration and old job identity, and authorizes only the configured scan
+window. One extra candidate reports partial coverage without triggering another
+manager callback. Migration `0017` records a fixed supersession reason. Cancelled
+jobs release quota and ownership; late worker output cannot complete them.
+Switching back to a previous fingerprint creates a new checkpoint epoch and does
+not revive cancelled jobs. Results are count-only; protected artifact/key
+references are never selected. Historical proofs and completed results remain.
+
+Qualified downstream reads and safe incremental multi-input reuse remain open.
+
+Validation: independent review found and corrected a lookahead callback-window
+violation. A clean locked installation/typecheck passed all 1,765 offline tests;
+all 488 PostgreSQL tests passed from the staged archive. Seven focused cases
+cover live lease cancellation/quota release, removed-service manager permission,
+checkpoint switchback, late worker rejection, strict denied-first scan bounds,
+unchanged completed proof/result history and pre-storage hostile-input denial.

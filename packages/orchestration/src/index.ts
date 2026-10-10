@@ -40,6 +40,10 @@ export { createLoadedDocumentVerificationAdmissionStore, LoadedDocumentVerificat
 export type { LoadedDocumentVerificationAdmissionBinding, LoadedDocumentVerificationAdmissionOptions,
   LoadedDocumentAdmissionAuthorization, LoadedDocumentVerificationAdmissionReceipt }
   from "./loaded-document-verification-admission.js";
+export { createLoadedDocumentVerificationMaintenance, LoadedDocumentVerificationMaintenanceError }
+  from "./loaded-document-verification-maintenance.js";
+export type { LoadedDocumentVerificationCancellationBinding, LoadedDocumentVerificationMaintenanceOptions,
+  LoadedDocumentVerificationMaintenanceResult } from "./loaded-document-verification-maintenance.js";
 export { createLoadedDocumentVerificationRunner, LoadedDocumentVerificationRunnerError }
   from "./loaded-document-verification-runner.js";
 export type { LoadedDocumentVerificationRunnerPort, LoadedDocumentVerificationRunContext,

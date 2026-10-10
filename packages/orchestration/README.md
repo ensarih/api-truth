@@ -327,3 +327,21 @@ content, raw errors, signing key bytes or lease tokens enter result storage.
 Historical load correspondence does not establish production deployment presence
 or normative API behavior. Supersession maintenance and qualified downstream reads
 remain separate gates.
+
+
+## Superseded loaded-document job maintenance
+
+`createLoadedDocumentVerificationMaintenance(...).cancelSuperseded()` requires
+separate `swagger.document.verify.manage` preflight permission before storage.
+The host fixes manager identity, repository/service allowlists and a scan batch
+(default 50, maximum 100). The independent DB-local `authorizeCancel` callback
+must lock manager permission for the old job, even if its service was removed.
+
+Under the shared tenant lock, maintenance validates the current configuration
+and older job identities and cancels only queued, leased or retry-wait rows.
+Migration `0017` stores a fixed supersession reason; ownership and active quota
+are released. A fingerprint switchback does not revive jobs from an earlier
+checkpoint. Immutable proofs, summaries and terminal results are preserved.
+Protected artifact/key references are never selected, no verifier runs and no
+catalog/environment pointer changes. Output contains counts and partial coverage;
+the extra lookahead row reports `batchLimited` without another authorization call.
