@@ -1,3 +1,4 @@
+import {semanticHistoryScript} from "./semantic-history-browser.js";
 import {detailScript} from "./detail-browser.js";
 import {page} from "./layout.js";
 import {style} from "./style.js";
@@ -70,7 +71,7 @@ contract.addEventListener('submit',async event=>{event.preventDefault();const ge
   try{const params=selection(),body=await fetchJson('/api/contract?'+params);if(generation!==selectionGeneration)return;
     if(body.status!=='resolved'){document.getElementById('selected-service').textContent='No contract available';contractStatus.textContent='Contract state: '+body.status+'. No contract is available here.';return;}
     if(requestedCandidate){const item=requestedCandidate.item;if(requestedCandidate.generation!==corpusGeneration||params.get('repositoryId')!==item.repositoryId||params.get('serviceId')!==item.serviceId||params.get('kind')!=='environment'||params.get('value')!==item.selector.selector.environment||params.get('expectedVersion')!==item.pin.checkpointVersion||!['snapshotId','revision','configFingerprint','checkpointVersion','selectedRevision'].every(field=>body.pin?.[field]===item.pin[field])||body.selector?.repositoryId!==item.repositoryId||body.selector?.serviceId!==item.serviceId||body.selector?.selector?.kind!=='environment'||body.selector.selector.environment!==item.selector.selector.environment||body.selector.selector.expectedCheckpointVersion!==item.pin.checkpointVersion||!body.endpoints.some(endpoint=>endpoint.endpointId===item.endpointId)){contractStatus.textContent='Pinned candidate is stale. Search again.';return;}}
-    contractStatus.textContent='Contract available. Analyzed at '+body.analyzedAt+'.';currentResolved={params,body};document.getElementById('selected-service').textContent=params.get('serviceId')+' / '+params.get('value');if(params.get('kind')==='environment'&&body.pin?.checkpointVersion)params.set('expectedVersion',body.pin.checkpointVersion);refreshPresence();
+    contractStatus.textContent='Contract available. Analyzed at '+body.analyzedAt+'.';currentResolved={params,body};document.getElementById('selected-service').textContent=params.get('serviceId')+' / '+params.get('value');if(params.get('kind')==='environment'&&body.pin?.checkpointVersion)params.set('expectedVersion',body.pin.checkpointVersion);refreshPresence();refreshSemanticHistory();
     if(examplesEnabled&&params.get('kind')==='environment'&&body.pin?.checkpointVersion){exampleButton.disabled=false;exampleStatus.textContent='Enter a configured policy ID to generate a synthetic, non-normative example.';}
     else if(examplesEnabled)exampleStatus.textContent='Synthetic examples require a current environment selection with a serving checkpoint.';
     const coverage=document.createElement('p');coverage.textContent='Coverage: '+body.coverage.status+'.';summary.append(coverage);
@@ -107,7 +108,7 @@ compare.addEventListener('submit',async event=>{event.preventDefault();compareSt
   try{const body=await fetchJson('/api/compare?'+params);compareStatus.textContent=body.status==='compared'?'Comparison ready.':
       'Comparison unavailable: '+body.beforeStatus+' / '+body.afterStatus+'.';
     if(body.status==='compared')changes.textContent=JSON.stringify(body.differences,null,2);}
-  catch{compareStatus.textContent='The comparison is unavailable.';}});`+fieldPresenceScript+corpusDiscoveryScript;
+  catch{compareStatus.textContent='The comparison is unavailable.';}});`+fieldPresenceScript+corpusDiscoveryScript+semanticHistoryScript;
 
 
 const MAX_JSON_BYTES = 1_000_000;
@@ -448,7 +449,10 @@ export const createPortalServer = (options: PortalOptions): Server => {
         .replace("__CANDIDATE_ENABLED__", String(typeof options.query.readOperationCandidates === "function"))
         .replace("__CORPUS_ENABLED__", String(typeof options.query.searchOperationCandidatesAcrossServices === "function"))
         .replace("__EXAMPLES_ENABLED__", String(generateExample !== undefined))
-        .replace("__PRESENCE_ENABLED__", String(readPresence !== undefined)),
+        .replace("__PRESENCE_ENABLED__", String(readPresence !== undefined))
+        .replace("__HISTORY_ENABLED__", String(readHistory !== undefined))
+        .replace("__HISTORY_REVIEWS_ENABLED__", String(readHistoryReviews !== undefined))
+        .replace("__HISTORY_WRITE_ENABLED__", String(recordHistoryReview !== undefined)),
       "text/javascript; charset=utf-8"); return; }
     if (url.pathname === "/style.css") { send(response, 200, style, "text/css; charset=utf-8"); return; }
     try {

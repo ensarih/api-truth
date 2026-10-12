@@ -1817,3 +1817,19 @@ Validation: TDD regressions and independent review approved; typecheck, all
 1,883 offline tests, 17 PostgreSQL history/transport tests and 15 existing browser
 regressions pass. The 45 focused transport tests include host opt-in, strict
 identity/pin/version inputs, origin gating, fixed errors and response bounds.
+
+### Private semantic history browser panel — P4 (2026-10-12)
+
+Added an optional history/decision panel using the authenticated HTTP ports.
+History uses independent, explicit operation selection and validates the full
+selected context plus each record's provenance. Review reads gate versioned
+metadata writes; conflicts, uncertain receipts and owner revocation require a
+fresh authorized read. Context/operation changes clear previous output and reject
+late history, review and save responses. The panel preserves inferred/unreviewed
+semantics and makes no prose approval claim. It is hidden in the existing demo,
+which does not configure this capability; production wiring remains separate.
+
+Independent review found no blocker. Typecheck, all 1,884 offline tests and all
+22 browser tests pass, including seven new history cases for pinned requests,
+metadata versioning, disabled capability, mismatched/non-normative history,
+late reads/writes, malformed receipts, conflicts and owner revocation.

@@ -162,3 +162,27 @@ enable this optional capability.
 Hosts may supply only the history methods they intend to expose; omitted methods
 have no registered tool/HTTP route. A read-only host need not expose annotation
 writes. Supplying a method does not replace the service's independent owner policy.
+
+## Private history browser panel
+
+Portal 0.4.2 shows **History and decisions** only when the host supplies
+`semanticHistory.readHistory`. It uses its own explicit operation checkboxes, so
+it works without enabling provider discovery. Load a contract, choose 1–16
+operations, then read the private history at that displayed revision or exact
+branch/environment pointer. The browser validates namespace, selector, full pin,
+record provenance, operation subset and inferred/unreviewed status before display.
+Provider prose and the original task text are absent from this archive.
+
+With `readHistoryReviews`, each record offers **View decisions**. With
+`recordHistoryReview`, a successful authorized decision read enables the fixed
+metadata choices. Saving uses the latest returned review version, then reloads
+the decisions through the authorized reader. A conflict, malformed receipt,
+uncertain write outcome or revoked access disables saving until a fresh decision
+read. No automatic write retry or overwrite occurs. Decisions never approve
+semantic prose or API behavior, and require the backend's independent owner policy.
+
+Contract changes, reloads and operation selection changes clear prior history and
+decisions. Generation counters discard late history, review and write responses.
+All content is rendered as text. The existing synthetic demo does not supply a
+history service, so this optional panel remains hidden there; the browser tests
+exercise the configured panel with clearly synthetic ports.

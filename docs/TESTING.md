@@ -408,3 +408,13 @@ links agree. A stale exact version can send a fresh `npm ci` to the public regis
 for an unpublished private package even while tests pass with existing local links.
 Validate dependency changes with a clean archived checkout and `npm ci` followed
 by `npm run check`; do not rely solely on an existing `node_modules` tree.
+
+### Private semantic history browser
+
+`npm run test:browser -- semantic-history.spec.ts` runs seven synthetic browser
+cases. They check the displayed serving pin, independent endpoint selection,
+versioned metadata saves, capability gating, invalid history withholding,
+selection changes during delayed history/review/write replies, conflicts,
+malformed receipts and owner revocation during save/reload. The backend's actual
+transactional authorization and replay are covered separately by PostgreSQL tests;
+these browser ports prove rendering and client-state behavior only.
