@@ -1,6 +1,6 @@
 # API Truth — Development backlog
 
-**Updated:** 2026-10-10
+**Updated:** 2026-10-12
 **Source of truth for work status:** this file
 **Scope:** public synthetic-fixture development; an enterprise pilot requires separately authorized inputs.
 
@@ -1833,3 +1833,24 @@ Independent review found no blocker. Typecheck, all 1,884 offline tests and all
 22 browser tests pass, including seven new history cases for pinned requests,
 metadata versioning, disabled capability, mismatched/non-normative history,
 late reads/writes, malformed receipts, conflicts and owner revocation.
+
+
+### Synthetic portal history preview — P4 (2026-10-12)
+
+The loopback demo now enables the history panel through a separate, explicitly
+synthetic in-memory adapter. It makes no model/database calls and cannot prove
+production owner authorization or persistence. UAT and exact-revision decisions
+are isolated, append/version conflicts and exact replay are supported, and each
+context is capped at 20 decisions. Restart clears the demo records. The visible
+notice states these limits; real host wiring remains separate.
+
+Six offline demo cases cover identity/pins, malformed requests, immutable receipts,
+replay/conflict/pagination, context isolation, capacity and executable-input
+rejection. A browser case runs the actual demo adapters, saves a decision, checks
+mobile fit and clears output on environment changes. Independent review found no
+blocker; a revoked-proxy endpoint input hardening suggestion was also addressed.
+
+Validation: typecheck and all 1,890 offline tests pass outside the sandbox needed
+for local HTTP test listeners. All 23 browser tests pass, including the new actual
+synthetic demo workflow. The loopback demo was started with the history capability
+and notice enabled. No production auth, live model, or persistence claim is made.

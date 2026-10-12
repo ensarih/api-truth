@@ -418,3 +418,13 @@ selection changes during delayed history/review/write replies, conflicts,
 malformed receipts and owner revocation during save/reload. The backend's actual
 transactional authorization and replay are covered separately by PostgreSQL tests;
 these browser ports prove rendering and client-state behavior only.
+
+
+### Synthetic history preview
+
+`tests/unit/portal-demo-history.test.ts` checks the bounded fixture adapter's
+scope, replay, isolated context stores, capacity and restart semantics.
+`tests/browser/portal-demo.spec.ts` uses the actual demo query/history adapters
+and HTTP server to verify the notice, history/decision workflow, mobile fit and
+environment invalidation. These fixtures establish demo behavior only; they do
+not establish production authentication, owner authorization or persistence.

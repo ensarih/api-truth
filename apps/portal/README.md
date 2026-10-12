@@ -156,8 +156,7 @@ and expected version to retrieve an idempotent receipt.
 This slice adds HTTP ports; the browser review panel and production host wiring
 remain separate. Decisions are metadata-only, inferred and non-normative. They
 cannot approve provider prose absent from the archive, edit API contracts, or
-expose another principal's private history. The loopback synthetic demo does not
-enable this optional capability.
+expose another principal's private history. The loopback demo uses a separate synthetic adapter, described below.
 
 Hosts may supply only the history methods they intend to expose; omitted methods
 have no registered tool/HTTP route. A read-only host need not expose annotation
@@ -183,6 +182,21 @@ semantic prose or API behavior, and require the backend's independent owner poli
 
 Contract changes, reloads and operation selection changes clear prior history and
 decisions. Generation counters discard late history, review and write responses.
-All content is rendered as text. The existing synthetic demo does not supply a
-history service, so this optional panel remains hidden there; the browser tests
-exercise the configured panel with clearly synthetic ports.
+All content is rendered as text. The loopback demo supplies the separate synthetic adapter below; production
+hosts still need the actual authorized history service.
+
+
+## Synthetic history demo
+
+`npm run portal:demo` in portal 0.4.3 enables history with a separate in-memory
+adapter and a visible synthetic-demo notice. Choose Orders in UAT, check its GET
+operation under **History and decisions**, read history, view decisions, then
+save a fixed metadata decision. No LLM or database is called. The single fixture
+history record and decisions are synthetic, not observations or owner approval.
+
+Decisions are isolated between the exact UAT checkpoint and fixture-revision
+contexts. Each context keeps at most 20 decisions; exact retries replay at
+capacity, while another append returns a fixed unavailable result. Restarting
+the demo clears decisions. The adapter restricts identity to the fixed loopback
+demo principal; this is not production authentication or owner authorization.
+Do not wire this adapter into a production host or MCP service.

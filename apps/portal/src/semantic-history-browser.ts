@@ -9,6 +9,7 @@ export const semanticHistoryMarkup=`<section id="semantic-history" class="card" 
 <form id="history-review-form"><label>Decision<select id="history-decision"><option value="acknowledged">Acknowledged</option><option value="follow_up">Follow up</option><option value="dismissed">Dismissed</option></select></label><button type="submit" disabled>Save decision</button></form></div></section>`;
 
 export const semanticHistoryScript=String.raw`
+document.getElementById('synthetic-demo-notice').hidden=!__SYNTHETIC_DEMO_ENABLED__;
 const historyEnabled=__HISTORY_ENABLED__,historyReviewsEnabled=__HISTORY_REVIEWS_ENABLED__,historyWriteEnabled=__HISTORY_WRITE_ENABLED__;
 const historySection=document.getElementById('semantic-history'),historyForm=document.getElementById('history-form'),historyEndpoints=document.getElementById('history-endpoints'),historyButton=historyForm.querySelector('button'),historyStatus=document.getElementById('history-status'),historyResults=document.getElementById('history-results');
 const historyReview=document.getElementById('history-review'),historyReviewForm=document.getElementById('history-review-form'),historySave=historyReviewForm.querySelector('button'),historyDecision=document.getElementById('history-decision'),historyReviewStatus=document.getElementById('history-review-status'),historyReviewResults=document.getElementById('history-review-results');

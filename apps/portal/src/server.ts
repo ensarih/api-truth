@@ -19,6 +19,8 @@ import {corpusDiscoveryScript} from "./corpus-discovery-browser.js";
 
 export type PortalPrincipal = Readonly<{ tenantId: string; principalId: string }>;
 export type PortalOptions = Readonly<{
+  /** Labels the loopback synthetic preview; does not grant access. */
+  syntheticDemo?: true;
   authenticate(request: IncomingMessage): Promise<PortalPrincipal | undefined>;
   query: Pick<QueryReader, "searchServices" | "readContract" | "compareContracts" | "readPublication">
     & Partial<QueryObservationReader & QueryOperationReader & QueryCorpusOperationReader>;
@@ -450,6 +452,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
         .replace("__CORPUS_ENABLED__", String(typeof options.query.searchOperationCandidatesAcrossServices === "function"))
         .replace("__EXAMPLES_ENABLED__", String(generateExample !== undefined))
         .replace("__PRESENCE_ENABLED__", String(readPresence !== undefined))
+        .replace("__SYNTHETIC_DEMO_ENABLED__", String(options.syntheticDemo === true))
         .replace("__HISTORY_ENABLED__", String(readHistory !== undefined))
         .replace("__HISTORY_REVIEWS_ENABLED__", String(readHistoryReviews !== undefined))
         .replace("__HISTORY_WRITE_ENABLED__", String(recordHistoryReview !== undefined)),
