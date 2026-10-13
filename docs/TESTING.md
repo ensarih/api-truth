@@ -428,3 +428,14 @@ scope, replay, isolated context stores, capacity and restart semantics.
 and HTTP server to verify the notice, history/decision workflow, mobile fit and
 environment invalidation. These fixtures establish demo behavior only; they do
 not establish production authentication, owner authorization or persistence.
+
+### Meaning retrieval and native OpenAI embeddings
+
+`semantic-retrieval.test.ts` covers independent meaning ranking with fixed vectors,
+service/principal cache isolation, source changes, final authorization withholding,
+copy/deadline/cache limits, hostile data and vector validation. Native embedding
+transport tests use fake fetch streams to check endpoint/request/key routing and
+fixed index/model/dimension/failure behavior. `semantic-retrieval-surfaces.test.ts`
+checks authenticated strict MCP/HTTP dispatch. The PostgreSQL corpus suite adds
+actual authorization/cache/revocation composition through `readRetrievalContext`.
+No LLM grades a test; none of these fixtures proves live semantic accuracy.

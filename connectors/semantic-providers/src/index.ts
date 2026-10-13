@@ -282,3 +282,4 @@ export const createSemanticProvider=(provider:SemanticProviderId,options:Provide
 };
 export {createConfiguredSemanticProviderFactory} from "./configured.js";
 export type {TrustedSemanticSecretResolver} from "./configured.js";
+export {createOpenAiEmbeddingPort,OpenAiEmbeddingError} from './openai-embeddings.js';

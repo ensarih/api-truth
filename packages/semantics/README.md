@@ -121,3 +121,43 @@ cannot approve provider prose that the existing privacy-preserving archive does
 not retain. No intent, provider prose, credential, comment or reviewer-selected
 identity is stored in the annotation. Shared review workflows, retained prose
 approval, portal/MCP review transports and normative promotion are separate work.
+
+## Cross-service retrieval by meaning
+
+Semantics 0.8.0 adds `createSemanticRetrievalService({query, context, embedding})`.
+`query` supplies authenticated service/contract reads; `context` is the semantic
+service's `readRetrievalContext`. It reuses the same evidence-gated projection and
+source/configuration/grant transaction as generation, without invoking the
+inference provider. A read must be eligible before any context reaches embeddings.
+
+`retrieve(principal, {environment, intentQuery, limit})` scans currently serving
+visible services independently of keyword overlap. It embeds eligible operation
+context, ranks cosine similarity to the task, and returns separate repository,
+service, endpoint, selector, serving pin and evidence IDs. Identical endpoint IDs
+in different services remain separate. Candidates are inferred, unreviewed and
+non-normative; similarity and coverage never prove that an API satisfies a task or
+that no suitable API exists.
+
+This first implementation is a bounded in-memory vector index. Defaults: 30-second
+shared response deadline, 512 cached vectors; host limits are at most 60 seconds
+and 2,048 entries. Each retrieval scans at most 50 services/256 operations, emits
+at most 16 candidates, projects at most 64 KiB of eligible text, and shares a
+16 MiB/one-million-node copy budget across all reads and embedding responses.
+Individual port results are additionally capped at 4 MiB/100,000 nodes. Exceeding
+a bound withholds the response; incomplete supported context marks coverage as
+partial. Returned candidates omit source prose and embedding vectors.
+
+Vectors are keyed by authenticated principal, environment, embedding space and
+dimension, exact source pin, active configuration hash and projected context.
+Current authorized context is reread even on a cache hit and reread again before
+returning results. Changes discard the response and prevent pending cache fills.
+`clearCache()` also fences in-flight fills. Source updates invalidate old keys
+on the next retrieval; old vectors are bounded by eviction. Query vectors/text are
+not cached. Durable storage, background CI-driven indexing, paged inventory and
+large-enterprise scaling remain separate acceptance work.
+
+The deadline withholds late results but does not cancel an already-started host
+query/provider operation. The native OpenAI port separately aborts its transport
+on its own deadline. Hosts must limit concurrent calls and provider traffic.
+Synthetic vectors verify ranking and authorization mechanics, not live-model
+semantic accuracy.

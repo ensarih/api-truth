@@ -1,6 +1,6 @@
 {
   "name": "@api-truth/semantic-providers",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@api-truth/ir": "0.0.0",
-    "@api-truth/semantics": "0.7.4"
+    "@api-truth/semantics": "0.8.0"
   }
 }

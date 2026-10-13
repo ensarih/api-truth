@@ -9,3 +9,5 @@ export type {SemanticAnalysisInput, SemanticDiscoveryInput, SemanticAnalysisResu
 export {createSemanticCorpusService, SemanticCorpusError} from "./corpus-service.js";
 export type {SemanticCorpusDiscoveryResult, SemanticCorpusGroupResult} from "./corpus-service.js";
 export type {SemanticHistoryReviewDecision,SemanticHistoryReviewRequest,SemanticHistoryReviewRecord,SemanticHistoryReviewReceipt,SemanticHistoryReviewReadResult} from "./reviews.js";
+export {createSemanticRetrievalService,SemanticRetrievalError} from './retrieval.js';
+export type {SemanticEmbeddingPort,SemanticRetrievalResult} from './retrieval.js';

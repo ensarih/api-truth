@@ -1,3 +1,4 @@
+import type {createSemanticRetrievalService} from "../../../packages/semantics/src/retrieval.js";
 import { Buffer } from "node:buffer";
 import {isProxy} from "node:util/types";
 import { McpServer, type CallToolResult, type ServerContext } from "@modelcontextprotocol/server";
@@ -20,6 +21,7 @@ export type ApiTruthMcpOptions = Readonly<{
   maxOutputBytes?: number;
   semantic?: Pick<ReturnType<typeof createSemanticService>, "discover">;
   semanticHistory?: Partial<Pick<ReturnType<typeof createSemanticService>, "readHistory" | "readHistoryReviews" | "recordHistoryReview">>;
+  retrieval?: Pick<ReturnType<typeof createSemanticRetrievalService>, "retrieve">;
   corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
@@ -174,6 +176,9 @@ const mapQueryError = (error: unknown): PublicError => {
     case "SEMANTIC_STALE_CONTEXT": return "STALE_SELECTION";
     case "SEMANTIC_REVIEW_CONFLICT": return "REVIEW_CONFLICT";
     case "SEMANTIC_INVALID_REQUEST": return "INVALID_REQUEST";
+    case "SEMANTIC_RETRIEVAL_INVALID_REQUEST": return "INVALID_REQUEST";
+    case "SEMANTIC_RETRIEVAL_STALE_CONTEXT": return "STALE_SELECTION";
+    case "SEMANTIC_RETRIEVAL_UNAVAILABLE": return "QUERY_UNAVAILABLE";
     case "SEMANTIC_CORPUS_INVALID_REQUEST": return "INVALID_REQUEST";
     case "SEMANTIC_CORPUS_STALE_CONTEXT": return "STALE_SELECTION";
     case "SEMANTIC_CORPUS_UNAVAILABLE": return "QUERY_UNAVAILABLE";
@@ -375,6 +380,15 @@ export const createApiTruthMcpServer = (options: ApiTruthMcpOptions): McpServer 
     }, async (args, context) => execute(options, maxOutputBytes, context, async principal =>
       searchCorpus(principal, {tenantId: principal.tenantId, environment: args.environment,
         intentQuery: args.intentQuery, limit: args.maxResults})));
+  }
+
+  if(typeof options.retrieval?.retrieve==="function"){
+    const retrieve=options.retrieval.retrieve.bind(options.retrieval);
+    server.registerTool("api_truth_search_semantic_api_corpus",{
+      title:"Find API candidates by meaning",
+      description:"Compare eligible authorized API context and task text through the host-configured embedding provider. Return independently pinned cross-service candidates by vector similarity. Rankings remain inferred, unreviewed and non-normative; coverage is bounded and never proves API-wide absence.",
+      inputSchema:corpusDiscoverySchema,outputSchema,annotations:{...readOnlyAnnotations,idempotentHint:false,openWorldHint:true},
+    },async(args,context)=>execute(options,maxOutputBytes,context,async principal=>retrieve(principal,args)));
   }
 
   if(typeof options.corpusSemantic?.discoverAcrossServices==="function"){

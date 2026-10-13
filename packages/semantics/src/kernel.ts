@@ -339,8 +339,7 @@ const validateOutput = (raw: unknown, request: SemanticProviderRequest): Record<
 };
 
 /** Pure, opt-in semantic suggestion boundary; no output mutates or authorizes a contract fact. */
-const runSemantic = async (raw: SemanticAnalysisInput | SemanticDiscoveryInput,
-  providerPort: SemanticProviderPort, discovery: boolean): Promise<SemanticAnalysisResult> => {
+const prepareSemantic = (raw: SemanticAnalysisInput | SemanticDiscoveryInput, discovery: boolean) => {
   let input: SemanticAnalysisInput | SemanticDiscoveryInput;
   try {input = detachedJson(raw, 2_097_152, 20_000, 64) as SemanticAnalysisInput | SemanticDiscoveryInput;}
   catch {throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");}
@@ -354,7 +353,7 @@ const runSemantic = async (raw: SemanticAnalysisInput | SemanticDiscoveryInput,
   const intentQuery = discovery ? (input as SemanticDiscoveryInput).intentQuery : undefined;
   if (discovery && !isSemanticIntentQuerySafe(intentQuery))
     throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
-  if (!input.inference.enabled) return Object.freeze({status: "disabled"});
+  if (!input.inference.enabled) return {input,endpoints:[] as SemanticProviderRequest["endpoints"],sourceProfile:false,coverage:undefined};
   if (!["openai", "gemini", "claude"].includes(String(input.inference.provider))
     || !text(input.inference.model, 128)) throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
   const parsed = parseContractSnapshot(input.snapshot);
@@ -375,6 +374,22 @@ const runSemantic = async (raw: SemanticAnalysisInput | SemanticDiscoveryInput,
     endpoints = endpoints.toSorted((left, right) => endpointOrder.get(left.endpointId)! - endpointOrder.get(right.endpointId)!);
   }
   const coverage = discovery ? contextCoverage(input.endpointIds, endpoints.map(endpoint => endpoint.endpointId)) : undefined;
+  return {input,endpoints,sourceProfile,coverage};
+};
+
+/** Evidence-gated context projection only; no inference provider is invoked. */
+export const projectSemanticRetrievalContext=(raw:SemanticDiscoveryInput)=>{
+  const {input,endpoints}=prepareSemantic(raw,true);
+  if(!input.inference.enabled)throw new SemanticAnalysisError("SEMANTIC_INVALID_CONTEXT");
+  return freezeDeep({source:{repositoryId:input.selection.repositoryId,serviceId:input.selection.serviceId,
+    selector:input.selection.selector,pin:input.pin},endpoints});
+};
+
+const runSemantic = async (raw: SemanticAnalysisInput | SemanticDiscoveryInput,
+  providerPort: SemanticProviderPort, discovery: boolean): Promise<SemanticAnalysisResult> => {
+  const {input,endpoints,sourceProfile,coverage}=prepareSemantic(raw,discovery);
+  if(!input.inference.enabled)return Object.freeze({status:"disabled"});
+  const intentQuery=discovery?(input as SemanticDiscoveryInput).intentQuery:undefined;
   if (!endpoints.length) return Object.freeze({status: "no_context", ...(coverage ? {contextCoverage: coverage} : {})});
   const model = input.inference.model!;
   const provider = input.inference.provider as SemanticProviderId;

@@ -1,3 +1,4 @@
+import type {createSemanticRetrievalService} from "../../../packages/semantics/src/retrieval.js";
 import {semanticHistoryScript} from "./semantic-history-browser.js";
 import {detailScript} from "./detail-browser.js";
 import {page} from "./layout.js";
@@ -30,6 +31,7 @@ export type PortalOptions = Readonly<{
   /** Trusted public origin when serving history writes behind an HTTPS proxy. */
   semanticHistoryWriteOrigin?: string;
   semanticHistory?: Partial<Pick<ReturnType<typeof createSemanticService>, "readHistory" | "readHistoryReviews" | "recordHistoryReview">>;
+  retrieval?: Pick<ReturnType<typeof createSemanticRetrievalService>, "retrieve">;
   corpusSemantic?: Pick<ReturnType<typeof createSemanticCorpusService>, "discoverAcrossServices">;
   examples?: Pick<ReturnType<typeof createSyntheticExampleService>, "generate">;
   presence?: Pick<ReturnType<typeof createFieldPresenceQueryStore>, "readForPrincipal">;
@@ -152,6 +154,9 @@ const error = (response: ServerResponse, failure: unknown): void => {
   else if (code === "SEMANTIC_INVALID_REQUEST") json(response, 400, { error: "INVALID_REQUEST" });
   else if (code === "SEMANTIC_REVIEW_CONFLICT") json(response, 409, {error: "REVIEW_CONFLICT"});
   else if (code === "SEMANTIC_STORAGE_ERROR") json(response, 503, { error: "SEMANTIC_UNAVAILABLE" });
+  else if (code === "SEMANTIC_RETRIEVAL_INVALID_REQUEST") json(response,400,{error:"INVALID_REQUEST"});
+  else if (code === "SEMANTIC_RETRIEVAL_STALE_CONTEXT") json(response,409,{error:"STALE_SELECTION"});
+  else if (code === "SEMANTIC_RETRIEVAL_UNAVAILABLE") json(response,503,{error:"SEMANTIC_UNAVAILABLE"});
   else if (code === "SEMANTIC_CORPUS_INVALID_REQUEST") json(response, 400, {error:"INVALID_REQUEST"});
   else if (code === "SEMANTIC_CORPUS_STALE_CONTEXT") json(response, 409, {error:"STALE_SELECTION"});
   else if (code === "SEMANTIC_CORPUS_UNAVAILABLE") json(response, 503, {error:"SEMANTIC_UNAVAILABLE"});
@@ -426,6 +431,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
     ? options.presence.readForPrincipal.bind(options.presence):undefined;
   const readLoadedDocument=typeof options.loadedDocumentVerification?.readForPrincipal==="function"
     ? options.loadedDocumentVerification.readForPrincipal.bind(options.loadedDocumentVerification):undefined;
+  const retrieveSemantic=typeof options.retrieval?.retrieve==="function"?options.retrieval.retrieve.bind(options.retrieval):undefined;
   const discoverCorpus=typeof options.corpusSemantic?.discoverAcrossServices==="function"
     ? options.corpusSemantic.discoverAcrossServices.bind(options.corpusSemantic):undefined;
   return createServer(async (request, response) => {
@@ -435,7 +441,7 @@ export const createPortalServer = (options: PortalOptions): Server => {
       (request.method === "POST" ? jsonClose : json)(response, 401, { error: "NOT_AUTHORIZED" }); return;
     }
     if (!request.url || request.url.length > 2048 || (request.method !== "GET"
-      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples", ...historyRoutes]
+      && !(request.method === "POST" && ["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/semantic-retrieval", "/api/examples", ...historyRoutes]
         .includes(request.url.split("?", 1)[0]!)))) {
       (request.method === "POST" ? jsonClose : json)(response, 400, { error: "INVALID_REQUEST" }); return;
     }
@@ -467,15 +473,16 @@ export const createPortalServer = (options: PortalOptions): Server => {
         }
         json(response, 200, {environments: [...new Set(names)].sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b)))}); return;
       }
-      if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/examples", ...historyRoutes].includes(url.pathname)) {
+      if (["/api/discover", "/api/candidates", "/api/corpus-candidates", "/api/corpus-discover", "/api/semantic-retrieval", "/api/examples", ...historyRoutes].includes(url.pathname)) {
         if (url.search.length > 0) { jsonClose(response, 400, {error: "INVALID_REQUEST"}); return; }
         const historyMode=url.pathname===historyRoutes[0]?"history":url.pathname===historyRoutes[1]?"reviews":url.pathname===historyRoutes[2]?"write":undefined;
         const historyPort=historyMode==="history"?readHistory:historyMode==="reviews"?readHistoryReviews:recordHistoryReview;
         const candidate = url.pathname === "/api/candidates";
         const corpus = url.pathname === "/api/corpus-candidates";
+        const retrieval = url.pathname === "/api/semantic-retrieval";
         const corpusDiscovery = url.pathname === "/api/corpus-discover";
         const example=url.pathname === "/api/examples";
-        if (request.method !== "POST" || (historyMode?historyPort===undefined:corpusDiscovery?discoverCorpus===undefined:example?generateExample===undefined:candidate
+        if (request.method !== "POST" || (historyMode?historyPort===undefined:retrieval?retrieveSemantic===undefined:corpusDiscovery?discoverCorpus===undefined:example?generateExample===undefined:candidate
           ? typeof options.query.readOperationCandidates !== "function"
           : corpus?typeof options.query.searchOperationCandidatesAcrossServices !== "function"
             : semanticDiscover === undefined)) {
@@ -523,10 +530,10 @@ export const createPortalServer = (options: PortalOptions): Server => {
           }
           json(response,200,found);return;
         }
-        if(corpusDiscovery){
+        if(corpusDiscovery||retrieval){
           const requestData=parseCorpusDiscoveryBody(body);
           if(!requestData){json(response,400,{error:"INVALID_REQUEST"});return;}
-          json(response,200,await discoverCorpus!(principal,requestData));return;
+          json(response,200,retrieval?await retrieveSemantic!(principal,requestData):await discoverCorpus!(principal,requestData));return;
         }
         if (candidate) {
           const requestData = parseCandidateBody(body, principal);

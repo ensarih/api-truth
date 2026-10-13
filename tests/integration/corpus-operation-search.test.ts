@@ -1,3 +1,4 @@
+import {createSemanticRetrievalService} from "../../packages/semantics/src/retrieval.js";
 import {readFile} from "node:fs/promises";
 import {once} from "node:events";
 import {Client,InMemoryTransport} from "@modelcontextprotocol/client";
@@ -405,4 +406,27 @@ test.each(["portal","mcp"] as const)("%s: authenticated corpus inference compose
       {repositoryId:"finance",serviceId:"invoices",pin:{checkpointVersion:"8"},result:{status:"suggestions",
         contextCoverage:{status:"complete"},provenance:{provider:"claude"}}}]});
   expect(factory).toHaveBeenCalledTimes(2);expect(JSON.stringify(result)).not.toContain("secrets");
+});
+
+
+test('semantic retrieval embeds only authorized context and rechecks grants after model I/O',async()=>{
+ await database.cleanup();await setup(0,undefined,false,{provider:'openai',sharedEndpointId:'endpoint-shared'});
+ const query=createQueryReader(database.pool,{schema:database.schema}),provider=vi.fn(async()=>{throw Error('generation must not run');});
+ const contextReader=createSemanticService(database.pool,{schema:database.schema,providerPort:provider});
+ const inputs:string[][]=[];
+ const embedding={spaceId:'fixed-test-space',dimensions:2,embed:vi.fn(async(texts:readonly string[])=>{inputs.push([...texts]);return texts.map(text=>text.includes('invoices')?[0,1]:[1,0]);})};
+ const service=createSemanticRetrievalService({query,context:contextReader,embedding});
+ const result=await service.retrieve(context(),{environment,intentQuery:'abort a purchase',limit:16});
+ expect(result).toMatchObject({matchMode:'semantic',normative:false});
+ expect(result.candidates.some(item=>item.serviceId==='orders')).toBe(true);
+ expect(result.candidates.every(item=>item.selector.selector.kind==='environment'&&item.selector.selector.expectedCheckpointVersion===item.pin.checkpointVersion)).toBe(true);
+ expect(JSON.stringify(inputs)).not.toContain('secrets');expect(provider).not.toHaveBeenCalled();
+ const callCount=embedding.embed.mock.calls.length;
+ await service.retrieve(context(),{environment,intentQuery:'abort a purchase',limit:16});expect(embedding.embed.mock.calls.length).toBe(callCount+1);
+ embedding.embed.mockImplementationOnce(async texts=>{
+  await database.pool.query(`UPDATE ${schema()}.principal_scope_grants SET active=false WHERE tenant_id=$1 AND principal_id=$2 AND access_scope_id='orders-repo'`,[tenantId,principalId]);
+  return texts.map(()=>[1,0]);
+ });
+ await expect(service.retrieve(context(),{environment,intentQuery:'abort a purchase',limit:16})).rejects.toMatchObject({code:'SEMANTIC_RETRIEVAL_STALE_CONTEXT'});
+ expect(provider).not.toHaveBeenCalled();
 });

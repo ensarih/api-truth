@@ -130,3 +130,14 @@ Retry the exact request to resolve an uncertain receipt safely.
 Hosts may supply only the history methods they intend to expose; omitted methods
 have no registered tool/HTTP route. A read-only host need not expose annotation
 writes. Supplying a method does not replace the service's independent owner policy.
+
+## Retrieval by meaning
+
+An optional `retrieval: {retrieve}` host service registers
+`api_truth_search_semantic_api_corpus`. Inputs are environment, safe intent text
+and an explicit 1–16 limit; authenticated identity is injected by the host. This
+path does not require lexical overlap. Eligible API context and task text may be
+sent to the configured embedding provider. Results are bounded, independently
+pinned candidates with evidence, inferred/unreviewed/non-normative labels and
+coverage/truncation flags. The tool does not prove behavior or global absence.
+It is absent unless the host binds the authorized retrieval service.

@@ -5,7 +5,7 @@ import {canonicalOrchestrationHash} from "../../orchestration/src/canonical.js";
 import {quoteEnvironmentSchema} from "../../environment/src/migrations.js";
 import {parseQuerySelection, readQueryContractWithClient, QueryReadError,
   type QueryPin, type QuerySelection} from "../../query/src/index.js";
-import {runGroundedSemanticAnalysis, runGroundedSemanticDiscovery} from "./kernel.js";
+import {runGroundedSemanticAnalysis, runGroundedSemanticDiscovery,projectSemanticRetrievalContext} from "./kernel.js";
 import {parseSemanticHistoryReview,recordSemanticHistoryReview,readSemanticHistoryReviews,SemanticHistoryReviewError,
   type SemanticHistoryReviewReceipt,type SemanticHistoryReviewReadResult,type SemanticHistoryReviewRequest} from "./reviews.js";
 import {isSemanticIntentQuerySafe} from "./egress.js";
@@ -324,6 +324,15 @@ export const createSemanticService = (pool: Pool, options: {schema: string; arch
     return result;
   };
   return Object.freeze({
+    readRetrievalContext:async(rawContext:unknown,rawSelection:unknown,rawEndpointIds:unknown)=>{
+      const {context,selection,endpointIds}=parseRequest(rawContext,rawSelection,rawEndpointIds);
+      return transaction(context,selection,endpointIds,async(_client,authorized)=>{
+        if(!authorized.inference.enabled)throw new SemanticServiceError("SEMANTIC_NOT_FOUND_OR_DENIED");
+        const projected=projectSemanticRetrievalContext({snapshot:authorized.snapshot,pin:authorized.pin,selection:authorized.selection,
+          inference:authorized.inference,endpointIds,intentQuery:"Retrieve eligible API context"});
+        return Object.freeze({...projected,configurationHash:authorized.configurationHash});
+      });
+    },
     analyze: (context: unknown, selection: unknown, endpointIds: unknown): Promise<SemanticAnalysisResult> =>
       run(context, selection, endpointIds, false),
     discover: (context: unknown, selection: unknown, endpointIds: unknown,

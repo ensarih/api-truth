@@ -200,3 +200,14 @@ capacity, while another append returns a fixed unavailable result. Restarting
 the demo clears decisions. The adapter restricts identity to the fixed loopback
 demo principal; this is not production authentication or owner authorization.
 Do not wire this adapter into a production host or MCP service.
+
+## Retrieval by meaning HTTP port
+
+A host-configured `retrieval: {retrieve}` enables JSON-only
+`POST /api/semantic-retrieval` with `{environment, intentQuery, limit}` (1–16).
+Identity comes only from authentication. Existing body/output bounds, no-store
+headers and fixed error mapping apply. The authorized retrieval service compares
+eligible context through the embedding provider without requiring keyword overlap.
+This slice provides the HTTP port; a dedicated browser search mode and live demo
+provider wiring remain separate. The synthetic loopback demo still makes no
+OpenAI requests.

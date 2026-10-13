@@ -1854,3 +1854,30 @@ Validation: typecheck and all 1,890 offline tests pass outside the sandbox neede
 for local HTTP test listeners. All 23 browser tests pass, including the new actual
 synthetic demo workflow. The loopback demo was started with the history capability
 and notice enabled. No production auth, live model, or persistence claim is made.
+
+### Meaning-based cross-service retrieval — P4 (2026-10-13)
+
+Implemented a separate bounded semantic candidate path, independent of lexical
+overlap. The selected semantic service now exposes its authorized evidence-gated
+context projection without calling a generation model. A host embedding port
+ranks operation context by cosine similarity, preserving service namespaces,
+source/serving pins and citations. Private exact-context cached vectors are reused
+only after current reads; final source/grant/configuration rechecks withhold stale
+answers. Shared byte/node/deadline budgets bound the complete request.
+
+Added direct OpenAI embeddings with private project-key resolution, abort/bounded
+response handling and model/dimension/index checks. Interpretation stays on the
+user-selected `gpt-6.1-sol` Responses model; embeddings use a separate OpenAI text
+embedding model. Optional authenticated MCP and portal HTTP ports expose candidates.
+No key is configured in the current environment, so no live request was made.
+
+This is an in-memory reference index with lazy invalidation on source changes,
+not a completed durable enterprise index. Persistent/paged incremental indexing,
+browser search-mode wiring, live model quality and retained-prose approval remain
+open. Concurrent provider traffic remains a host operating limit.
+
+Independent review approved after adding cumulative copy budgets and unread-body
+cleanup. Typecheck, all 1,916 offline tests and 41 focused PostgreSQL tests pass;
+fixed vectors prove mechanics only. PostgreSQL tests verify exact source scopes,
+shared endpoint IDs, current reads on cache hits and authority revocation during
+embedding, with no generation-provider calls.
